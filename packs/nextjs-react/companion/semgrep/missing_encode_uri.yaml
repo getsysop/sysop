@@ -1,0 +1,22 @@
+rules:
+  - id: missing-encode-uri
+    message: >
+      fetch() interpolates $EXPR without encodeURIComponent(). Dynamic path
+      segments must be encoded to prevent URL injection. Wrap with
+      encodeURIComponent($EXPR). Applies even when values appear controlled
+      (enum strings from state) — defensive encoding prevents injection if
+      upstream sources change.
+    severity: WARNING
+    languages: [typescript]
+    # Matches fetch() calls with a template literal argument that contains an
+    # interpolation ${$EXPR} where $EXPR is NOT already wrapped in
+    # encodeURIComponent(). Regex version (missing-encode-uri) flags any
+    # fetch(`...`) including static template literals with no interpolation.
+    patterns:
+      - pattern: "fetch(`...${$EXPR}...`)"
+      - metavariable-pattern:
+          metavariable: $EXPR
+          patterns:
+            - pattern-not: encodeURIComponent(...)
+    # paths: intentionally omitted. Path scoping is declared in the pack's
+    # checks.yml.fragment stub entry (see core/companion/semgrep/README.md).

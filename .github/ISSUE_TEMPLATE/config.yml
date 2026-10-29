@@ -1,0 +1,7 @@
+# Keep blank issues available as an escape hatch, but steer most reports
+# into the templates above. Open-ended questions go to Discussions.
+blank_issues_enabled: true
+contact_links:
+  - name: Questions, ideas & show-and-tell
+    url: https://github.com/getsysop/sysop/discussions
+    about: For open-ended questions and ideas (not bugs or concrete proposals), use Discussions.

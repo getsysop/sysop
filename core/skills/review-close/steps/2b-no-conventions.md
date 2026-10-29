@@ -1,0 +1,13 @@
+   - **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
+
+      ```bash
+      python3 sysop/scripts/close_arms.py loaded "<close-id>" 2b-no-conventions 0fc5ff8d53466ea0 "<skill directory>"
+      ```
+
+      It prints `LOADED: 2b-no-conventions`. **Exit 2**: stop and show its stderr.
+
+   **A `TOTAL` of 0 means the CLAUDE.md paste has nothing to contribute — say so and CONTINUE, do not stop.** ⚠ **This step's first version said the opposite** (*"you must not proceed on it … a contradiction, not an answer"*), and the round's execution lens disproved it by running the measurement against **this repo's own `CLAUDE.md`**, which has neither section: Sysop is a documented consumer of itself — its `## Merge policy` section exists for exactly that — and a branch touching `install.sh` and `tests/` is not doc-only, does not skip at step 0, reaches here, and measures **0**. The rule as first written would have halted `/review-close` in the repo that ships it, and nobody had run it there.
+
+   **The premise was wrong, not just the threshold.** Step 0 licenses the spawn from **three** sources, and the third is the convention **map** — so a project can legitimately arrive here with every rule in `.claude/convention_map.project.md` and none in `CLAUDE.md`. That is not a contradiction; it is the shape this very repo has. Report `2b: <target> — no CLAUDE.md convention sections; routing against the map alone`, hand the agent the map rather than an empty paste, and continue.
+
+   **What a 0 does oblige is one check, because two of its causes are malformations rather than absences.** Before accepting it, confirm the sections are genuinely absent rather than unmatched: `grep -nE '^#+ *(Prevention Conventions|Testing Patterns)' CLAUDE.md` (written `#+`, since a `{1,6}` in the pattern makes the command one no rule admits under `dontAsk`). A hit the measurement scored 0 means a heading level (`###` instead of `##`, which § 6.1 makes top-level) or trailing whitespace — **a real defect in the consumer's file, and one this step should name rather than absorb.** No hit means genuine absence: the project keeps its conventions somewhere this measurement does not look, which is **the common case and not an error** — Sysop's own repo is the worked example, its rules living under `## Conventions for working in this repo`, a section § 6.1 does not name. Do not report an absence as a malformation you failed to locate. Continue either way, and say which of the two it was. **The measurement is also fence-blind and first-match-wins**; those behaviours predate this widening and change only which arm is selected, never what gets pasted.

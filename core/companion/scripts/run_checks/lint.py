@@ -1,0 +1,289 @@
+"""ESLint diagnostics + the frontend-dir discovery helper.
+
+gdp hardcoded ``frontend/``; Sysop runs in repos whose layouts vary,
+so the discovery helper locates the equivalent path from the scanned
+tree. Ambiguous matches (two frontend dirs at sibling paths) raise
+rather than silently picking — that pattern means consumer
+misconfiguration the caller needs to resolve, not a default to absorb.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+
+from _log import _sanitize_log
+
+from .accounting import EXECUTED, FAILED, SKIPPED, stderr_excerpt
+from .config import _SKIP_DIRS, skip_sentinel_disabled
+
+
+def _find_frontend_dir(repo_root, package="eslint", beside=None, skip_nested_checkouts=False,
+                       keep=None, keep_submodules=False, skipped=None):
+    """Return the absolute path of the directory containing node_modules/<package>.
+
+    ``beside`` names a file that must sit next to that ``node_modules`` for the
+    directory to count — tsc passes ``tsconfig.json``, because its types resolve
+    from the adjacent install. ``skip_nested_checkouts`` leaves out any directory
+    holding a ``.git`` entry (an in-repo agent worktree or another clone): its files
+    are another checkout's, not this one's. Both stages pass it. ``keep`` is a
+    directory exempt from that skip; ``keep_submodules`` exempts every path a
+    ``.gitmodules`` file in the walk lists (a submodule is part of this project, an
+    agent worktree is not); and ``skipped`` collects each nested checkout left
+    out, so a caller can say an install sat only in one.
+
+    Raises FrontendDirAmbiguous if multiple candidates exist. Returns None
+    when no candidate is found. Resolves symlinks during walk to avoid
+    infinite recursion on cyclic links.
+    """
+    repo_root = os.path.abspath(repo_root)
+    matches = []
+    seen_real = set()
+    exempt = {keep} if keep is not None else set()
+    for dirpath, dirnames, filenames in os.walk(repo_root, followlinks=False):
+        if keep_submodules and ".gitmodules" in filenames:
+            exempt.update(_submodule_paths(dirpath))
+        kept = []
+        for d in dirnames:
+            child = os.path.join(dirpath, d)
+            if d in _SKIP_DIRS:
+                continue
+            if (skip_nested_checkouts and child not in exempt
+                    and os.path.lexists(os.path.join(child, ".git"))):
+                if skipped is not None:
+                    skipped.append(child)
+                continue
+            kept.append(d)
+        dirnames[:] = kept
+        if beside is not None and beside not in filenames:
+            continue
+        if os.path.isdir(os.path.join(dirpath, "node_modules", package)):
+            real = os.path.realpath(dirpath)
+            if real in seen_real:
+                continue
+            seen_real.add(real)
+            matches.append(dirpath)
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise FrontendDirAmbiguous(
+            f"multiple node_modules/{package} candidates: {sorted(matches)} — "
+            "this stage checks a single directory, so none is chosen"
+        )
+    return matches[0]
+
+
+def _submodule_paths(top):
+    """The absolute paths ``top/.gitmodules`` lists, read without git.
+
+    Only the ``path =`` keys, with git config's optional quotes; anything unreadable
+    lists nothing, which leaves those checkouts skipped as before.
+    """
+    paths = set()
+    try:
+        with open(os.path.join(top, ".gitmodules"), encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"\s*path\s*=\s*(.*?)\s*$", line, re.IGNORECASE)
+                if m and m.group(1):
+                    paths.add(os.path.normpath(os.path.join(top, m.group(1).strip('"'))))
+    except (OSError, UnicodeDecodeError):
+        pass
+    return paths
+
+
+def _node_bin(frontend_dir, name):
+    """The project's own ``node_modules/.bin/<name>`` when it is there, else the bare name.
+
+    The stages used to run the bare name and rely on ``run_checks.sh`` putting
+    ``frontend/node_modules/.bin`` on ``PATH``, which only works for a directory
+    literally named ``frontend/``: a discovered ``web/`` found its eslint and then
+    could not run it. The bare-name fallback keeps a global install working, and
+    keeps a missing binary a ``FileNotFoundError`` the callers already report.
+    """
+    # Absolute, because the callers run it with `cwd=frontend_dir`: a relative
+    # `--repo-root` would otherwise resolve the path a second time from inside it.
+    local = os.path.join(os.path.abspath(frontend_dir), "node_modules", ".bin", name)
+    return local if os.path.isfile(local) and os.access(local, os.X_OK) else name
+
+
+def _installs_inside(dirs, package):
+    """Every directory under ``dirs`` holding ``node_modules/<package>``, sorted."""
+    found = []
+    for top in dirs:
+        for dirpath, dirnames, _ in os.walk(top, followlinks=False):
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+            if os.path.isdir(os.path.join(dirpath, "node_modules", package)):
+                found.append(dirpath)
+    return sorted(found)
+
+
+class FrontendDirAmbiguous(RuntimeError):
+    """Raised when _find_frontend_dir finds more than one candidate."""
+
+
+def _run_eslint(repo_root, included_ids, report=None):
+    """Run ESLint against the frontend dir, return findings as (check_id, file_line, msg, identity).
+
+    The frontend dir is discovered via `_find_frontend_dir()` — the
+    directory under repo_root that contains `node_modules/eslint`. Ambiguous
+    matches raise (caller's job to resolve). Nested checkouts are left out, so an
+    in-repo agent worktree's install is never linted in this checkout's name;
+    `<root>/frontend` and every submodule a `.gitmodules` lists are exempt, so they
+    are walked as they were before (Q-607).
+
+    ESLint exits 1 when findings exist — we read r.stdout regardless of
+    returncode (same as pyright/tsc/semgrep). Do NOT call
+    r.check_returncode() — it would hide all real findings as an error.
+
+    ``report`` is the optional accounting collector; every terminal branch
+    records the outcome for the selected lint ids.
+
+    Skips (no findings) when:
+    - every selected ``lint-*`` check is disabled by the overlay's sentinel —
+      recorded as skipped(paths-unresolved) with the grep stage's detail, before
+      anything else is judged; eslint is not started (Q-701)
+    - no node_modules/eslint found anywhere under repo_root — recorded as
+      skipped(input-missing). **This path is silent by design** (not every
+      project has a frontend), so there is no stderr warning here.
+    - node_modules/eslint only inside nested checkouts — warns, naming them,
+      skipped(input-missing)
+    - a discovery ambiguity (>1 node_modules/eslint) — warns, skipped
+    - node_modules/eslint-config-next is missing alongside (when present
+      in the discovered frontend dir, the project's eslint config likely
+      depends on it; absence would crash eslint at startup) — warns, skipped
+    - the eslint binary is missing (FileNotFoundError) — warns, skipped
+    Fails when eslint times out or crashes without emitting JSON.
+    """
+    if not included_ids:
+        return []
+
+    # Sentinel-disabled checks read `skipped`, not a zero this run never measured (Q-701).
+    disabled = skip_sentinel_disabled(included_ids, "lint-", "eslint", report)
+    lint_ids = [cid for cid in included_ids if cid not in disabled]
+    if not lint_ids:
+        return []
+
+    def _record(status, reason=None, detail=None):
+        if report is not None and lint_ids:
+            report.record(lint_ids, status, "eslint", reason, detail)
+
+    nested = []
+    try:
+        frontend_dir = _find_frontend_dir(
+            repo_root, skip_nested_checkouts=True,
+            keep=os.path.join(os.path.abspath(repo_root), "frontend"), keep_submodules=True,
+            skipped=nested)
+    except FrontendDirAmbiguous as e:
+        print(f"warn: {_sanitize_log(e)} — skipping ESLint", file=sys.stderr)
+        _record(SKIPPED, "misconfigured", "multiple node_modules/eslint candidates")
+        return []
+
+    if frontend_dir is None:
+        found = _installs_inside(nested, "eslint")
+        if found:
+            rels = ", ".join(os.path.relpath(d, repo_root) for d in found)
+            print(f"warn: node_modules/eslint found only inside nested checkouts ({_sanitize_log(rels)}), "
+                  "whose files are another checkout's — skipping ESLint", file=sys.stderr)
+            _record(SKIPPED, "input-missing", "node_modules/eslint only inside nested checkouts")
+            return []
+        _record(SKIPPED, "input-missing", "no node_modules/eslint under repo root")
+        return []
+
+    eslint_config_next = os.path.join(
+        frontend_dir, "node_modules", "eslint-config-next", "package.json"
+    )
+    if not os.path.isfile(eslint_config_next):
+        print(
+            "warn: node_modules/eslint-config-next missing — skipping ESLint "
+            f"(install: cd {os.path.relpath(frontend_dir, repo_root)} && npm ci)",
+            file=sys.stderr,
+        )
+        _record(SKIPPED, "input-missing", "node_modules/eslint-config-next absent")
+        return []
+
+    out = []
+    try:
+        # Keep this invocation `--exit-on-fatal-error`-free: the empty-stdout
+        # crash discriminator below depends on it (see the comment there and
+        # deliverable 04). A drift-guard test forbids the flag in this argv.
+        r = subprocess.run(
+            [_node_bin(frontend_dir, "eslint"), "--format", "json", "."],
+            capture_output=True, text=True, cwd=frontend_dir, timeout=300,
+        )
+    except FileNotFoundError:
+        print(
+            "warn: eslint not on PATH — skipping ESLint "
+            f"(install: cd {os.path.relpath(frontend_dir, repo_root)} && npm ci)",
+            file=sys.stderr,
+        )
+        _record(SKIPPED, "tool-missing", "eslint not on PATH")
+        return out
+    except subprocess.TimeoutExpired:
+        print("warn: eslint exceeded 300s timeout — skipping ESLint "
+              "(findings may be incomplete)", file=sys.stderr)
+        _record(FAILED, "timeout", "eslint timed out after 300s")
+        return out
+
+    if not r.stdout:
+        # eslint --format json prints `[]` for a clean run, so empty stdout with
+        # a nonzero exit is a crash before it produced output — `failed`.
+        #
+        # This discriminator is only sound because the invocation above omits
+        # `--exit-on-fatal-error`. Deliverable 04
+        # (codex-sysop-integration/deliverables/04-eslint-exit2-verification.md)
+        # verified that under the stock `eslint --format json .` every crash
+        # class (bad config, unreadable target, broken/throwing plugin) exits
+        # >=2 with EMPTY stdout, while a parse diagnostic exits 1 WITH JSON — so
+        # rc≠0 + no-stdout cleanly means "crashed before output". Adding
+        # `--exit-on-fatal-error` would promote a formatted fatal parse result to
+        # exit 2 while KEEPING its JSON, so exit 2 would no longer imply empty
+        # stdout and this branch would misread real findings as a crash. A
+        # drift-guard test forbids that flag in the eslint argv.
+        if r.returncode != 0:
+            print(f"warn: eslint exited {r.returncode} with no output — lint "
+                  f"did NOT run: {stderr_excerpt(r.stderr)}", file=sys.stderr)
+            _record(FAILED, "nonzero-no-output",
+                    f"exit {r.returncode}: {stderr_excerpt(r.stderr)}")
+        else:
+            _record(EXECUTED)
+        return out
+    try:
+        data = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        print("warn: eslint produced non-JSON output — skipping",
+              file=sys.stderr)
+        _record(FAILED, "non-json", "eslint produced non-JSON output")
+        return out
+
+    _record(EXECUTED)
+
+    # Single catch-all check_id keeps the registry minimal; the original
+    # ESLint rule_id is embedded in msg_text so reviewers can group/triage
+    # by rule without enumerating dozens of IDs. Filter once, not per-msg.
+    check_id = "lint-error"
+    if check_id not in lint_ids:
+        return out
+
+    _sev_map = {2: "HIGH", 1: "MEDIUM"}
+    for file_entry in data:
+        file_path_abs = file_entry.get("filePath", "")
+        if not file_path_abs:
+            continue
+        file_rel = os.path.relpath(file_path_abs, repo_root)
+        for msg in file_entry.get("messages", []):
+            rule_id = msg.get("ruleId") or "syntax-error"
+            line = msg.get("line", 0) or 0
+            file_line = f"{file_rel}:{line}"
+            severity_num = msg.get("severity", 1)
+            sev = _sev_map.get(severity_num, "LOW")
+            msg_body = (msg.get("message") or "").replace("\n", " ")[:300]
+            msg_text = f"[{rule_id}] {msg_body}"
+            # `rule_id` was already a live local here and went only into the
+            # message text, so `lint-error|path:line` meant "whatever ESLint
+            # says about this line" and one accepted entry excused every rule
+            # on it. The discriminator was always in scope; it just was not in
+            # the key.
+            out.append((check_id, file_line,
+                        f"[{check_id}] {sev} {file_line} — {msg_text}",
+                        rule_id))
+    return out

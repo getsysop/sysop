@@ -1,0 +1,15 @@
+rules:
+  - id: llm-cost-abuse
+    message: >
+      GenerateContentConfig(...) without max_output_tokens. LLM output is
+      unbounded — a crafted query can inflate per-request cost. Set an
+      explicit limit (2048 for JSON configs, 4096 for prose, 8192 for
+      long-form).
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: types.GenerateContentConfig(...)
+          - pattern: GenerateContentConfig(...)
+      - pattern-not: types.GenerateContentConfig(..., max_output_tokens=..., ...)
+      - pattern-not: GenerateContentConfig(..., max_output_tokens=..., ...)

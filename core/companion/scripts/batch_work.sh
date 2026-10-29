@@ -1,0 +1,2174 @@
+#!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────
+# batch_work.sh — Create an isolated worktree for a review_tasks.md batch.
+#
+# Usage:
+#   bash sysop/scripts/batch_work.sh <BATCH_NUMBER>    # Create worktree for batch
+#   bash sysop/scripts/batch_work.sh --list            # Show pending/in-progress batches
+#   bash sysop/scripts/batch_work.sh --list-all        # Show all batches including complete
+#   bash sysop/scripts/batch_work.sh --release [--force] <BATCH_NUMBER>   # Un-claim
+#
+# A batch number may also be given in claim-ID form (`BATCH-7` == `7`) so a
+# caller holding a claim ID does not have to strip the prefix.
+#
+# Creates a git worktree at ../<project basename>-batch-<N>/ with the
+# branch specified in review_tasks.md. Two env vars move it, the same pair
+# claim_task.sh honours: WORKTREE_PREFIX renames the leaf (WORKTREE_PREFIX=foo
+# → ../foo-batch-<N>), and WORKTREE_ROOT relocates the parent directory
+# (Phase 264, `Q-407`) — for a sandboxed harness that must declare a writable
+# path and would otherwise have to declare the repo's whole parent.
+# Prints next-step instructions.
+#
+# Designed for parallel agent sessions — each batch gets its own
+# isolated directory so concurrent work never conflicts.
+#
+# Batch locks (Phase 156):
+#   A claim also writes `sysop/runtime/locks/BATCH-<N>.lock` under the MAIN
+#   repo, the same file shape and the same location `claim_task.sh --lock`
+#   uses for a roadmap task. Four readers were already written against a lock
+#   that nothing had ever produced: `next_task.py`'s in-flight batch filter,
+#   `sitrep_survey.py`'s batch classifier (`has_lock`) and its orphan-worktree
+#   probe, and `scope_overlap.py`'s in-flight set. `--release` and
+#   `close_batch.sh` remove it — a write with no removal path would make every
+#   batch unclaimable after its first claim.
+# ──────────────────────────────────────────────────────────────
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "❌ Not inside a git repository." >&2
+  exit 1
+}
+
+# ── Helper: resolve the primary checkout ──────────────────────
+# Locks always live under the MAIN repo (Phase 32), so every worktree and every
+# cwd sees one lock state. `git rev-parse --git-common-dir` returns the `.git`
+# DIRECTORY — the repo root is its dirname — and from a main checkout it
+# answers with the relative `.git`, which has to be absolutised first. Query and
+# `cd` share the ambient cwd, so a relative answer resolves against the same
+# directory it was measured from.
+#
+# Kept inline rather than sourced from a shared helper. The same resolution is
+# duplicated on purpose in claim_task.sh, next_task.py, validate_tasks.py and
+# scope_overlap.py, each carrying a comment naming the others: these files are
+# delivered independently, and a claim that fails because a sourced helper was
+# missing from a partial install is worse than the duplication.
+resolve_main_root() {
+  local common_dir
+  common_dir="$(git rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [[ -n "$common_dir" ]] || return 1
+  if [[ "$common_dir" = /* ]]; then
+    dirname "$common_dir"
+  else
+  # `CDPATH= cd`, not bare `cd`: git answers with the RELATIVE `.git` from a
+  # primary checkout, and `cd .git` consults `CDPATH` because the operand starts
+  # with neither `/`, `./` nor `../`. An exported `CDPATH` therefore resolved this
+  # to a decoy elsewhere AND made `cd` echo the directory it reached, doubling the
+  # value. Found by execution in Phase 264's round, in the guard path that made
+  # this helper newly load-bearing.
+    dirname "$(CDPATH= cd "$common_dir" && pwd)"
+  fi
+}
+
+# The batch record is a MAIN-side record — the claim is committed on main, the
+# lock lives under the main repo, and `--release` already refuses to run
+# anywhere else because "a worktree carries its branch's own review_tasks.md, so
+# the batch state read here would be stale" (see its guard below). The claim
+# path read `$REPO_ROOT` and so had no such protection: measured, a claim run
+# from a worktree cut before the batch was taken read `Pending` off the branch's
+# frozen copy while main said `In Progress`, walked past every status refusal
+# that record exists to trigger, created a worktree for someone else's batch and
+# reported `Batch lock already present (left as-is)` — at exit 0.
+#
+# So anchor the record paths here, once — and note WHICH path does what, because
+# this phase's first draft credited the wrong one. Every status READ goes through
+# `review_index.py`, which resolves `review_tasks.md` from its own file location
+# (`review_index.py:50`), so `$INDEX_SCRIPT` is what decides which record the claim
+# decision is made against. `$TASKS_FILE` is the WRITE side: the existence check,
+# the sed rewrite, and `--release`'s rewrite. Both must name the same checkout or
+# the script decides against one file and edits another. `$REPO_ROOT` stays as the
+# invocation's own worktree, which is what `--release`'s guard compares against.
+# ── Helper: resolve the PRIMARY WORKING TREE ──────────────────
+# Deliberately NOT `resolve_main_root` above, and the difference is load-bearing.
+# That helper answers `dirname "$(git rev-parse --git-common-dir)"`, which is the
+# repo root only when the git dir is literally `<root>/.git`. Measured in this
+# phase's review round: in a submodule it yields `<super>/.git/modules/<name>`,
+# and under `git init --separate-git-dir` it yields the git dir's PARENT — both
+# real directories, so `-d` passes and the wrong path is used. It was harmless
+# while it only fed the lock path; the moment this phase pointed `$TASKS_FILE`
+# and `$INDEX_SCRIPT` at it, `--list` in those layouts died `❌ review_tasks.md
+# not found` where it had listed fine.
+#
+# So narrow it to the one case the wrong-tree defect lives in. `--git-dir` equals
+# `--git-common-dir` exactly when the caller IS the primary — in a plain checkout,
+# a submodule and a separate-git-dir layout alike — and they differ only inside a
+# linked worktree, which is the only place `$REPO_ROOT` was ever the wrong answer.
+# There the primary is `git worktree list --porcelain`'s first entry, which git
+# documents as the main worktree; a first entry marked `bare` means there is no
+# main working tree, so the caller's own is the best answer available.
+#
+# `resolve_main_root` is left exactly as it is: it resolves the LOCK directory,
+# and that path is duplicated verbatim in claim_task.sh, close_batch.sh,
+# next_task.py, validate_tasks.py, scope_overlap.py and (Phase 368)
+# archive_review_tasks.py. Changing it here alone
+# would put two scripts' locks in different places in precisely the layouts where
+# both are currently wrong-but-agreeing, which is worse than wrong-and-agreeing.
+# That is a real pre-existing defect and it is filed rather than fixed here.
+resolve_primary_worktree() {
+  local gd cd_ first bare
+  gd="$(git -C "$REPO_ROOT" rev-parse --git-dir 2>/dev/null)" || return 1
+  cd_="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [[ -n "$gd" && -n "$cd_" ]] || return 1
+  if [[ "$gd" == "$cd_" ]]; then
+    printf '%s\n' "$REPO_ROOT"
+    return 0
+  fi
+  first="$(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null \
+           | awk '/^worktree /{print substr($0, 10); exit}')"
+  bare="$(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null \
+           | awk '/^worktree /{n++} n==1 && $0=="bare"{print "bare"; exit}')"
+  [[ -n "$first" ]] || return 1
+  if [[ "$bare" == "bare" ]]; then
+    printf '%s\n' "$REPO_ROOT"
+  else
+    printf '%s\n' "$first"
+  fi
+}
+
+MAIN_ROOT="$(resolve_primary_worktree 2>/dev/null)" || MAIN_ROOT=""
+if [[ -z "$MAIN_ROOT" || ! -d "$MAIN_ROOT" ]]; then
+  echo "❌ Could not resolve the primary checkout — refusing to read batch state" >&2
+  echo "   from an unknown checkout. Nothing was written." >&2
+  exit 1
+fi
+
+# ── The default branch (`Q-365`) ──────────────────────────────
+# `main` was hard-coded at four behavioural sites in this script. On a
+# `master`-default repo the claim arm below warned "Not on main (on 'master')"
+# and returned — leaving the worktree and the lock created against a batch
+# whose status never flipped — and the branch-creation arm at the bottom then
+# failed hard on `git branch <x> main`. Resolved once here by the shared
+# primitive (origin/HEAD, else exactly one of main/master, else refuse); the
+# quiet probe is enough for `--list`, and the arms that need the name require
+# it loudly at their own site.
+_SYSOP_GIT_LIB="$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh"
+# `-f`/`-r` before `source` (Phase 368): under `set -e`, bash 3.2 (macOS's
+# /bin/bash) exits on a failed `source` of a missing or unreadable file before the
+# `||` arm runs, so the remedy below printed only on bash 4+.
+{ [[ -f "$_SYSOP_GIT_LIB" && -r "$_SYSOP_GIT_LIB" ]] && source "$_SYSOP_GIT_LIB"; } || {
+  echo "❌ _git_lib.sh is missing or unreadable beside batch_work.sh — it ships with every install." >&2
+  echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
+  exit 1
+}
+DEFAULT_BRANCH="$(resolve_default_branch "$MAIN_ROOT" 2>/dev/null)" || DEFAULT_BRANCH=""
+
+TASKS_FILE="${MAIN_ROOT}/review_tasks.md"
+
+if [[ ! -f "$TASKS_FILE" ]]; then
+  echo "❌ review_tasks.md not found at ${TASKS_FILE}" >&2
+  exit 1
+fi
+
+# ── Helper: parse all batches ─────────────────────────────────
+# Uses the shadow JSON index (sysop/scripts/review_index.py), which is the ONLY
+# parser — the inline bash regex fallback this comment used to advertise was
+# retired (Q-036, Q-226); see `require_index_parser` for the reasoning.
+# Output: tab-separated lines: NUMBER<tab>TITLE<tab>STATUS<tab>BRANCH<tab>SCOPE<tab>VERIFY
+INDEX_SCRIPT="${MAIN_ROOT}/sysop/scripts/review_index.py"
+
+# ── Helper: refuse when an unterminated fence swallows structure (Q-012) ──
+#
+# `review_index.py` ignores an unterminated fence on purpose, so a fenced
+# EXAMPLE `### Batch <N>` is parsed as a real batch and — because batches are
+# keyed by number — OVERWRITES the real one. Measured: on such a tracker the
+# index path creates a branch, a worktree and a lock for a batch the file says
+# is `Merged`, while this script's own grep fallback correctly refuses. The
+# better-equipped path is the broken one, which is why the fix is a refusal
+# here rather than "route everything through the index".
+#
+# Deliberately NO `--force` arm. The claim path's existing `--force` covers the
+# statuses a doc example carries (`Complete|Merged|Ready for Review`), so a
+# fence bypass would be reachable by a flag that already exists — and unlike the
+# cases where an escape hatch is mercy, the remedy costs nothing: close the
+# fence. Q-213 is the standing example of a hatch that nullified its own check.
+#
+# Callers must invoke this BEFORE flag parsing for that reason.
+#
+# `&& rc=0 || rc=$?`, not `|| true`: under `set -euo pipefail` a bare `|| true`
+# discards the status (verified: `$?` becomes 0), and `local rc=$(cmd) || rc=$?`
+# is masked by `local`'s own exit status. Keep the declaration separate.
+refuse_on_structural_fence() {
+  # $1 is "force" when the caller's own --allow-open-fence was given. It admits
+  # the AMBIGUOUS case (exit 5, any unterminated fence containing a batch
+  # header) and never the PROVEN one (exit 3, a fenced batch header colliding
+  # with a real number). In THIS script Q-012's ordering does the work: the
+  # check runs above flag parsing, so no flag can reach exit 3.
+  #
+  # It is a DEDICATED flag, not `--force`. `--force` means "skip the merge-base
+  # ancestry check" in close_batch.sh and "admit a terminal status" in
+  # batch_work.sh, and `/review-close` Step 4b mandates it for every `pr`-policy
+  # consumer — so binding the fence escape to it disarmed this gate on the close
+  # path for exactly the consumers it protects. Found by this phase's round,
+  # which closed a fenced example to `Merged` and corrupted the Grand Total.
+  local forced="${1:-}"
+  local rc=0
+  local err=""
+  if command -v python3 &>/dev/null && [[ -f "$INDEX_SCRIPT" ]]; then
+    # `2>&1 >/dev/null` keeps the diagnostic and drops the "fences ok" line, so
+    # the check runs ONCE. Order matters: stderr is duped to the current stdout
+    # (the capture) before stdout is sent to /dev/null.
+    err=$(python3 "$INDEX_SCRIPT" --check-fences 2>&1 >/dev/null) && rc=0 || rc=$?
+    if [[ "$rc" -eq 3 ]]; then
+      echo "❌ review_tasks.md: an unterminated fence contains a duplicate batch header." >&2
+      echo "$err" >&2
+      echo "   Close the fence in review_tasks.md, then re-run. --force does not cover this." >&2
+      return 1
+    fi
+    if [[ "$rc" -eq 5 ]]; then
+      if [[ "$forced" == "force" ]]; then
+        echo "⚠️  review_tasks.md has an unterminated fence — proceeding under --allow-open-fence." >&2
+        echo "$err" >&2
+        return 0
+      fi
+      echo "❌ review_tasks.md: an unterminated fence is open (Q-229, Q-231)." >&2
+      echo "$err" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# Q-037: refuse to MUTATE a batch number the tracker declares more than once.
+#
+# Scoped to the one number, not the file, and that is the whole design. A real
+# tracker measured 2026-08-16 restarts batch numbering per round (Round 1: 1-6,
+# Round 2: 1-5); nothing in the shipped tree forbids that — WORKFLOW.md's
+# template nests `### Batch <N>` under `## Round N` and states no numbering
+# scope. (An earlier version of this comment added "and no shipped skill derives
+# the next number from existing headers". That is FALSE and was corrected in
+# Phase 211: `codebase-review/SKILL.md:171` and `security-audit/SKILL.md:188` —
+# the only two writers of batch headers in the tree — both say `next_batch_number`
+# = highest Batch N + 1, i.e. a file-global rule. It does not rescue the
+# whole-file refusal, because nothing ENFORCES that rule and a per-round tracker
+# still parses; but the scoping argument rests on the template's silence alone,
+# which is a narrower claim than the one that was written here.) So
+# refusing the whole file would reject a legal tracker, which is the defect
+# Phase 208 shipped and had to reshape mid-round. Refusing only the number being
+# acted on stops the operator exactly when acting would be a coin flip and
+# leaves every unambiguous batch on that file claimable.
+#
+# NO availability guard, unlike refuse_on_structural_fence: `parse_batches`
+# below now REQUIRES python3 + review_index.py, so there is no path that reaches
+# a mutation without them. A guard here would only add a way to skip the check.
+refuse_on_duplicate_number() {
+  local n="$1" err="" rc=0
+  err=$(python3 "$INDEX_SCRIPT" --check-duplicates "$n" 2>&1 >/dev/null) && rc=0 || rc=$?
+  if [[ "$rc" -eq 4 ]]; then
+    # The diagnostic is the Python side's, verbatim — it carries the line
+    # numbers. Restating it here would be a second wording to keep in sync.
+    echo "$err" >&2
+    return 1
+  fi
+  # rc 0 with output on stderr is the NEAR-MISS report (Q-242): batch <n> has no
+  # duplicate strict header, but some line declares it in a shape no reader
+  # parses. It is advisory — it must not refuse, because a near miss is not a
+  # duplicate and the claim path already refuses the shapes it can act on — but
+  # it must not be swallowed either. Phase 220's first cut printed it to stdout,
+  # which this capture discards, so the fix reached nobody on the automated path.
+  if [[ -n "$err" ]]; then
+    echo "$err" >&2
+  fi
+  return 0
+}
+
+parse_batches() {
+  # `review_index.py` is the only parser. Availability is established by
+  # `require_index_parser` above the dispatch — deliberately not re-checked
+  # here, because this function's callers cannot observe its exit status.
+  #
+  # stderr is NOT redirected, and that is load-bearing: review_index.py's
+  # duplicate-number warning (Q-037) is the only place an operator learns that a
+  # batch is missing from this very output. The previous `2>/dev/null` would
+  # have swallowed it, which is how the collision stayed invisible.
+  python3 "$INDEX_SCRIPT" --list
+}
+
+# ── Helper: rebuild JSON index after Markdown mutation ─────────
+rebuild_index() {
+  if command -v python3 &>/dev/null && [[ -f "$INDEX_SCRIPT" ]]; then
+    python3 "$INDEX_SCRIPT" --rebuild >/dev/null 2>&1 || true
+  fi
+}
+
+# ── Helper: normalise a claim-ID-shaped batch argument ────────
+# `BATCH-7`, `batch-7` and `7` all name the same batch. Callers hold whichever
+# form their own step produced, and a "must be a positive integer" rejection of
+# the canonical claim ID is a bad error for a correct invocation.
+normalize_batch_arg() {
+  local raw="$1"
+  # Anchored to the literal BATCH prefix on purpose: a looser `^[A-Za-z]+-`
+  # would make `TECH-7` claim batch 7, which is the claim-kind confusion this
+  # phase exists to remove.
+  if [[ "$raw" =~ ^[Bb][Aa][Tt][Cc][Hh]-([0-9]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '%s\n' "$raw"
+  fi
+}
+
+# ── Helper: refuse a flag sitting AFTER the positional (Q-243) ─
+# Both dispatch paths pre-scan argv for `--allow-open-fence` before parsing
+# flags, because the fence refusal must run before `--force` can reach past it.
+# Phase 220 stopped that pre-scan at the first non-flag argument, which is the
+# fix — but it moved the DIAGNOSIS: with the trailing flag no longer scanned,
+# `batch_work.sh 9 --allow-open-fence` on an open-fenced tracker exits on the
+# fence, telling the operator to close a fence when their actual mistake was
+# flag placement. The two ordering checks that would have said so live ~20 lines
+# further down, after `refuse_on_structural_fence`, so they are unreachable in
+# exactly this case.
+#
+# So the refusal is hoisted here, ahead of the fence gate. It cannot become a
+# bypass: it only ever exits non-zero, and it reads no flag to decide.
+# `$usage_hint` is the caller's own usage line so the two paths keep their own
+# examples rather than sharing a wrong one.
+refuse_trailing_flags() {
+  local usage_hint="$1"; shift
+  local seen_positional=false _a
+  for _a in "$@"; do
+    if $seen_positional && [[ "$_a" == --* ]]; then
+      echo "❌ Flags must come before <BATCH_NUMBER> (e.g. ${usage_hint})." >&2
+      echo "   Saw trailing flag: $_a" >&2
+      return 1
+    fi
+    [[ "$_a" == --* ]] || seen_positional=true
+  done
+  return 0
+}
+
+# ── (resolve_main_root is defined at the top, beside MAIN_ROOT) ───
+# It was defined here, next to its first caller, until this phase moved it above
+# TASKS_FILE — the record paths had to be anchored before anything read them.
+resolve_locks_dir() {
+  local main_root
+  main_root="$(resolve_main_root)" || return 1
+  printf '%s/sysop/runtime/locks\n' "$main_root"
+}
+
+# ── Helper: locate the worktree holding a branch ──────────────
+# Asks git rather than recomputing the WORKTREE_PREFIX-dependent path the claim
+# used — WORKTREE_PREFIX may differ between the claiming shell and this one.
+find_worktree_for_branch() {
+  local branch="$1" wt="" line
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) wt="${line#worktree }" ;;
+      "branch refs/heads/"*)
+        if [[ "${line#branch refs/heads/}" == "$branch" ]]; then
+          printf '%s\n' "$wt"
+          return 0
+        fi
+        ;;
+    esac
+  done < <(git worktree list --porcelain 2>/dev/null)
+  return 1
+}
+
+# ── Helper: is this path a real worktree, or just a directory? ─
+# `[[ -d "$path" ]]` was the claim path's test, and a directory is not a
+# worktree: the claim then skipped `git worktree add`, wrote the lock anyway,
+# and exited 0 with a `workspace:` that is not a repository. Both halves of the
+# invariant the lock write states go with it — `sitrep_survey.py` sees no stale
+# lock (the path exists) and `scope_overlap.py` reads an empty diff (it is not a
+# repo) — while the summary box tells the agent to `cd` there and work.
+#
+# `-e "${p}/.git"`, not `-d`: a LINKED worktree's `.git` is a file holding a
+# `gitdir:` pointer, and only the primary checkout has it as a directory.
+#
+# The toplevel comparison is what stops a subdirectory of some OTHER repository
+# from passing — `rev-parse --is-inside-work-tree` is true anywhere inside one,
+# so it answers a different question than the one being asked here. `-ef`
+# rather than `==` for the same reason the `--release` main-worktree guard uses
+# it: a case-divergent or symlinked spelling must not make this MISS.
+path_is_worktree() {
+  local p="$1" top=""
+  [[ -e "${p}/.git" ]] || return 1
+  top="$(git -C "$p" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [[ -n "$top" && "$top" -ef "$p" ]]
+}
+
+# ── Helper: write the batch lock ──────────────────────────────
+# Mirrors the file `claim_task.sh` writes for a roadmap task, field for field,
+# so every existing reader parses it without a special case.
+#
+# Idempotent by design: an existing lock is reported and left alone, never
+# overwritten and never an error. `batch_work.sh <N>` is re-runnable on purpose
+# — /auto-fix and /auto-judge call it in a loop over `Pending` batches, and the
+# claim path's status gate admits both live statuses (`Pending` outright,
+# `In Progress` as the resume) — so turning a present lock into a hard failure
+# would be a new abort in three skills' fan-out. A finished batch reaches this
+# helper too, but only behind `--force`.
+# (`claim_task.sh --lock` DOES refuse an existing lock. The asymmetry is
+# deliberate: that path is one-shot per task and its lock is a schema
+# invariant, this one is a re-runnable coordination marker.) Leaving the
+# original file also preserves its `started:` stamp, which is the only record
+# of how long the batch has been held.
+write_batch_lock() {
+  local batch_num="$1" branch="$2" workspace="$3"
+  local locks_dir lock_file timestamp expires expiry_epoch
+
+  if ! locks_dir="$(resolve_locks_dir)"; then
+    # Unreachable in practice — `git rev-parse --show-toplevel` already
+    # succeeded above. Warn rather than abort: batch state lives in
+    # review_tasks.md, and the lock is an advisory in-flight marker, so a
+    # git-plumbing failure must not cost the caller its worktree.
+    echo "⚠️  Could not resolve sysop/runtime/locks/ — batch lock not written." >&2
+    return 0
+  fi
+
+  lock_file="${locks_dir}/BATCH-${batch_num}.lock"
+  if [[ -f "$lock_file" ]]; then
+    echo "ℹ️  Batch lock already present (left as-is): ${lock_file}"
+    return 0
+  fi
+
+  # Checked, not left to errexit: a Pending claim calls this inside the critical
+  # section, where errexit is off, and then reads the file back (`Q-714`).
+  if ! mkdir -p "$locks_dir" 2>/dev/null || [[ ! -d "$locks_dir" ]]; then
+    echo "❌ Could not create the locks directory ${locks_dir} — batch lock not written." >&2
+    return 1
+  fi
+  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  # Expiry = 4 hours out. Same three-way `date` fallback as claim_task.sh
+  # (BSD `-v` → GNU `-d` → POSIX epoch arithmetic) so a lock never lands with
+  # a blank `expires:` field.
+  if date -v+4H +"%Y-%m-%dT%H:%M:%SZ" &>/dev/null; then
+    expires=$(date -u -v+4H +"%Y-%m-%dT%H:%M:%SZ")
+  elif expires=$(date -u -d "+4 hours" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null); then
+    : # GNU date succeeded
+  else
+    expiry_epoch=$(( $(date +%s) + 14400 ))
+    expires=$(date -u -r "$expiry_epoch" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null \
+      || date -u "+%Y-%m-%dT%H:%M:%SZ" -d "@$expiry_epoch" 2>/dev/null \
+      || echo "")
+    if [[ -z "$expires" ]]; then
+      echo "⚠️  Unable to compute lock expiry — batch lock not written." >&2
+      return 0
+    fi
+  fi
+
+  # Values are written unquoted, exactly as claim_task.sh does. The batch
+  # TITLE is deliberately NOT interpolated: a title carrying `: ` would make
+  # the lock invalid YAML, and scope_overlap.py parses locks as YAML — a
+  # malformed lock would silently drop the batch out of the in-flight set,
+  # which is the defect this whole change exists to fix.
+  if ! cat > "$lock_file" <<EOF
+task_id: BATCH-${batch_num}
+status: in_progress
+agent: batch_work.sh
+branch: ${branch}
+mode: worktree
+workspace: ${workspace}
+started: ${timestamp}
+expires: ${expires}
+files_impacted:
+  - (update manually or via git diff --name-only ${DEFAULT_BRANCH}...HEAD)
+# plan_summary and notes are free text: quote a value that contains ": " (plan_summary: "a: b"), or every YAML reader of this lock (/sitrep, the collision checks) sees it as unreadable.
+plan_summary: (update with a one-line description of the work)
+notes:
+EOF
+  then
+    rm -f "$lock_file" 2>/dev/null || true
+    echo "❌ Could not write ${lock_file} — batch lock not written." >&2
+    return 1
+  fi
+
+  echo "✅ Batch lock created: ${lock_file}"
+}
+
+# ── Helper: remove the batch lock ─────────────────────────────
+# Reports what it did either way — a removal path that is silent when the file
+# is absent cannot be distinguished from one that never ran.
+remove_batch_lock() {
+  local batch_num="$1"
+  local locks_dir lock_file
+
+  if ! locks_dir="$(resolve_locks_dir)"; then
+    echo "⚠️  Could not resolve sysop/runtime/locks/ — batch lock not removed." >&2
+    return 0
+  fi
+
+  lock_file="${locks_dir}/BATCH-${batch_num}.lock"
+  if [[ -f "$lock_file" ]]; then
+    rm -f "$lock_file"
+    echo "✅ Removed batch lock ${lock_file}."
+  else
+    echo "ℹ️  No batch lock at ${lock_file} (already released, or the batch was claimed before batch locks shipped)."
+  fi
+}
+
+# ── Helper: remove the batch's park markers ───────────────────
+#
+# The release path's missing half, found by Phase 248's round (execute lens).
+# `close_batch.sh`'s `remove_claim_artifacts()` reaps a batch's park markers, but
+# it runs only when a close LANDS ON `main` — so a batch that was claimed, parked
+# and then RELEASED kept its marker forever, and nothing else looked at it.
+#
+# That was invisible until Phase 248 taught `/sitrep` to read batch parks
+# (`Q-317`). Now it is a live false report, reproduced by the round in both
+# directions: after a release-and-reclaim, a fresh claim with zero commits reads
+# `parked` and points the operator at an abandoned run; between the release and
+# the re-claim, the batch reads `pending (not claimed)` with a park marker still
+# sitting on disk. A release is the batch's own un-claim, so it owns the
+# artifacts the claim created, exactly as the close does.
+#
+# Hardened the same way its `close_batch.sh` twin is, and for the same recorded
+# reasons: the numeric re-assert (this composes a glob from `batch_num`), the
+# `-e || -L` test (bare `-e` follows symlinks, so a DANGLING marker symlink would
+# be reported as absent while `rm -f` really does remove it), and reporting what
+# the `rm` DID rather than that it was attempted.
+remove_batch_park_markers() {
+  local batch_num="$1"
+  local main_root marker removed=0
+
+  if ! main_root="$(resolve_main_root)"; then
+    echo "⚠️  Could not resolve the main checkout — park markers for Batch ${batch_num} not removed." >&2
+    return 0
+  fi
+  if [[ ! "$batch_num" =~ ^[0-9]+$ ]]; then
+    echo "⚠️  Refusing to remove park markers — batch id '${batch_num}' is not numeric." >&2
+    return 0
+  fi
+
+  for marker in "${main_root}/sysop/runtime/parked/BATCH-${batch_num}__"*.md; do
+    [[ -e "$marker" || -L "$marker" ]] || continue
+    if rm -f "$marker" 2>/dev/null && [[ ! -e "$marker" && ! -L "$marker" ]]; then
+      echo "✅ Removed park marker $(basename "$marker")"
+      removed=$((removed + 1))
+    else
+      echo "⚠️  Could NOT remove park marker ${marker} — left in place." >&2
+    fi
+  done
+  if [[ $removed -eq 0 ]]; then
+    echo "ℹ️  No park markers for Batch ${batch_num}."
+  fi
+}
+
+# ── The parser preflight (Q-036, Q-226) ──────────────────────
+#
+# Runs HERE, above every dispatch, and not inside `parse_batches` — because all
+# three of its callers consume it as `done < <(parse_batches)`, and process
+# substitution discards the exit status. A refusal placed inside the
+# row-producing function would print to stderr, be ignored, and leave the loop
+# reading empty input: the script would render a table header and then behave as
+# though the tracker held no batches. Placing it above the dispatch is what makes
+# the refusal an actual halt.
+#
+# This is the retirement of `_parse_batches_fallback` (Q-036: it had no fence
+# rule, so a fenced `### Batch <N>` was structural to it alone and claimable;
+# Q-226: its `while read` dropped the file's last line when there was no
+# trailing newline, losing a whole batch from --list-all and from the claim
+# path). Both die with the code rather than being patched, because a second
+# divergent parser is the defect and one more fix would not have changed that.
+#
+# The trade, stated rather than buried: the old code fell through to bash on ANY
+# non-zero exit from review_index.py — a corrupt vendor copy, a Python version
+# skew — so it recovered from a FAILING index, not merely a missing interpreter.
+# That recovery is now gone, and the failure is loud instead. python3 is already
+# a documented hard prerequisite (README.md § Prerequisites) and self_check.sh
+# exits non-zero without it, so an install that cannot run this is one Sysop
+# already refuses to certify.
+require_index_parser() {
+  if ! command -v python3 &>/dev/null; then
+    echo "❌ python3 is required to read review_tasks.md and was not found." >&2
+    echo "   It is a hard prerequisite (README.md § Prerequisites)." >&2
+    echo "   Diagnose with: bash sysop/scripts/self_check.sh" >&2
+    return 1
+  fi
+  if [[ ! -f "$INDEX_SCRIPT" ]]; then
+    echo "❌ Missing ${INDEX_SCRIPT}, which is the only parser for review_tasks.md." >&2
+    echo "   Reinstall or update Sysop to restore it." >&2
+    return 1
+  fi
+  # Presence is not usability, and the difference is not academic. A TRUNCATED
+  # or corrupt review_index.py defines nothing, runs nothing, and exits 0 with
+  # empty output — so `--list` printed an empty table and said "No batches
+  # found" on a tracker full of them, at exit 0, with no diagnostic on any
+  # stream. That is the exact silent-degradation this retirement was supposed to
+  # replace with a loud failure, and the phase's own record claimed it had.
+  # Found by this phase's review round.
+  #
+  # The probe is a POSITIVE self-test: `--check-duplicates 0` must print its
+  # one-line answer. A file that parses but does nothing produces no output and
+  # fails here, where an exit-code-only check would pass it.
+  local probe=""
+  probe=$(python3 "$INDEX_SCRIPT" --check-duplicates 0 2>/dev/null) || probe=""
+  if [[ -z "$probe" ]]; then
+    echo "❌ ${INDEX_SCRIPT} did not answer a basic query." >&2
+    echo "   It is present but not usable — a truncated or corrupt copy, or a" >&2
+    echo "   python3 too old to run it. review_tasks.md cannot be read safely." >&2
+    echo "   Diagnose with: python3 $(printf '%q' "$INDEX_SCRIPT") --list" >&2
+    return 1
+  fi
+  return 0
+}
+require_index_parser || exit 1
+
+# ── Mode: --list / --list-all ─────────────────────────────────
+if [[ "${1:-}" == "--list" || "${1:-}" == "--list-all" ]]; then
+  SHOW_ALL=false
+  [[ "${1:-}" == "--list-all" ]] && SHOW_ALL=true
+
+  echo "┌─────────────────────────────────────────────────────────────┐"
+  echo "│  Review Task Batches                                        │"
+  echo "├──────┬──────────────────────────────────────┬───────────────┤"
+  printf "│ %-4s │ %-36s │ %-13s │\n" "#" "Title" "Status"
+  echo "├──────┼──────────────────────────────────────┼───────────────┤"
+
+  FOUND=0
+  while IFS=$'\t' read -r num title status branch scope verify; do
+    # Status emoji
+    # Every DECLARED status gets a glyph. `Review Ready` and `Ready for Review`
+    # used to fall to `*)` and render `❓` — the glyph a typo gets — so the one
+    # signal this table has for "that status is not a thing" was spent on two
+    # values the workflow defines. Now `❓` means only what it says, which is
+    # what makes it worth printing at all.
+    case "$status" in
+      Pending)              icon="⬜" ;;
+      "In Progress")        icon="🔵" ;;
+      "Review Ready")       icon="👀" ;;
+      Complete|Merged|"Ready for Review") icon="✅" ;;
+      *)                    icon="❓" ;;
+    esac
+
+    # In --list mode, skip the finished three. `Ready for Review` joins
+    # `Complete`/`Merged` here because it is terminal despite its name, and
+    # because the claim path refuses all three — a listing that offers work the
+    # claim path will not take is the contradiction this pairing removes.
+    #
+    # `Review Ready` deliberately stays visible: it is LIVE, and it is the one
+    # status that needs someone to act. The claim path refuses it too, but for
+    # the opposite reason — you should see it, you just should not re-claim it.
+    if ! $SHOW_ALL && [[ "$status" == "Complete" || "$status" == "Merged" \
+                         || "$status" == "Ready for Review" ]]; then
+      continue
+    fi
+
+    printf "│ %s%-3s │ %-36s │ %-12s │\n" "$icon" "$num" "${title:0:36}" "$status"
+    FOUND=$((FOUND + 1))
+  done < <(parse_batches)
+
+  echo "└──────┴──────────────────────────────────────┴───────────────┘"
+
+  if [[ $FOUND -eq 0 ]]; then
+    echo ""
+    echo "No batches found. Use --list-all to include completed batches."
+  fi
+  exit 0
+fi
+
+# ── Helper: the batch's branch and worktree ───────────────────
+# `Q-714`: a Pending claim builds these BEFORE it flips the status, so a
+# `git worktree add` that fails leaves a branch or a worktree (which `/sitrep`
+# reports as `batch branch without lock`, and a re-run adopts) instead of a
+# committed `In Progress` with no lock. Called from inside `claim_batch`'s
+# critical section for a Pending batch, after the pull (which sets the new
+# branch's base), and from the top level for a re-attach.
+#
+# Errexit is OFF inside the critical section (`_claim_batch_locked "$@" ||
+# rc=$?`), so every step here tests its own status and returns 1 with a
+# message; nothing here may `exit`, or the caller cannot say what was left.
+# Sets CREATED_BRANCH_FROM to `default` or `remote` when this run created the
+# branch, and to "" when it was already there.
+CREATED_BRANCH_FROM=""
+WORKSPACE_READY=false
+LOCK_WRITTEN=false
+prepare_workspace() {
+  CREATED_BRANCH_FROM=""
+  # ── Create branch if needed (check remote too) ─────────────
+  if git show-ref --verify --quiet "refs/heads/${BATCH_BRANCH}" 2>/dev/null; then
+    echo "ℹ️  Branch '${BATCH_BRANCH}' already exists locally."
+  elif git show-ref --verify --quiet "refs/remotes/origin/${BATCH_BRANCH}" 2>/dev/null; then
+    if ! git branch "$BATCH_BRANCH" "origin/${BATCH_BRANCH}"; then
+      echo "❌ Could not create branch '${BATCH_BRANCH}' from origin/${BATCH_BRANCH} (see git's message above)." >&2
+      return 1
+    fi
+    CREATED_BRANCH_FROM="remote"
+    echo "✅ Created local branch '${BATCH_BRANCH}' tracking remote."
+  else
+    # `refs/heads/`: a tag named like the default branch must not be the base.
+    if ! git branch "$BATCH_BRANCH" "refs/heads/${DEFAULT_BRANCH}"; then
+      echo "❌ Could not create branch '${BATCH_BRANCH}' from ${DEFAULT_BRANCH} (see git's message above)." >&2
+      return 1
+    fi
+    CREATED_BRANCH_FROM="default"
+    echo "✅ Created branch '${BATCH_BRANCH}' from ${DEFAULT_BRANCH}."
+  fi
+
+  # ── Create worktree ─────────────────────────────────────────
+  # `path_is_worktree_of`, not `-d` and not `path_is_worktree`: the two tests have
+  # to agree, or the preflight refuses a shape this arm would have accepted (or
+  # worse, the reverse). The preflight has already established that this path is
+  # absent or a real worktree OF THIS REPOSITORY (`Q-415`), so this is the same
+  # decision restated at the point of use, and it is what keeps that true if either
+  # site moves. Narrowed with the preflight at Phase 264 — leaving this one at
+  # `path_is_worktree` would have re-opened the adoption on the arm that acts.
+  if path_is_worktree_of "$WORKTREE_DIR" "$MAIN_ROOT"; then
+    echo "ℹ️  Worktree already exists: ${WORKTREE_DIR}"
+
+    # ── `Q-416`'s other half, and the population lesson repeating ──
+    #
+    # The predicate above answers WHOSE tree this is and stops — so an adopted
+    # worktree's BRANCH went unchecked here exactly as it did in `claim_task.sh`,
+    # and `write_batch_lock` below then recorded `$BATCH_BRANCH` over a tree
+    # sitting on a different one. Reproduced: claim batch 1 on `feat/one`, remove
+    # the lock (the documented `resumable` state), re-point the batch's
+    # `> **Branch:**` to `feat/two`, re-run — exit 0, "Start working!", a lock
+    # reading `branch: feat/two` over a tree on `feat/one`, and a printed
+    # `git push -u origin feat/two`. `/review-close` Step 3b collects from that
+    # workspace on the strength of the lock's pair.
+    #
+    # **This is the second time the pair has split.** `Q-415` was the identity
+    # half: Phase 264 fixed `claim_task.sh` and this script had the same defect.
+    # Phase 266's first cut then took its population from the `Q-416` filing —
+    # which names only `claim_task.sh` — and left this one again. The class, not
+    # the filing, is the population.
+    #
+    # Same three arms as there, and no dirty probe for the same reason: `git
+    # checkout` already refuses rather than discard uncommitted work, and it also
+    # refuses a branch checked out in another worktree, which a `status
+    # --porcelain` test would not see.
+    local existing_branch
+    existing_branch=$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null || echo "")
+    if [[ "$existing_branch" == "$BATCH_BRANCH" ]]; then
+      echo "✅ Existing worktree is already on '${BATCH_BRANCH}'."
+    elif git -C "$WORKTREE_DIR" checkout "$BATCH_BRANCH"; then
+      echo "✅ Existing worktree moved from '${existing_branch:-<detached>}' to '${BATCH_BRANCH}'."
+    else
+      echo "❌ '${WORKTREE_DIR}' exists but is on '${existing_branch:-<detached>}'," >&2
+      echo "   and '${BATCH_BRANCH}' could not be checked out there (see git's" >&2
+      echo "   message above — uncommitted work, or the branch is checked out" >&2
+      echo "   in another worktree)." >&2
+      echo "   Refusing to record it as this batch's workspace: a lock naming a" >&2
+      echo "   workspace on the wrong branch sends /review-close Step 3b to" >&2
+      echo "   collect from it." >&2
+      return 1
+    fi
+  elif git worktree add "$WORKTREE_DIR" "$BATCH_BRANCH"; then
+    echo "✅ Created worktree at ${WORKTREE_DIR}"
+  else
+    echo "❌ git worktree add ${WORKTREE_DIR} ${BATCH_BRANCH} failed (see git's message above)." >&2
+    return 1
+  fi
+}
+
+# What a failed claim left behind, and the way back. Called with the status
+# still `Pending` (re-read under the mutex) and no lock of this run's left, or
+# with the lock's path when removing it failed. It looks at the worktree rather
+# than trusting the failing step: `git worktree add` returns a failing
+# post-checkout hook's status after it has created and registered the tree.
+report_unclaimed_residue() {
+  local lock_left="${1:-}"
+  echo "   Nothing was claimed: Batch ${BATCH_NUM} still reads 'Pending'." >&2
+  if [[ -n "$CREATED_BRANCH_FROM" ]]; then
+    echo "   Left by this run: branch '${BATCH_BRANCH}'." >&2
+  fi
+  if path_is_worktree_of "$WORKTREE_DIR" "$MAIN_ROOT"; then
+    echo "   Left in place: the worktree at ${WORKTREE_DIR}." >&2
+  fi
+  if [[ -n "$lock_left" ]]; then
+    echo "   This run's lock could NOT be removed: ${lock_left}. A Pending batch holding a" >&2
+    echo "   lock refuses the next claim; release it from the primary checkout:" >&2
+    echo "     bash sysop/scripts/batch_work.sh --release ${BATCH_NUM}" >&2
+    return 0
+  fi
+  if [[ ! -e "$WORKTREE_DIR" && ! -L "$WORKTREE_DIR" ]] && claim_path_taken "$WORKTREE_DIR"; then
+    # `prune` skips a locked registration, so the printed way out would loop.
+    local unlock="" norm line in_rec=false
+    norm="$(cd "$(dirname "$WORKTREE_DIR")" 2>/dev/null && pwd -P)/$(basename "$WORKTREE_DIR")" || norm=""
+    while IFS= read -r line; do
+      case "$line" in
+        "worktree "*) in_rec=false; [[ "$line" == "worktree ${norm}" ]] && in_rec=true ;;
+        locked|"locked "*) if $in_rec; then unlock="git -C $(printf '%q' "$MAIN_ROOT") worktree unlock $(printf '%q' "$norm") && "; fi ;;
+      esac
+    done < <(git worktree list --porcelain 2>/dev/null)
+    echo "   ${WORKTREE_DIR} is registered with git but gone from disk, which 'git worktree" >&2
+    echo "   add' refuses. Prune the registration, then re-run:" >&2
+    echo "     ${unlock}git -C $(printf '%q' "$MAIN_ROOT") worktree prune && bash sysop/scripts/batch_work.sh ${BATCH_NUM}" >&2
+    return 0
+  fi
+  echo "   Fix the cause above and re-run; the claim adopts what is there:" >&2
+  echo "     bash sysop/scripts/batch_work.sh ${BATCH_NUM}" >&2
+}
+
+# The batch's status and branch as review_tasks.md reads now, tab-separated.
+# Called under the tracker mutex: the values read at the top are from before
+# this run waited, and a rival claim, release or close may have changed them.
+live_batch_record() {
+  parse_batches 2>/dev/null | awk -F'\t' -v n="$1" '$1 == n { print $3 "\t" $4; exit }'
+}
+
+# ── Helper: claim a Pending batch on main ─────────────────────
+# Marks the batch as In Progress in review_tasks.md and commits on main, after
+# building the batch's branch and worktree. Refuses if the primary is not on the
+# default branch or its review_tasks.md is untracked or dirty; returns 0 without
+# a flip when the batch is already past Pending.
+# `claim_batch` is a thin serializing wrapper; the body is `_claim_batch_locked`.
+#
+# The whole read-modify-write-commit is the critical section, not just the
+# commit: the measured failure is claim B's `sed` reading claim A's UNCOMMITTED
+# flip off the shared worktree and A's pathspec commit then recording both, so a
+# narrower window still loses the edit. The pre-claim pull is inside it too — it
+# moves the base the flip commits onto — and so is the branch and worktree build
+# (`Q-714`), which comes after the pull because the pull sets the new branch's
+# base, and before the flip.
+#
+# A wrapper rather than an acquire/release pair inline, because the body has a
+# dozen early returns and this function already spends its RETURN trap on the tempfile
+# (`trap - RETURN` below would clear a second one). The wrapper releases on every
+# path the body can leave by; the EXIT trap armed at the call site covers the one
+# it cannot — `set -e` killing the script mid-section.
+claim_batch() {
+  local rc=0
+  local _locks_dir=""
+  _locks_dir="$(resolve_locks_dir 2>/dev/null)" || _locks_dir=""
+  tracker_lock_acquire "$_locks_dir" "the claim of Batch ${1}" \
+    "nothing was written: no flip, no branch, no worktree, no lock" || return 1
+  # An EXIT trap, because the comment above USED to claim one was "armed at the
+  # call site" and no such trap existed — a reviewer grepped and found only the
+  # INT/TERM pair. INT/TERM alone also misses SIGHUP, which is the terminal
+  # closing, the SSH session dropping and the tmux window being killed: measured,
+  # that leaked the mutex and wedged every later claim, while `close_batch.sh`
+  # survived the same signal because it has a real EXIT trap. EXIT covers HUP,
+  # TERM and INT together, so it is strictly more than the pair it replaces.
+  trap 'tracker_lock_release' EXIT
+  trap 'tracker_lock_release; exit 130' INT TERM
+  # `|| rc=$?` also suppresses errexit for the whole body — which is what the
+  # call site's own `|| exit 1` already did before this wrapper existed, so the
+  # body's error handling is unchanged rather than newly relaxed.
+  _claim_batch_locked "$@" || rc=$?
+  trap - INT TERM
+  # The EXIT trap is deliberately NOT disarmed. `tracker_lock_release` is
+  # idempotent — it returns immediately once `TRACKER_LOCK_FILE` is empty — so
+  # leaving it armed costs a no-op at script exit and buys coverage of every path
+  # between here and the end of the script. Disarming it would also reintroduce a
+  # bare `trap - EXIT` into this file, which is the pattern that silently cleared
+  # a whole handler in `close_batch.sh` and which the guard now forbids in both.
+  tracker_lock_release
+  return "$rc"
+}
+
+_claim_batch_locked() {
+  local batch_num="$1"
+  local batch_status="$2"
+
+  # Only claim Pending batches. This is the ONE arm that returns 0 without
+  # flipping a status, and it is not a failure: the batch is already past
+  # `Pending`, the caller is re-attaching to it, and the branch/worktree/lock
+  # the top level goes on to create are exactly what re-attaching means. Every
+  # other non-claim outcome below refuses (`return 1`) with no flip and no lock
+  # (the refusals before the workspace step write nothing; a failure after it
+  # names what it left) — see `Q-378`: those arms used to return 0 too, and the top level
+  # then built a branch, a worktree and a lock around a batch still reading
+  # `Pending`, at exit 0, with five readers disagreeing about whether it was
+  # claimed.
+  #
+  # A re-attach re-reads the status first (`Q-714`'s round 2): a caller that read
+  # a rival's flip off disk mid-commit took this arm, and when the rival's
+  # commit failed and rolled back it went on to lock a batch reading `Pending`.
+  if [[ "$batch_status" != "Pending" ]]; then
+    local reattach_status=""
+    reattach_status="$(live_batch_record "$batch_num" | cut -f1)" || reattach_status=""
+    if [[ "$reattach_status" != "$batch_status" ]]; then
+      echo "❌ Batch ${batch_num} read '${batch_status}' and now reads '${reattach_status:-<not found>}': it changed" >&2
+      echo "   while this run waited for the tracker. Refusing — nothing was written." >&2
+      echo "   See its state with: bash sysop/scripts/batch_work.sh --list-all" >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  # Must be on the default branch — the PRIMARY's HEAD, not the caller's. The
+  # rewrite below edits `$TASKS_FILE` and the commit runs `git -C "$MAIN_ROOT"`,
+  # so the primary is the checkout this claim lands in, and it is the one that
+  # has to be on that branch. `$DEFAULT_BRANCH` is guaranteed non-empty here:
+  # the top-level `require_default_branch` runs before `claim_batch` is called.
+  #
+  # Measured (this phase's own mutation battery, row B5): with the primary on a
+  # feature branch and a worktree holding `main`, asking the CALLER's HEAD passes,
+  # and the claim commit lands on the primary's feature branch while the script
+  # prints "✅ Claimed Batch 1 on main" and `main` gains nothing. That was not
+  # reachable before this phase anchored the paths — everything used `$REPO_ROOT`,
+  # so the write followed the same HEAD the check had read. Anchoring the paths
+  # without anchoring the check split them, which is a new WRONG ACCEPTANCE
+  # introduced by a fix for a wrong read: check both ends of a predicate you widen.
+  local current_branch
+  # `branch --show-current`, not `symbolic-ref --short`: the latter prints
+  # `heads/<name>` when a tag shares the name, so the check refused the default
+  # branch itself (`Q-703`). Detached prints nothing, as before.
+  current_branch="$(git -C "$MAIN_ROOT" branch --show-current 2>/dev/null)" || true
+  if [[ "$current_branch" != "$DEFAULT_BRANCH" ]]; then
+    echo "❌ Primary checkout is not on ${DEFAULT_BRANCH} (on '${current_branch}')." >&2
+    echo "   Refusing the claim — nothing was written: no branch, no worktree, no lock." >&2
+    echo "   The status flip commits on ${DEFAULT_BRANCH} in the primary, so a claim made" >&2
+    echo "   from here would leave the batch reading 'Pending' while holding a lock." >&2
+    # The requirement is stated, and the command is offered as the usual case
+    # rather than prescribed flatly: when ${DEFAULT_BRANCH} is checked out in
+    # ANOTHER worktree — which is exactly the topology that lands a caller
+    # here — git refuses the checkout, so a bare "run this" would be a hint
+    # that cannot work in the case that produced it.
+    echo "   The primary checkout at ${MAIN_ROOT} has to be on ${DEFAULT_BRANCH}. Usually:" >&2
+    echo "     git -C $(printf '%q' "$MAIN_ROOT") checkout ${DEFAULT_BRANCH} && bash sysop/scripts/batch_work.sh ${batch_num}" >&2
+    echo "   If git refuses because ${DEFAULT_BRANCH} is checked out in another worktree," >&2
+    echo "   claim from there instead, or free it with: git -C $(printf '%q' "$MAIN_ROOT") worktree list" >&2
+    return 1
+  fi
+
+  # ...and it must be TRACKED. `git diff` and `git diff --cached` are both
+  # blind to an untracked file, so the clean check below passes over one, the
+  # rewrite lands, `git commit -- review_tasks.md` dies on a pathspec that
+  # matches nothing known to git, and the rollback — `git checkout --` on that
+  # same pathspec — cannot restore a file git has never seen. Its `|| true`
+  # swallows that second failure, so the run ends printing "the claim was
+  # rolled back, nothing was claimed" over a file left flipped to
+  # `In Progress`. Reproduced; the rollback comment below asserts this cannot
+  # happen, and it was the untracked case that made it false.
+  #
+  # `ls-files --error-unmatch` rather than adding `--porcelain` to the check
+  # below: the two states want different remedies (commit it once vs. stash a
+  # pending edit), and one message covering both would name neither.
+  if ! git -C "$MAIN_ROOT" ls-files --error-unmatch -- review_tasks.md >/dev/null 2>&1; then
+    echo "❌ review_tasks.md is not tracked by git in ${MAIN_ROOT}." >&2
+    echo "   Refusing the claim — nothing was written: no branch, no worktree, no lock." >&2
+    echo "   The claim commits the status flip, and an untracked file cannot be" >&2
+    echo "   committed by pathspec or restored by 'git checkout --' if that fails," >&2
+    echo "   so the flip would survive on disk under a message saying it did not." >&2
+    echo "   Track it once and re-run:" >&2
+    echo "     git -C $(printf '%q' "$MAIN_ROOT") add review_tasks.md && git -C $(printf '%q' "$MAIN_ROOT") commit -m 'docs: track review_tasks.md'" >&2
+    return 1
+  fi
+
+  # The PRIMARY's copy must be clean for review_tasks.md — that is the copy the
+  # rewrite below edits and the commit below records. `$REPO_ROOT` would ask the
+  # caller's own worktree, which is a different file with a different history.
+  if ! git -C "$MAIN_ROOT" diff --quiet -- review_tasks.md 2>/dev/null || \
+     ! git -C "$MAIN_ROOT" diff --cached --quiet -- review_tasks.md 2>/dev/null; then
+    echo "❌ review_tasks.md has uncommitted changes in ${MAIN_ROOT}." >&2
+    echo "   Refusing the claim — nothing was written: no branch, no worktree, no lock." >&2
+    echo "   The status flip rewrites and commits that file, so claiming over a dirty" >&2
+    echo "   copy would either lose the edit or commit it unreviewed." >&2
+    echo "   Commit or stash it and re-run:" >&2
+    echo "     git -C $(printf '%q' "$MAIN_ROOT") stash push -- review_tasks.md && bash sysop/scripts/batch_work.sh ${batch_num}" >&2
+    return 1
+  fi
+
+  # Pull the latest default branch, when there is a remote to pull from.
+  # `-C "$MAIN_ROOT"`, for the same reason the precondition above reads that
+  # checkout's HEAD: a bare pull runs in the CALLER's worktree, and now that the
+  # on-main check is a fact about the primary, the caller may be on any branch —
+  # so a bare pull here would fast-forward the default branch into a feature
+  # branch. The primary is on the default branch by the check immediately above.
+  # NO REMOTE IS NOT A FAILURE, and separating the two cases is the whole of
+  # this arm (`Q-378`). A local-only repository has nothing to pull and can
+  # still make a completely consistent claim: the status flip commits locally,
+  # the lock and the worktree follow, and every reader agrees. Refusing there
+  # would have broken local-only consumers to fix a defect they never had —
+  # measured, when the first cut of this fix reddened 33 tests across two
+  # modules whose fixtures configure no remote, i.e. the suite's ordinary claim
+  # path was running THROUGH the broken arm.
+  #
+  # A configured remote that will not fast-forward is the unsafe case, and the
+  # only one that refuses: either the remote is unreachable, or the default
+  # branch has diverged, and both mean the flip would commit onto a base the
+  # batch was never reviewed against.
+  if ! git -C "$MAIN_ROOT" remote 2>/dev/null | grep -qx origin; then
+    echo "ℹ️  No 'origin' remote — skipping the pre-claim pull."
+    echo "   The claim itself is unaffected: the status flip commits locally and"
+    echo "   the lock, branch and worktree are written as usual. Only the"
+    echo "   freshness check is unavailable."
+  else
+    echo "📥 Pulling latest ${DEFAULT_BRANCH}..."
+    git -C "$MAIN_ROOT" pull --ff-only origin "$DEFAULT_BRANCH" 2>/dev/null || {
+      echo "❌ git pull --ff-only origin ${DEFAULT_BRANCH} failed in ${MAIN_ROOT}." >&2
+      echo "   Refusing the claim — nothing was written: no branch, no worktree, no lock." >&2
+      echo "   'origin' is configured, so this is one of three things, and claiming is" >&2
+      echo "   unsafe under all of them:" >&2
+      echo "     · ${DEFAULT_BRANCH} has never been pushed, so there is no" >&2
+      echo "       origin/${DEFAULT_BRANCH} to fast-forward from — push it once;" >&2
+      echo "     · the remote is unreachable — transient; re-run when it is back;" >&2
+      echo "     · ${DEFAULT_BRANCH} has diverged from origin/${DEFAULT_BRANCH} — reconcile" >&2
+      echo "       first, or the flip commits onto a base the batch was never" >&2
+      echo "       reviewed against." >&2
+      echo "   Diagnose with: git -C $(printf '%q' "$MAIN_ROOT") pull --ff-only origin ${DEFAULT_BRANCH}" >&2
+      return 1
+    }
+  fi
+
+  # The status was read at the top, before this run waited on the mutex and
+  # pulled. A rival claim of the same batch, or a close, may have changed it
+  # since (`Q-714`'s round: the loser of a same-batch race was told the batch
+  # "still reads Pending" over the winner's claim). Re-read it here, under the
+  # mutex, while nothing has been written.
+  # The pull can bring a duplicate number or a re-pointed branch too, which the
+  # top-level checks ran too early to see.
+  refuse_on_duplicate_number "$batch_num" || return 1
+  local live_record="" live_status="" live_branch=""
+  live_record="$(live_batch_record "$batch_num")" || live_record=""
+  live_status="$(printf '%s' "$live_record" | cut -f1)"
+  live_branch="$(printf '%s' "$live_record" | cut -f2)"
+  if [[ "$live_status" != "Pending" ]]; then
+    echo "❌ Batch ${batch_num} now reads '${live_status:-<not found>}', not 'Pending': it changed while" >&2
+    echo "   this claim waited for the tracker or pulled (another claim, a release or a close)." >&2
+    echo "   Refusing the claim — nothing was written: no branch, no worktree, no lock." >&2
+    echo "   See its state with: bash sysop/scripts/batch_work.sh --list-all" >&2
+    return 1
+  fi
+  if [[ "$live_branch" != "$BATCH_BRANCH" ]]; then
+    echo "❌ Batch ${batch_num}'s branch now reads '${live_branch:-<none>}', not '${BATCH_BRANCH}': it" >&2
+    echo "   changed with the pull. Refusing the claim — nothing was written. Re-run." >&2
+    return 1
+  fi
+
+  # A lock on a batch reading `Pending`, checked HERE and not before the mutex
+  # (`Q-714`'s round 2): a claim writes its lock just before its flip, so outside
+  # the mutex a Pending batch with a lock may be a claim in flight, and this
+  # message's `--release` undid one. Under the mutex no claim is between the
+  # two, so a lock here is a release or a claim that died, or a foreign one.
+  local pre_lock=""
+  pre_lock="$(resolve_locks_dir 2>/dev/null)" && pre_lock="${pre_lock}/BATCH-${batch_num}.lock"
+  if [[ -n "$pre_lock" && -f "$pre_lock" && ! -L "$pre_lock" ]]; then
+    echo "❌ Batch ${batch_num} reads 'Pending' but already holds a lock." >&2
+    echo "   Refusing the claim — nothing was written: no status flip, no branch," >&2
+    echo "   no worktree, no lock." >&2
+    echo "   A claim writes the lock and a release removes it, so a Pending batch" >&2
+    echo "   holding one is either a release or a claim that died before finishing, or" >&2
+    echo "   a lock written by someone else. Claiming would adopt it verbatim — the batch" >&2
+    echo "   would read as yours while the lock names another branch and workspace." >&2
+    grep -E '^(agent|branch|workspace|started):' \
+      "$pre_lock" | sed 's/^/     /' >&2 || true
+    echo "   If that claim is dead, release it from the primary checkout:" >&2
+    echo "     bash sysop/scripts/batch_work.sh --release ${batch_num}" >&2
+    return 1
+  fi
+
+  # Find batch section boundaries. `review_index.py` is the ONLY parser here.
+  #
+  # Q-017/Phase 211 retired the grep fallback that used to occupy the `else`
+  # arm. What it was NOT reachable by, each checked rather than assumed:
+  #   - a missing python3 — `require_index_parser || exit 1`, above the
+  #     dispatch, refuses that for the whole script;
+  #   - a header the index cannot parse (an ASCII hyphen where
+  #     `_BATCH_HEADER_RE` demands an em-dash) — the status lookup upstream
+  #     refuses first, with "Batch N not found". Measured: `close_batch.sh`
+  #     DOES close such a batch through its own surviving fallback, so the
+  #     shape is live there and dead here. That asymmetry is Q-017's remaining
+  #     half and is pinned in tests/test_batch_range_offset_guard.py.
+  # What could reach it was `--range`'s own fence preflight firing in the window
+  # after this script's preflight (a `git pull` between the two), whose `|| true`
+  # then swallowed the refusal and handed the range to a fence-BLIND grep. So the
+  # arm was a silent bypass of a refusal, on a path nothing could construct on
+  # demand. A wrong range is worse than a refusal, and now it is one.
+  local batch_start batch_end
+  local range_line=""
+  range_line=$(python3 "$INDEX_SCRIPT" --range "$batch_num") || true
+
+  if [[ -z "$range_line" ]]; then
+    echo "❌ review_index.py could not locate Batch ${batch_num} in review_tasks.md." >&2
+    echo "   Refusing rather than guessing the range: the retired grep fallback" >&2
+    echo "   bounded batches fence-blind and matched headers the index does not." >&2
+    echo "   The header needs an em-dash and a backticked status, as in:" >&2
+    echo "     ### Batch ${batch_num} — Title \`Pending\`" >&2
+    echo "   Compare against: python3 $(printf '%q' "$INDEX_SCRIPT") --list" >&2
+    return 1
+  fi
+  batch_start=$(echo "$range_line" | cut -f1)
+  batch_end=$(echo "$range_line" | cut -f2)
+
+  # Defensive, and measured UNREACHABLE with `review_index.py` as the sole
+  # parser: `--range` prints `line_start\tline_end\t…` where `line_start` is a
+  # 1-indexed int, so `cut -f1` of a non-empty range line is never empty (`0`
+  # would still be non-empty). Kept, and made a refusal rather than a skip, so
+  # that `claim_batch` has ONE contract: it returns 0 only when the batch is
+  # claimed, or when it was already past `Pending` and the caller is
+  # re-attaching. Every other outcome refuses with no flip and no lock.
+  if [[ -z "$batch_start" ]]; then
+    echo "❌ Batch ${batch_num}'s range parsed to an empty start line." >&2
+    echo "   Refusing the claim — nothing was written: no branch, no worktree, no lock." >&2
+    echo "   Compare against: python3 $(printf '%q' "$INDEX_SCRIPT") --range ${batch_num}" >&2
+    return 1
+  fi
+
+  # Every refusal above writes nothing. From here the claim writes, and in this
+  # order (`Q-714`): the branch and the worktree, then the lock, then the status
+  # flip, last. A failure before the flip leaves a branch or a worktree and a
+  # batch still `Pending`, which a re-run adopts, and a failed flip removes the
+  # lock this run wrote. So no failure, and no signal before the commit, leaves
+  # a committed `In Progress` with no lock: the `Q-378` half-claim that three
+  # rounds of preflights listing `worktree add`'s failure states did not close.
+  # A lock beside a still-`Pending` status is visible only for the commit's
+  # duration, under the mutex; to readers it means the batch is being claimed.
+  if ! prepare_workspace; then
+    report_unclaimed_residue
+    return 1
+  fi
+  WORKSPACE_READY=true
+
+  local claim_lock=""
+  claim_lock="$(resolve_locks_dir 2>/dev/null)" && claim_lock="${claim_lock}/BATCH-${batch_num}.lock"
+  if [[ -z "$claim_lock" || -e "$claim_lock" || -L "$claim_lock" ]]; then
+    echo "❌ ${claim_lock:-The batch lock path} cannot be written fresh (unresolvable, or something is" >&2
+    echo "   already there): a Pending claim writes its own lock before the flip." >&2
+    report_unclaimed_residue
+    return 1
+  fi
+  if ! write_batch_lock "$batch_num" "$BATCH_BRANCH" "$WORKTREE_DIR" || [[ ! -f "$claim_lock" ]]; then
+    echo "❌ The batch lock was not written (see above), so the status was not flipped." >&2
+    report_unclaimed_residue
+    return 1
+  fi
+  LOCK_WRITTEN=true
+
+  # Atomic rewrite: apply all sed mutations in one pass to a tempfile, then mv
+  # into place. CLAUDE.md § Data integrity requires `<path>.tmp` + atomic move
+  # so an interrupt mid-flow cannot leave review_tasks.md half-edited.
+  #
+  # PID-qualified (`Q-382`, the suspected half): the fixed `${TASKS_FILE}.tmp`
+  # is the same path for every concurrent claim, so two claims racing here read
+  # the same input, write the same tempfile and `mv` in turn — the second
+  # silently discards the first's status flip. **This phase's round DID force
+  # the window** — two concurrent claims on different batches strand one in
+  # about half of trials, committed `In Progress` with no lock, under a message
+  # saying nothing was claimed. So this is not "hardening a narrow race": the
+  # race is real and reproduced, this change does not close it (the mechanism
+  # is an unlocked read-modify-write plus one shared git index, not the
+  # tempfile), and it is filed as `Q-387` § High.
+  #
+  # `$$`, not `mktemp`: mktemp creates at 0600, and `mv` would carry that onto
+  # review_tasks.md — a permission change nobody asked for, on the file every
+  # reader in the tree opens. The redirect below creates under the caller's
+  # umask, which is what the file already had.
+  #
+  # The name keeps its `.md.tmp` ending so it still falls inside the
+  # `review_tasks*.md.tmp` shape `archive_review_tasks.py` documents as the
+  # thing that trips /review-close Step 1a dirty-classification.
+  local tmp_file="${TASKS_FILE%.md}.$$.md.tmp"
+  trap 'rm -f "$tmp_file"' RETURN
+  sed -e "${batch_start}s/\`Pending\`/\`In Progress\`/" \
+      -e "${batch_start},${batch_end}s/^- \[ \]/- [\/]/" \
+      -e "/Batch ${batch_num})/s/| Pending |/| In Progress |/" \
+      "$TASKS_FILE" > "$tmp_file"
+  mv -- "$tmp_file" "$TASKS_FILE"
+  trap - RETURN
+
+  # Commit the claim. Repo-anchored AND pathspec-scoped, the shape `--release`'s
+  # commit has carried since Phase 151 — this was the unhardened sibling, and
+  # Q-020's structural note (a) is that the class recurs at call-site
+  # granularity, not file granularity.
+  #
+  # Anchored because a bare pathspec is CWD-relative: measured from
+  # `<repo>/sysop/scripts/`, `git add review_tasks.md` died `fatal: pathspec
+  # 'review_tasks.md' did not match any files` under `set -e` — AFTER the rewrite
+  # above had landed, leaving disk `In Progress` against HEAD `Pending`. Nothing
+  # rolled that back, and the next run reads the dirty tree, warns, and creates
+  # the worktree and the lock anyway: precisely the claimable-but-half-applied
+  # state `--release`'s mutation ordering exists to prevent.
+  #
+  # Scoped because `git add` + a bare `git commit` sweeps whatever else the
+  # operator had staged into `docs: claim Batch N` (Phase 151's all-or-nothing rule).
+  local pre_tip=""
+  pre_tip="$(git -C "$MAIN_ROOT" rev-parse --verify --quiet HEAD 2>/dev/null)" || pre_tip=""
+  if ! git -C "$MAIN_ROOT" commit -m "docs: claim Batch ${batch_num}" -- review_tasks.md; then
+    # Put the file back, for the reason `--release`'s identical rollback states:
+    # a rewrite that survives on disk while HEAD disagrees is the worse half of
+    # the failure. Safe because the tracked-and-clean refusals above have
+    # established both halves of what this restore assumes: that the file is
+    # known to git at all, and that this rewrite is the ONLY uncommitted change
+    # to it. The first half was missing until `Q-382` — the clean checks are
+    # blind to an untracked file, and `git checkout --` cannot restore one, so
+    # the `|| true` turned an unrecoverable state into a silent one.
+    #
+    # The second half above is established AT CHECK TIME and then assumed to hold
+    # here, and the tracker mutex does not buy it: it serializes this script
+    # against `close_batch.sh`, not against an operator's `git add -A` or
+    # `/review-close`'s staging. In that window the restore-from-INDEX puts back
+    # the rewrite rather than HEAD's content — measured: the file stays
+    # `In Progress` on disk while HEAD says `Pending`, and the caller reports a
+    # rollback that did not happen (`Q-447`).
+    #
+    # `git checkout HEAD --` was built as the fix and REFUSED: it restores the
+    # index too, so it discards whatever the other actor had staged, and in a
+    # conflicted merge it resolves the conflict (exit 0) where the bare form
+    # correctly refuses. The rollback stays precise and is VERIFIED instead.
+    git -C "$MAIN_ROOT" checkout -- review_tasks.md 2>/dev/null || true
+    if ! git -C "$MAIN_ROOT" diff --quiet HEAD -- review_tasks.md 2>/dev/null; then
+      # The working copy still reads `In Progress`, so this run's lock stays: a
+      # flip on disk with no lock is the half-claim this order exists to prevent.
+      echo "❌ git commit failed AND the rollback did not restore review_tasks.md." >&2
+      echo "   The working copy still differs from HEAD — most likely the file was" >&2
+      echo "   staged, so the checkout restored the staged copy. Do NOT re-run;" >&2
+      echo "   inspect with: git -C $(printf '%q' "$MAIN_ROOT") diff HEAD -- review_tasks.md" >&2
+      echo "   Kept, so the working copy and the lock agree: ${claim_lock}, the branch" >&2
+      echo "   '${BATCH_BRANCH}' and the worktree at ${WORKTREE_DIR}. Commit the flip to keep" >&2
+      echo "   the claim, or restore the file and release it: bash sysop/scripts/batch_work.sh --release ${batch_num}" >&2
+      return 1
+    fi
+    # The lock went in before the flip; with no flip it goes back out.
+    local lock_left=""
+    rm -f "$claim_lock" 2>/dev/null || true
+    if [[ -e "$claim_lock" || -L "$claim_lock" ]]; then lock_left="$claim_lock"; else LOCK_WRITTEN=false; fi
+    echo "❌ git commit failed — the claim was rolled back, nothing was claimed." >&2
+    report_unclaimed_residue "$lock_left"
+    return 1
+  fi
+  echo "✅ Claimed Batch ${batch_num} on ${DEFAULT_BRANCH} (marked In Progress)."
+
+  # The branch was cut BEFORE the flip — by this run, or by an earlier one that
+  # failed after cutting it — so it lacks the claim commit the old order gave
+  # it, and its `review_tasks.md` would read `Pending`. Fast-forward it when it
+  # has no commits of its own (an ancestor of the claim commit) and no tracked
+  # changes; a branch with work on it is left where it is, as it always was.
+  # The SHA, not the branch name (a same-named tag); `--no-overwrite-ignore`, as
+  # in `claim_task.sh --commit-claim`. A failure is reported and the claim
+  # stands: the status and (next) the lock agree, only the worktree is behind.
+  # The claim commit itself, not HEAD: a post-commit hook that commits moves
+  # HEAD past it.
+  local claim_tip="" wt_head="" ff_why="" ff_first=""
+  if [[ -n "$pre_tip" ]]; then
+    claim_tip="$(git -C "$MAIN_ROOT" rev-list --reverse --first-parent "${pre_tip}..HEAD" 2>/dev/null | head -n 1)" || claim_tip=""
+  fi
+  wt_head="$(git -C "$WORKTREE_DIR" rev-parse --verify --quiet HEAD 2>/dev/null)" || wt_head=""
+  if [[ -z "$claim_tip" || -z "$wt_head" ]]; then
+    ff_why="git could not read the claim commit or the worktree's HEAD"
+  elif [[ "$wt_head" == "$claim_tip" ]]; then
+    :
+  elif ! git -C "$MAIN_ROOT" merge-base --is-ancestor "$wt_head" "$claim_tip" 2>/dev/null; then
+    echo "ℹ️  '${BATCH_BRANCH}' has commits of its own, so it was left where it is (not moved to the claim commit)."
+  elif [[ -n "$(git -C "$WORKTREE_DIR" status --porcelain --untracked-files=no 2>/dev/null || echo dirty)" ]]; then
+    ff_why="the worktree has uncommitted changes to tracked files"
+    ff_first="commit or stash them, then "
+  elif ! git -C "$WORKTREE_DIR" merge --ff-only --no-overwrite-ignore --quiet "$claim_tip"; then
+    ff_why="git refused the fast-forward (see git's message above)"
+  elif [[ "$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || true)" != "$claim_tip" ]]; then
+    ff_why="the fast-forward did not land on ${claim_tip:0:12}"
+  else
+    echo "✅ Brought '${BATCH_BRANCH}' up to the claim commit (${claim_tip:0:12})."
+  fi
+  if [[ -n "$ff_why" ]]; then
+    echo "⚠️  '${BATCH_BRANCH}' was NOT brought up to the claim commit: ${ff_why}." >&2
+    echo "   Its review_tasks.md may still read 'Pending'. The claim itself stands. To bring it up," >&2
+    echo "   ${ff_first}run:" >&2
+    echo "     git -C $(printf '%q' "$WORKTREE_DIR") merge --ff-only --no-overwrite-ignore ${claim_tip:-<the claim commit>}" >&2
+  fi
+
+  # Rebuild JSON index after Markdown mutation
+  rebuild_index
+
+  # Update caller's status variable
+  BATCH_STATUS="In Progress"
+}
+
+# ── Mode: --release (un-claim) ────────────────────────────────
+# The sanctioned inverse of a claim, and the reason the lock write is safe to
+# ship: without it an abandoned batch keeps a lock nothing ever clears, and
+# next_task.py skips a locked batch forever.
+#
+# Mutations are ordered so every early exit leaves a consistent state:
+# pre-flight everything → remove the worktree (abort untouched if it is dirty
+# and --force was not passed) → revert review_tasks.md and commit → remove the
+# lock last. If the commit fails the lock survives, so the batch still reads as
+# claimed rather than as claimable-but-half-reverted.
+if [[ "${1:-}" == "--release" ]]; then
+  shift
+  # Q-012: before flag parsing, so --force cannot reach past the exit-3 arm.
+  # The exit-5 arm (Q-229/Q-231: any unterminated fence) IS forceable, so the
+  # flag is pre-scanned here rather than read from RELEASE_FORCE below — that
+  # variable does not exist yet, and moving this call after it would hand
+  # --force the exit-3 bypass the comment above exists to deny.
+  # Q-243: stop at the first NON-flag argument. Scanning all of "$@" honoured a
+  # flag position the parser below rejects, so `--release 9 --allow-open-fence`
+  # printed the escape's "proceeding under ..." banner and only THEN exited 1
+  # with "Flags must come before <BATCH_NUMBER>". Nothing was written — the
+  # banner preceded every mutation — so the cost was a reader who believes an
+  # escape took effect when the run refused it. `case`, not `[[ ]] &&`: under
+  # `set -e` the AND-list form makes the loop body's status depend on the test,
+  # which is a hazard to re-introduce for no gain.
+  refuse_trailing_flags "batch_work.sh --release --force <BATCH_NUMBER>" "$@" || exit 1
+  _fence_force=""
+  for _a in "$@"; do
+    case "$_a" in
+      --allow-open-fence) _fence_force="force" ;;
+      --*) ;;
+      *) break ;;
+    esac
+  done
+  refuse_on_structural_fence "$_fence_force" || exit 1
+  RELEASE_FORCE=false
+  while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+      --force) RELEASE_FORCE=true; shift ;;
+      --allow-open-fence) shift ;;   # consumed by the fence pre-scan above
+      *) echo "❌ Unknown flag: $1" >&2
+         echo "Usage: batch_work.sh --release [--force] [--allow-open-fence] <BATCH_NUMBER>" >&2
+         exit 1 ;;
+    esac
+  done
+
+  if [[ -z "${1:-}" ]]; then
+    echo "❌ Usage: batch_work.sh --release [--force] [--allow-open-fence] <BATCH_NUMBER>" >&2
+    exit 1
+  fi
+  REL_NUM="$(normalize_batch_arg "$1")"
+  shift || true
+  # Flags are consumed only *before* the positional, so a trailing flag would
+  # silently no-op — reject it rather than abort a dirty-worktree release and
+  # tell the operator to add the very flag they already passed.
+  if [[ "${1:-}" == --* ]]; then
+    echo "❌ Flags must come before <BATCH_NUMBER> (e.g. batch_work.sh --release --force ${REL_NUM})." >&2
+    echo "   Saw trailing flag: $1" >&2
+    exit 1
+  fi
+  if ! [[ "$REL_NUM" =~ ^[0-9]+$ ]]; then
+    echo "❌ Batch number must be a positive integer, got: ${REL_NUM}" >&2
+    exit 1
+  fi
+
+  # ── Serialize the release too (`Q-387`, found by this phase's round) ────
+  #
+  # `--release` is the THIRD writer of review_tasks.md and the second one inside
+  # this file: below it does the same `sed` → tempfile → `mv` → `git commit --
+  # review_tasks.md` the claim does. The first cut of this phase locked
+  # `claim_batch` and left this path open, and the record's "both writers of
+  # review_tasks.md" was wrong on its own file. Two reviewers reproduced it
+  # independently — a `--release` racing a claim was defective in 7 of 8 and
+  # 12 of 12 trials, producing both of `Q-387`'s symptoms: a batch committed
+  # under a message denying it, and an orphan lock over a `Pending` batch that
+  # `next_task.py` then skips forever while this script's own preflight refuses
+  # to re-claim it. `--release` is not exotic: `/claim-task` prescribes it as the
+  # abandon outcome, and `/roadmap` and `/review-close` both relay it.
+  #
+  # Acquired here — before the worktree removal below, not just around the
+  # rewrite — because the mutations this phase's battery ran on the claim showed
+  # that a section drawn narrowly enough to look right still races.
+  REL_LOCKS_DIR="$(resolve_locks_dir 2>/dev/null)" || REL_LOCKS_DIR=""
+  tracker_lock_acquire "$REL_LOCKS_DIR" "the release of Batch ${REL_NUM}" \
+    "nothing was released — the claim is intact" || exit 1
+  trap 'rm -f "${REL_TMP:-}" 2>/dev/null; tracker_lock_release' EXIT
+
+  # Q-037: as early as the number is known, and before any state is read or
+  # written. `--force` is parsed above but cannot reach past this, matching the
+  # fence refusal's placement rule for the same reason: --force already admits
+  # the statuses an ambiguous batch is likely to carry.
+  refuse_on_duplicate_number "$REL_NUM" || exit 1
+
+  # Refuse to run anywhere but the main checkout, BEFORE reading any batch
+  # state. `REPO_ROOT` comes from `git rev-parse --show-toplevel`, which in a
+  # worktree is the WORKTREE's root — so `$TASKS_FILE` would be that branch's
+  # copy of review_tasks.md, frozen at whatever it held when the branch was
+  # cut. Releasing off that copy reads a batch as `Pending` while main has it
+  # `In Progress`, takes the lock-only path, and clears the lock on a batch
+  # that is still claimed. Caught in this phase's own smoke test.
+  #
+  # This also subsumes the "you are inside the worktree being released" case:
+  # that cwd is not the main checkout, so it is refused before anything is read.
+  REL_MAIN_ROOT="$(resolve_main_root 2>/dev/null)" || REL_MAIN_ROOT=""
+  if [[ -z "$REL_MAIN_ROOT" ]]; then
+    echo "❌ Could not resolve the main repo root — refusing to release from an unknown checkout." >&2
+    exit 1
+  fi
+  # `-ef` (same device+inode), NOT a string compare: `pwd -P` resolves symlinks
+  # but not CASE, and `REPO_ROOT` carries the on-disk spelling while
+  # `REL_MAIN_ROOT` carries the spelling the caller entered. On a
+  # case-insensitive filesystem the two reach the same directory and compare
+  # unequal, which refused a legitimate release FROM the main checkout.
+  REL_MAIN_REAL="$(cd "$REL_MAIN_ROOT" && pwd -P 2>/dev/null)" || REL_MAIN_REAL="$REL_MAIN_ROOT"
+  REL_HERE_REAL="$(cd "$REPO_ROOT" && pwd -P 2>/dev/null)" || REL_HERE_REAL="$REPO_ROOT"
+  if [[ ! "$REL_HERE_REAL" -ef "$REL_MAIN_REAL" ]]; then
+    echo "❌ --release must run from the main checkout, not a worktree." >&2
+    echo "   here: ${REL_HERE_REAL}" >&2
+    echo "   primary checkout: ${REL_MAIN_REAL}" >&2
+    echo "   A worktree carries its branch's own review_tasks.md, so the batch state read here" >&2
+    echo "   would be stale. cd to the main checkout and re-run — nothing was released." >&2
+    exit 1
+  fi
+
+  REL_FOUND=""
+  while IFS=$'\t' read -r num title status branch scope verify; do
+    if [[ "$num" == "$REL_NUM" ]]; then
+      REL_FOUND="found"; REL_STATUS="$status"; REL_BRANCH="$branch"
+      break
+    fi
+  done < <(parse_batches)
+
+  if [[ -z "$REL_FOUND" ]]; then
+    echo "❌ Batch ${REL_NUM} not found in review_tasks.md" >&2
+    exit 1
+  fi
+
+  echo "🔓 Releasing Batch ${REL_NUM}"
+  echo "   status: ${REL_STATUS}"
+  echo "   branch: ${REL_BRANCH:-<none recorded>}"
+  echo ""
+
+  case "$REL_STATUS" in
+    Complete|Merged|"Ready for Review")
+      echo "❌ Batch ${REL_NUM} is '${REL_STATUS}' — releasing a finished batch would" >&2
+      echo "   re-open work that is already done. close_batch.sh owns that transition." >&2
+      echo "   If it is holding a stale lock, clear it from the primary checkout with:" >&2
+      echo "     bash sysop/scripts/close_batch.sh ${REL_NUM}" >&2
+      exit 1
+      ;;
+    Pending)
+      # No claim to reverse in review_tasks.md — but an orphaned lock is
+      # exactly what strands a Pending batch (next_task.py skips it while the
+      # status says it is claimable), so clearing the lock IS the release here.
+      echo "ℹ️  Batch ${REL_NUM} is already Pending in review_tasks.md — clearing the lock only."
+      remove_batch_lock "$REL_NUM"
+      remove_batch_park_markers "$REL_NUM"
+      exit 0
+      ;;
+    "In Progress"|"Review Ready") ;;
+    *)
+      echo "❌ Unrecognized batch status '${REL_STATUS}' — refusing to guess at the inverse." >&2
+      exit 1
+      ;;
+  esac
+
+  # Committing the revert requires the same default-branch precondition the
+  # claim commit has. NOT the same probe, though: the claim reads the PRIMARY's
+  # HEAD (`git -C "$MAIN_ROOT"`), because a claim may be run from a worktree and
+  # lands in the primary; `--release` reads the CALLER's HEAD, because it has
+  # already refused to run anywhere but the primary (the guard above), so here
+  # the two are the same checkout. An earlier version of this comment said
+  # "the same preconditions" while the two probes read different HEADs.
+  [[ -n "$DEFAULT_BRANCH" ]] || DEFAULT_BRANCH="$(require_default_branch "$MAIN_ROOT")" || exit 1
+  REL_CUR_BRANCH="$(git branch --show-current 2>/dev/null)" || REL_CUR_BRANCH=""   # `Q-703`, as the claim's
+  if [[ "$REL_CUR_BRANCH" != "$DEFAULT_BRANCH" ]]; then
+    echo "❌ Not on ${DEFAULT_BRANCH} (on '${REL_CUR_BRANCH:-detached HEAD}')." >&2
+    echo "   The claim was committed on ${DEFAULT_BRANCH}, so its reversal must be too." >&2
+    exit 1
+  fi
+  # `git -C "$REPO_ROOT"`, not a bare git: a bare `-- review_tasks.md`
+  # pathspec is resolved against the CWD, so from `<repo>/sysop/scripts/` this
+  # check matches nothing and silently passes over a dirty file.
+  if ! git -C "$REPO_ROOT" diff --quiet -- review_tasks.md 2>/dev/null || \
+     ! git -C "$REPO_ROOT" diff --cached --quiet -- review_tasks.md 2>/dev/null; then
+    echo "❌ review_tasks.md has uncommitted changes — commit or stash them first." >&2
+    exit 1
+  fi
+
+  # Locate the batch section. `review_index.py` is the ONLY parser here, for
+  # the reason the claim path's copy states (Q-017/Phase 211) — and the stake is
+  # higher on this path: REL_END bounds the `- [x]` count implementing
+  # "Completed work is not abandonable by default" below, so a range bounded
+  # away from the finished work is a safety-guard BYPASS, not a miscount. The
+  # retired fallback could revert a batch that had results, at exit 0, silently.
+  REL_RANGE=""
+  REL_RANGE=$(python3 "$INDEX_SCRIPT" --range "$REL_NUM") || true
+  if [[ -z "$REL_RANGE" ]]; then
+    echo "❌ review_index.py could not locate Batch ${REL_NUM} in review_tasks.md." >&2
+    echo "   Refusing rather than guessing the range: this range bounds the" >&2
+    echo "   completed-work check that makes --release safe, so a guessed one" >&2
+    echo "   could abandon finished work silently." >&2
+    echo "   The header needs an em-dash and a backticked status, as in:" >&2
+    echo "     ### Batch ${REL_NUM} — Title \`In Progress\`" >&2
+    echo "   Compare against: python3 $(printf '%q' "$INDEX_SCRIPT") --list" >&2
+    exit 1
+  fi
+  REL_START=$(echo "$REL_RANGE" | cut -f1)
+  REL_END=$(echo "$REL_RANGE" | cut -f2)
+
+  # Completed work is not abandonable by default: `- [x]` inside the batch
+  # means an agent finished something, and reverting the header to `Pending`
+  # would advertise that work as unstarted. /review-close owns a batch that has
+  # results; --release owns one that does not.
+  REL_DONE=$(sed -n "${REL_START},${REL_END}p" "$TASKS_FILE" | grep -cE '^- \[x\]' || true)
+  if [[ "$REL_DONE" -gt 0 ]] && ! $RELEASE_FORCE; then
+    echo "❌ Batch ${REL_NUM} has ${REL_DONE} completed task(s) marked [x]." >&2
+    echo "   Releasing would mark the batch Pending with that work still recorded done." >&2
+    echo "   Run /review-close on the branch instead, or re-run with --force to release anyway." >&2
+    exit 1
+  fi
+
+  # Remove the worktree, if one still holds the branch.
+  if [[ -n "$REL_BRANCH" ]]; then
+    if REL_WT="$(find_worktree_for_branch "$REL_BRANCH")"; then
+      REL_WT_REAL="$( { cd "$REL_WT" && pwd -P; } 2>/dev/null || echo "$REL_WT" )"
+      # `REL_MAIN_REAL` was resolved by the main-checkout guard above.
+      # `-ef`, not `==` — a case-divergent spelling would make this
+      # "never remove the main worktree" guard MISS, which is the direction
+      # that fails open. (git refuses to remove a main working tree, so it is
+      # the backstop; a guard whose whole job is not reaching that error should
+      # not depend on it.)
+      if [[ "$REL_WT_REAL" -ef "$REL_MAIN_REAL" ]]; then
+        echo "⚠️  Branch ${REL_BRANCH} is checked out in the main worktree — not removing it."
+      elif ! path_is_worktree "$REL_WT_REAL"; then
+        # A registered worktree whose directory has lost its `.git`. Found in
+        # passing while checking `Q-382`'s reachability claim, and NOT in the
+        # filing: `git worktree remove` refuses this with "validation failed …
+        # .git does not exist", and so does `--force`, so BOTH arms below
+        # exited 1 with "Nothing was released — the claim is intact." The lock
+        # was never removed and the remedy the message offered (`--force`) was
+        # the one that had just failed, so the batch was unreleasable by any
+        # shipped command — and `next_task.py` skips a locked batch forever,
+        # which is the exact harm this whole mode exists to prevent.
+        #
+        # **NOT `git worktree prune`.** That was this arm's first cut and it is
+        # data loss: prune takes no target and de-registers EVERY prunable
+        # worktree in the repository. Measured — a bystander worktree that had
+        # merely been moved aside (an ordinary rename, or an unmounted volume)
+        # lost its admin directory, and with it its index, HEAD and reflog;
+        # `git worktree repair` could not recover it. A second BROKEN batch was
+        # de-registered too, so its own `--release` then took the "No worktree
+        # holds" branch, reported success at exit 0, and left the orphan
+        # directory that the claim-side refusal above now rejects — this arm
+        # manufacturing the very state it exists to clear, for every batch but
+        # the first. `cleanup_worktrees.sh` already carries the rule this broke:
+        # its modes act on ALL worktrees, and it points at `--release <N>` as
+        # the SINGLE-batch tool.
+        #
+        # So remove exactly one administrative record: the one whose `gitdir`
+        # file points at this worktree. `-ef` first because a symlinked or
+        # case-divergent spelling must still match; the string compare is the
+        # fallback for a path that no longer exists.
+        #
+        # Scope of what this fixes, corrected by the round: the batch was NOT
+        # "unreleasable by any shipped command", which an earlier draft claimed.
+        # `cleanup_worktrees.sh` prunes unconditionally, so prune-then-release
+        # did recover it. What is true is narrower — `--release` alone could
+        # not, in either arm, and the recovery ran through another script's
+        # incidental repo-global prune. This arm makes it one command, and a
+        # targeted one.
+        #
+        # The leftover directory is removed only when it is EMPTY — anything
+        # else is an operator's data, and the claim-side refusal above names it
+        # rather than deleting it.
+        echo "⚠️  Worktree ${REL_WT_REAL} is registered but is not a valid worktree" \
+             "(its .git is gone)."
+        # `--git-common-dir` answers RELATIVE to the CWD (`.git` from a repo
+        # root), so it must be resolved against the CWD it was asked from —
+        # not left relative and not resolved against a guess. Measured: left
+        # relative, this arm works from the repo root and silently finds
+        # nothing from any subdirectory, which is the CWD-relative class this
+        # repo has now paid for at four separate sites. `-C "$REPO_ROOT"` makes
+        # the answer's base explicit rather than implicit in where the operator
+        # happened to stand.
+        REL_COMMON="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)" \
+          || REL_COMMON=""
+        case "$REL_COMMON" in
+          "") ;;
+          /*) ;;
+          *) REL_COMMON="$(CDPATH= cd "$REPO_ROOT" && CDPATH= cd "$REL_COMMON" 2>/dev/null && pwd -P)" \
+               || REL_COMMON="" ;;
+        esac
+        REL_PRUNED=false
+        if [[ -n "$REL_COMMON" && -d "${REL_COMMON}/worktrees" ]]; then
+          for REL_GITDIR in "${REL_COMMON}"/worktrees/*/gitdir; do
+            [[ -f "$REL_GITDIR" ]] || continue
+            REL_REG="$(cat "$REL_GITDIR" 2>/dev/null)" || continue
+            REL_REG="${REL_REG%/.git}"
+            if [[ "$REL_REG" == "$REL_WT_REAL" ]] || \
+               { [[ -e "$REL_REG" ]] && [[ "$REL_REG" -ef "$REL_WT_REAL" ]]; }; then
+              # `rm -rf` on a computed path, so the path is validated first
+              # rather than trusted. `dirname ""` is `.`, and while `set -u`
+              # aborts on an unbound variable before reaching here, a guard
+              # that depends on another guard for the difference between "one
+              # admin record" and "the current directory" is not worth the
+              # three lines it saves.
+              REL_ADMIN="$(dirname "$REL_GITDIR")"
+              case "$REL_ADMIN" in
+                "${REL_COMMON}"/worktrees/?*) rm -rf "$REL_ADMIN" ;;
+                *)
+                  echo "⚠️  Refusing to remove ${REL_ADMIN}: not a worktree record." >&2
+                  continue
+                  ;;
+              esac
+              REL_PRUNED=true
+              break
+            fi
+          done
+        fi
+        if ! $REL_PRUNED; then
+          echo "⚠️  Could not locate its registration under ${REL_COMMON:-<unresolved>}/worktrees;" >&2
+          echo "   the release continues, but 'git worktree list' may still show it." >&2
+        fi
+        if [[ -d "$REL_WT_REAL" ]] && rmdir "$REL_WT_REAL" 2>/dev/null; then
+          echo "✅ Removed this batch's stale registration and its empty directory."
+        elif [[ -d "$REL_WT_REAL" ]]; then
+          echo "✅ Removed this batch's stale registration."
+          echo "ℹ️  ${REL_WT_REAL} still holds files and was left alone — inspect and remove it"
+          echo "   yourself; a claim will refuse while a non-worktree sits at that path."
+        else
+          echo "✅ Removed this batch's stale registration."
+        fi
+      elif $RELEASE_FORCE; then
+        if ! git worktree remove --force "$REL_WT_REAL"; then
+          echo "❌ Could not remove worktree ${REL_WT_REAL} even with --force." >&2
+          echo "   Nothing was released — the claim is intact." >&2
+          exit 1
+        fi
+        echo "✅ Removed worktree ${REL_WT_REAL} (--force)."
+      elif git worktree remove "$REL_WT_REAL"; then
+        echo "✅ Removed worktree ${REL_WT_REAL}."
+      else
+        echo "❌ Could not remove worktree ${REL_WT_REAL} (uncommitted changes?)." >&2
+        echo "   Re-run with --force to discard, or commit/stash the work first." >&2
+        echo "   Nothing was released — the claim is intact." >&2
+        exit 1
+      fi
+    else
+      echo "ℹ️  No worktree holds ${REL_BRANCH} (already removed, or never created)."
+    fi
+  fi
+
+  # Exact inverse of claim_batch's three substitutions, atomically.
+  # PID-qualified for the reason the claim's tempfile is, and swept here in the
+  # same commit rather than left as the one remaining fixed-path sibling: the
+  # filing named only the claim site, and a class fixed at one of its two call
+  # sites is the shape `Q-020`'s structural note is about.
+  REL_TMP="${TASKS_FILE%.md}.$$.md.tmp"
+  # No trap here, and no `trap - EXIT` after the `mv`: the combined handler armed
+  # at the acquire above already removes `$REL_TMP` and releases the mutex. A bare
+  # `trap - EXIT` clears the WHOLE handler, so leaving this pair in place would
+  # silently disarm the release — the same class the close path hit, flagged here
+  # by a reviewer as latent the moment this path took the lock. It is no longer
+  # latent, so it is no longer a bare disarm.
+  sed -e "${REL_START}s/\`${REL_STATUS}\`/\`Pending\`/" \
+      -e "${REL_START},${REL_END}s#^- \[/\]#- [ ]#" \
+      -e "/Batch ${REL_NUM})/s/| ${REL_STATUS} |/| Pending |/" \
+      "$TASKS_FILE" > "$REL_TMP"
+  mv -- "$REL_TMP" "$TASKS_FILE"
+  REL_TMP=""
+
+  # Repo-anchored AND pathspec-scoped. Anchored because a bare pathspec is
+  # CWD-relative — from a subdirectory this failed `fatal: pathspec ... did not
+  # match`, after the worktree was already removed, leaving the revert
+  # uncommitted with only a raw git error to show for it. Scoped because
+  # `git add` + a bare `git commit` sweeps whatever else the operator had
+  # staged into `docs: release Batch N` (Phase 151's all-or-nothing rule).
+  if ! git -C "$REPO_ROOT" commit -m "docs: release Batch ${REL_NUM}" -- review_tasks.md; then
+    # Put the file back. Without this the revert survives on disk while HEAD
+    # still says `In Progress`, so `--list` reads the batch as Pending and the
+    # re-run prescribed below takes the Pending arm — which clears the lock and
+    # never commits, leaving exactly the claimable-but-half-reverted state the
+    # mutation ordering above exists to prevent.
+    # See the claim path's rollback for the measurement (`Q-447`). This site was
+    # the sharper of the two, because the message below ASSERTED "restored to
+    # HEAD" unconditionally — it printed even when the checkout had failed (the
+    # `|| true`, e.g. an untracked file) or had silently restored a staged copy.
+    # The assertion is now earned rather than stated.
+    git -C "$REPO_ROOT" checkout -- review_tasks.md 2>/dev/null || true
+    echo "" >&2
+    if git -C "$REPO_ROOT" diff --quiet HEAD -- review_tasks.md 2>/dev/null; then
+      echo "❌ git commit failed — the release was rolled back." >&2
+      echo "   review_tasks.md is restored to HEAD and the batch lock was NOT removed," >&2
+    else
+      echo "❌ git commit failed AND the rollback did not restore review_tasks.md." >&2
+      echo "   The working copy still differs from HEAD — most likely it was staged, so" >&2
+      echo "   the checkout restored the staged copy. The batch lock was NOT removed," >&2
+    fi
+    echo "   so the batch still reads as claimed. NOTE: the worktree was already removed." >&2
+    echo "   Fix the commit failure and re-run: bash sysop/scripts/batch_work.sh --release ${REL_NUM}" >&2
+    exit 1
+  fi
+  echo "✅ Reverted Batch ${REL_NUM} to Pending on ${DEFAULT_BRANCH}."
+
+  rebuild_index
+  remove_batch_lock "$REL_NUM"
+  remove_batch_park_markers "$REL_NUM"
+
+  echo ""
+  echo "ℹ️  Branch ${REL_BRANCH:-<none>} was left in place (a claim leaves the branch, so an un-claim does too)."
+  echo "   Delete it yourself if it is dead: git branch -D ${REL_BRANCH:-<branch>}"
+  exit 0
+fi
+
+# ── Mode: create worktree for batch ───────────────────────────
+# Flag parsing mirrors --release exactly (consume flags before the positional,
+# then reject a trailing one). A silent no-op on `batch_work.sh 5 --force` is
+# worse here than there: the operator believes they forced a claim that was
+# actually refused, or — before the status gate below existed — believes they
+# were warned about one that went through anyway.
+#
+# Q-012: the fence refusal runs BEFORE that parsing, for the same reason the
+# comment above gives — `--force` already admits `Complete|Merged|Ready for
+# Review`, which are exactly the statuses a fenced doc example carries, so a
+# refusal placed after it would be bypassable by an existing flag. It also runs
+# before the status gate below, so the operator never reads a `Pending` banner
+# for a batch the file records as `Merged`.
+# The exit-5 arm is forceable and CLAIM_FORCE is parsed below, so the flag is
+# pre-scanned rather than read from it; see the --release copy above.
+# Q-243: stop at the first NON-flag argument — see the --release copy above for
+# why (a trailing flag printed the escape banner and was then rejected).
+refuse_trailing_flags "batch_work.sh --force <BATCH_NUMBER>" "$@" || exit 1
+_fence_force=""
+for _a in "$@"; do
+  case "$_a" in
+    --allow-open-fence) _fence_force="force" ;;
+    --*) ;;
+    *) break ;;
+  esac
+done
+refuse_on_structural_fence "$_fence_force" || exit 1
+
+CLAIM_FORCE=false
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --force) CLAIM_FORCE=true; shift ;;
+    --allow-open-fence) shift ;;   # consumed by the fence pre-scan above
+    *) echo "❌ Unknown flag: $1" >&2
+       echo "Usage: batch_work.sh [--force] [--allow-open-fence] <BATCH_NUMBER>" >&2
+       exit 1 ;;
+  esac
+done
+
+if [[ -z "${1:-}" ]]; then
+  echo "❌ Usage: batch_work.sh [--force] [--allow-open-fence] <BATCH_NUMBER> | --list | --list-all | --release [--force] <BATCH_NUMBER>" >&2
+  exit 1
+fi
+BATCH_NUM="$(normalize_batch_arg "$1")"
+shift || true
+if [[ "${1:-}" == --* ]]; then
+  echo "❌ Flags must come before <BATCH_NUMBER> (e.g. batch_work.sh --force ${BATCH_NUM})." >&2
+  echo "   Saw trailing flag: $1" >&2
+  exit 1
+fi
+
+# Validate it's a number
+if ! [[ "$BATCH_NUM" =~ ^[0-9]+$ ]]; then
+  echo "❌ Batch number must be a positive integer, got: ${BATCH_NUM}" >&2
+  exit 1
+fi
+
+# Q-037: as early as the number is known, and before the batch is located,
+# before the status gate, and before any branch, worktree or lock exists.
+# `--force` is parsed above and cannot reach past this — same rule as the fence
+# refusal, and for the same reason.
+refuse_on_duplicate_number "$BATCH_NUM" || exit 1
+
+# Find the batch in review_tasks.md
+BATCH_LINE=""
+while IFS=$'\t' read -r num title status branch scope verify; do
+  if [[ "$num" == "$BATCH_NUM" ]]; then
+    BATCH_LINE="found"
+    BATCH_TITLE="$title"
+    BATCH_STATUS="$status"
+    BATCH_BRANCH="$branch"
+    BATCH_SCOPE="$scope"
+    BATCH_VERIFY="$verify"
+    break
+  fi
+done < <(parse_batches)
+
+if [[ -z "$BATCH_LINE" ]]; then
+  echo "❌ Batch ${BATCH_NUM} not found in review_tasks.md" >&2
+  echo "   Run: bash sysop/scripts/batch_work.sh --list-all" >&2
+  exit 1
+fi
+
+if [[ -z "$BATCH_BRANCH" ]]; then
+  echo "❌ Batch ${BATCH_NUM} has no Branch: metadata in review_tasks.md" >&2
+  exit 1
+fi
+
+# ── Status decision, BEFORE anything is written ──────────────
+# The claim path had no status decision at all. `claim_batch()`'s
+# `!= "Pending"` early return reads like one and is not: that helper performs
+# only the review_tasks.md flip, and its `return 0` returns from a FUNCTION —
+# the script then continues to the branch/worktree/lock writes regardless. So
+# returning early skipped the flip and nothing else.
+#
+# Ordering is not the mechanism, and saying it was is a defect this phase's own
+# round caught: `claim_batch` is called at the line ABOVE those writes, not
+# below them. The upstream filing said "after", this phase repeated it to five
+# sites without running it, and `claim_batch`'s own messages three functions up
+# ("The worktree and the lock are still created") contradict it in the same
+# file. Function-scope return is why the writes happen; the line order is not.
+#
+# Measured on a fixture carrying one batch per status: every PARSEABLE status,
+# including `Merged`, `Complete`, `Ready for Review` and parseable undeclared
+# values, left a lock and a worktree on disk. An unparseable status was
+# invisible to the reader, so nothing was written for it — which is this
+# phase's own charset finding, and the reason "any status" would overstate it.
+#
+# Why a lock makes that § High rather than untidy: `close_batch.sh` and
+# `--release` are the only things that remove one. A second agent claiming a
+# TERMINAL batch the first still holds gets a worktree on the same branch while
+# the first agent's lock stays live — the collision `scope_overlap.py` and the
+# whole lock discipline exist to prevent, reached through the front door.
+#
+# Stated for the terminal states on purpose. `In Progress` is the one status a
+# batch carries WHILE another agent holds it, and that arm deliberately proceeds
+# (below) because re-running after a dropped session is the documented way back
+# in — it announces the foreign claim rather than stepping over it silently.
+# That is a resume affordance, not a closed collision, and an earlier draft of
+# this comment stated the collision claim unconditionally, which is false for
+# the one state where the collision is most likely.
+#
+# The arms REUSE `--release`'s live/terminal split — they are not its arms
+# inverted, and only `Review Ready` actually inverts (release proceeds, claim
+# refuses). `Pending` acts on both paths, the terminal three refuse on both,
+# `In Progress` proceeds on both. That split was verified by execution against
+# all six declared values, and a claim gate that disagreed with the release gate
+# about which states are live would just relocate the confusion. `Review Ready`
+# is LIVE (--release still owns it) and `Ready for Review` is TERMINAL, despite the
+# names.
+case "$BATCH_STATUS" in
+  Pending)
+    : # the claim this path exists for
+    ;;
+  "In Progress")
+    # Resume. Re-running on your own in-flight batch after a dropped session is
+    # the documented way back in, so this proceeds — but it announces the lock
+    # rather than stepping over it in silence, because the same invocation is
+    # what a second agent runs when it does not know the batch is taken.
+    # `resolve_locks_dir` returns 1 when the main root is unresolvable, so it is
+    # given its own `|| CLAIM_LOCK_DIR=""` rather than being inlined into the
+    # test — an unset-on-failure assignment inside `if` would take the helper's
+    # exit status for the whole condition and read as "no lock". The `|| true`
+    # on the grep is the same guard close_batch.sh's Branch/Grand-Total greps
+    # carry: no matching field must not abort the run under `set -euo pipefail`.
+    CLAIM_LOCK_DIR="$(resolve_locks_dir 2>/dev/null)" || CLAIM_LOCK_DIR=""
+    CLAIM_LOCK_FILE="${CLAIM_LOCK_DIR}/BATCH-${BATCH_NUM}.lock"
+    if [[ -n "$CLAIM_LOCK_DIR" && -f "$CLAIM_LOCK_FILE" ]]; then
+      echo "ℹ️  Batch ${BATCH_NUM} is already claimed — resuming."
+      grep -E '^(agent|started|workspace):' "$CLAIM_LOCK_FILE" \
+        | sed 's/^/   /' || true
+      echo "   If that is not your claim, stop: release it from the primary checkout first with"
+      echo "     bash sysop/scripts/batch_work.sh --release ${BATCH_NUM}"
+      echo ""
+    fi
+    ;;
+  "Review Ready")
+    # Live, but finished and awaiting review. Claiming it is precisely the
+    # colleague-collision case: the work is done, someone is reviewing it, and a
+    # second worktree on that branch has nothing to add.
+    if ! $CLAIM_FORCE; then
+      echo "❌ Batch ${BATCH_NUM} is '${BATCH_STATUS}' — the work is done and waiting on review." >&2
+      echo "   Claiming it would put a second worktree on a branch someone is reviewing." >&2
+      echo "   To close it out:  bash sysop/scripts/close_batch.sh ${BATCH_NUM}" >&2
+      echo "   To re-open it:    bash sysop/scripts/batch_work.sh --release ${BATCH_NUM}" >&2
+      echo "   To claim anyway:  bash sysop/scripts/batch_work.sh --force ${BATCH_NUM}" >&2
+      exit 1
+    fi
+    echo "⚠️  Batch ${BATCH_NUM} is '${BATCH_STATUS}' — claiming anyway (--force)."
+    echo ""
+    ;;
+  Complete|Merged|"Ready for Review")
+    # Finished. `--release` refuses this same triple ("releasing a finished
+    # batch would re-open work that is already done"); the claim side owes the
+    # symmetric refusal. --force keeps the follow-up-work affordance the old
+    # warn-and-proceed offered, so the capability survives — it just stops being
+    # the default for an invocation that reads like a fresh claim.
+    if ! $CLAIM_FORCE; then
+      echo "❌ Batch ${BATCH_NUM} is already '${BATCH_STATUS}' — refusing to claim finished work." >&2
+      echo "   A claim writes a lock, and only close_batch.sh and --release remove one," >&2
+      echo "   so a stray claim here strands the lock on a batch nothing will close again." >&2
+      echo "   Doing follow-up work on it is still supported:" >&2
+      echo "     bash sysop/scripts/batch_work.sh --force ${BATCH_NUM}" >&2
+      exit 1
+    fi
+    echo "⚠️  Batch ${BATCH_NUM} is already '${BATCH_STATUS}' — claiming anyway (--force, follow-up work)."
+    echo ""
+    ;;
+  *)
+    # Undeclared, and --force does NOT open this arm. Every other refusal above
+    # knows what it is refusing and can name the right next command; here we
+    # cannot tell live from terminal, so there is no safe action to offer and no
+    # way to word a --force that means anything. `--release`'s `*)` already
+    # refuses "to guess at the inverse" — this refuses to guess at all. The
+    # remedy is to fix the record, so the message says which record and where.
+    echo "❌ Batch ${BATCH_NUM} has status '${BATCH_STATUS}', which is not a value this workflow defines." >&2
+    echo "   Declared: Pending · In Progress · Review Ready (live) · Complete · Merged · Ready for Review (finished)." >&2
+    echo "   Nothing can tell whether that batch is claimable, so nothing was written." >&2
+    echo "   Fix the header in review_tasks.md, then re-run. --force does not cover this." >&2
+    exit 1
+    ;;
+esac
+
+# ── Claim batch on main (Pending → In Progress) ──────────────
+# `|| exit 1`, not a bare call: `claim_batch`'s own `return` returns from a
+# FUNCTION, and this script continues to the branch/worktree/lock writes
+# regardless — the mechanism the status-decision comment above spells out.
+# Its range refusal (Q-017) would otherwise print and then be walked past,
+# leaving a lock and a worktree against a batch nothing could bound.
+#
+# That `|| exit 1` is now load-bearing for FIVE arms, not one (`Q-378`).
+# `claim_batch` returns 0 in exactly two cases — it flipped the status, or the
+# batch was already past `Pending` and this is a re-attach — and returns 1 for
+# every other outcome with no flip and no lock of its own: a refusal before its
+# workspace step writes nothing, and a failure after it leaves the branch or
+# worktree it built, named in its message (`Q-714`; the one exception, a
+# rollback that could not restore the tracker, says "do NOT re-run" and what to
+# inspect instead). So this line is the whole
+# difference between "refused, tree untouched" and the half-claim that used to
+# ship: a branch, a worktree and a `BATCH-<N>.lock` around a batch still
+# reading `Pending`, at exit 0, which `/auto-fix` and `/auto-judge` (whose only
+# stated arm is "if the script exits non-zero, skip this batch") had no way to
+# notice.
+# The claim's on-branch check, the pull, the lock template and the branch
+# creation below all need the default branch's NAME. Require it here, loudly,
+# before anything is written — a claim that cannot say where it branches from
+# must not leave a lock behind.
+[[ -n "$DEFAULT_BRANCH" ]] || DEFAULT_BRANCH="$(require_default_branch "$MAIN_ROOT")" || exit 1
+# ── Workspace + lock preconditions, BEFORE anything is written ─
+# `Q-382`: the status decision above is not the only decision this path owes
+# before it writes. `claim_batch` builds the branch and worktree, then flips and
+# COMMITS the status; the lock follows (`Q-714`'s order). So every precondition
+# that can refuse is settled here, before any of them — Phase 210's
+# decide-then-write discipline, applied to the writes Phase 254's `Q-378` fix
+# left below its own scope. Since `Q-714` a `worktree add` failure these miss
+# no longer reaches the half-claim; they stay so that the refusal names the way
+# out and writes nothing at all.
+#
+# Computed here rather than after the claim because the check needs it. It is
+# the same expression, moved: beside the PRIMARY checkout, not beside whichever
+# worktree the caller stood in — the header advertises
+# `../<project basename>-batch-<N>/`, and a batch worktree nested beside
+# another batch's worktree is not that.
+# `Q-407`: honour `WORKTREE_ROOT` here too. Phase 262 added the variable to
+# `claim_task.sh` on the argument that a sandboxed harness is handed a
+# writable-path allow-list and the sibling construction "forces that list to
+# include the repo's whole parent directory — every sibling checkout with it."
+# This script kept building into the parent regardless, so a REVIEW-BATCH claim
+# still required the parent on the allow-list and the stated problem was solved
+# for one of the two claim paths. Neither Phase 262's record nor its shipped
+# prose mentioned this script.
+#
+# `worktree_root_parent` is the same validator `claim_task.sh` calls — reused,
+# not re-derived, because three of its four guards were defects found by
+# EXECUTION in Phase 262's round rather than by design.
+WORKTREE_PARENT="${MAIN_ROOT}/.."
+if [[ -n "${WORKTREE_ROOT:-}" ]]; then
+  WORKTREE_PARENT="$(worktree_root_parent "$MAIN_ROOT")" || exit 1
+fi
+WORKTREE_DIR="${WORKTREE_PARENT}/${WORKTREE_PREFIX:-$(basename "$MAIN_ROOT")}-batch-${BATCH_NUM}"
+
+# (a) A plain directory at the worktree path. Reproduced: `mkdir`, then claim —
+# exit 0, no worktree, lock written, `workspace:` pointing at it.
+#
+# This REFUSES rather than repairing. Removing a directory the claim did not
+# create is a destructive act on a path an operator may have put something in,
+# and the empty-directory case is not worth a special arm that has to be right
+# about which is which. The remedy is one command and it is printed.
+#
+# Reachability. The filing said `--release` *guarantees* this state;
+# "guarantees" is too strong — a plain `--release` over a HEALTHY worktree
+# removes the directory, and so do `--release --force` over a dirty one and
+# `cleanup_worktrees.sh --clean`. But the filing named the right arm and the
+# right message, and this phase's round caught the first draft of this comment
+# measuring four paths that were all *other* arms. The quoted one — the `else`
+# at the bottom of the release's worktree block, printing "No worktree holds …
+# (already removed, or never created)" — DOES leave the directory, at exit 0,
+# and it is two shipped commands away exactly as filed: `cleanup_worktrees.sh`
+# prunes unconditionally in EVERY mode, which de-registers a worktree whose
+# `.git` is gone while leaving the directory, and the next `--release` then
+# takes that `else`. Refuting a filing by measuring around the mechanism it
+# cited is the failure worth remembering here.
+# `-e || -L`, not `-e` alone: `-e` FOLLOWS the link, so a DANGLING symlink at
+# this path is invisible to it — while `git worktree add` lstats and refuses,
+# which put the failure back below the commit (before `Q-714`; above it since,
+# so this refusal now buys a message rather than the only guard). `-L` is what
+# sees the link itself. Found by this phase's round.
+# `Q-415` (Phase 264): `path_is_worktree` asks whether the path is A worktree,
+# never WHOSE. `git -C <foreign worktree> rev-parse --show-toplevel` answers with
+# that tree's own toplevel, so a live worktree of ANOTHER checkout satisfies it
+# and this preflight waves it through. Reproduced by execution: two sibling
+# checkouts sharing a `WORKTREE_PREFIX` (reachable today; `Q-407` above makes it
+# as likely here as `Q-405` made it in `claim_task.sh`) — the second claim printed
+# "Worktree already exists", exited 0, and wrote a `BATCH-<N>.lock` whose
+# `workspace:` names a tree whose `--git-common-dir` belongs to the other
+# checkout, while `git worktree list` here knows nothing about it. The operator is
+# then told to `cd` there and work.
+#
+# `path_is_worktree_of` adds the identity test the helper's own comment never
+# claimed to make (it says the toplevel comparison stops a SUBDIRECTORY of
+# another repository — a different case, correctly handled, and not this one).
+if { [[ -e "$WORKTREE_DIR" ]] || [[ -L "$WORKTREE_DIR" ]]; } \
+   && ! path_is_worktree_of "$WORKTREE_DIR" "$MAIN_ROOT"; then
+  if path_is_worktree "$WORKTREE_DIR"; then
+    echo "❌ ${WORKTREE_DIR} is a git worktree of a DIFFERENT repository." >&2
+    echo "   Refusing the claim — nothing was written: no status flip, no branch," >&2
+    echo "   no worktree, no lock." >&2
+    echo "   Claiming over it would record another checkout's tree as this batch's" >&2
+    echo "   workspace, and this repository cannot release what it never created." >&2
+    echo "   Set WORKTREE_ROOT / WORKTREE_PREFIX to a path this checkout does not" >&2
+    echo "   share with another one, then re-run." >&2
+    exit 1
+  fi
+  echo "❌ ${WORKTREE_DIR} exists but is not a git worktree." >&2
+  echo "   Refusing the claim — nothing was written: no status flip, no branch," >&2
+  echo "   no worktree, no lock." >&2
+  echo "   Claiming over it would skip 'git worktree add' and still write the lock:" >&2
+  echo "   the batch would read as claimed, with a workspace that is not a repository." >&2
+  echo "   Inspect it, then move or remove it and re-run:" >&2
+  echo "     ls -la $(printf '%q' "$WORKTREE_DIR")" >&2
+  echo "     rm -rf $(printf '%q' "$WORKTREE_DIR") && bash sysop/scripts/batch_work.sh ${BATCH_NUM}" >&2
+  exit 1
+fi
+
+# (b) A `Pending` batch that already carries a lock. Reproduced: the claim
+# adopted a foreign lock verbatim — `branch: feat/SOMEONE-ELSE` — at exit 0,
+# and `/claim-task` Step 3's resume arm then reads that wrong branch/workspace
+# pair, which it calls the only step on a resume that establishes them.
+#
+# Scoped to `Pending` ON PURPOSE, and that scope is the whole reason this is
+# safe. `write_batch_lock` is idempotent by design because `batch_work.sh <N>`
+# is re-runnable — /auto-fix and /auto-judge call it in a loop — but the
+# re-runnable case is `In Progress` + lock, which has had its own announcement
+# since Phase 191 and keeps it. `Pending` + lock is a different animal: a
+# release removes the lock, so a Pending batch holding one means a release that
+# died between its revert and its lock removal (its own error message says so),
+# or a lock from somewhere else. Neither is a claim to step into silently.
+if [[ "$BATCH_STATUS" == "Pending" ]]; then
+  PRECLAIM_LOCK_DIR="$(resolve_locks_dir 2>/dev/null)" || PRECLAIM_LOCK_DIR=""
+  # Two states, two messages, and BOTH refuse before anything is written. The
+  # second battery asked whether `-f` should be `-e` here and the answer is
+  # neither alone: a lock FILE is a claim, and anything else at that path is not
+  # a claim but is still fatal. Since `Q-714` the claim writes its lock before
+  # the flip and refuses on anything already there, so this no longer guards a
+  # half-claim; it refuses before the branch and worktree are built, with a
+  # message naming the path, rather than after them with a raw error.
+  PRECLAIM_LOCK_FILE="${PRECLAIM_LOCK_DIR}/BATCH-${BATCH_NUM}.lock"
+  # `-L` too: `-e` follows a link, so a dangling one read as absent, and a link
+  # to a file read as a lock (round 2).
+  if [[ -n "$PRECLAIM_LOCK_DIR" ]] && { [[ -e "$PRECLAIM_LOCK_FILE" ]] || [[ -L "$PRECLAIM_LOCK_FILE" ]]; } \
+     && { [[ ! -f "$PRECLAIM_LOCK_FILE" ]] || [[ -L "$PRECLAIM_LOCK_FILE" ]]; }; then
+    echo "❌ ${PRECLAIM_LOCK_FILE} exists but is not a regular file." >&2
+    echo "   Refusing the claim — nothing was written: no status flip, no branch," >&2
+    echo "   no worktree, no lock." >&2
+    echo "   The claim writes the batch lock at that path before it flips the status," >&2
+    echo "   and cannot write it over this." >&2
+    echo "   Inspect it, then move or remove it and re-run:" >&2
+    echo "     ls -la $(printf '%q' "$PRECLAIM_LOCK_FILE")" >&2
+    exit 1
+  fi
+  # The lock-FILE case is decided inside `claim_batch`, under the tracker mutex
+  # (`Q-714`'s round 2): out here, a Pending batch with a lock may be a claim
+  # between its lock write and its flip, and this refusal's `--release` undid one.
+fi
+
+# (c) The batch branch checked out somewhere other than `$WORKTREE_DIR`
+# (`Q-121`'s round). `git worktree add` refuses a branch checked out elsewhere:
+# a hand-added worktree, or a claim made under a `WORKTREE_ROOT` /
+# `WORKTREE_PREFIX` this shell does not set. Before `Q-714` that failure came
+# after a Pending claim had committed its flip (`In Progress`, exit 128, no
+# lock); now it comes before, so this refusal is for its message and its way
+# out, not the only guard. A holder at `$WORKTREE_DIR` is the adopt arm's, and
+# lets the claim through even when a `worktree add -f` copy sits elsewhere. Not
+# seen here: a worktree mid-rebase or mid-bisect lists as `detached` yet still
+# holds the branch; `worktree add` then refuses before the flip.
+# Sets HELD_AT and HELD_LOCKED for the first holder found elsewhere.
+branch_held_elsewhere() {
+  local branch="$1" claim_dir="$2" line wt="" held=false locked=false
+  HELD_AT="" HELD_LOCKED=false
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) wt="${line#worktree }" ;;
+      "branch refs/heads/"*) if [[ "${line#branch refs/heads/}" == "$branch" ]]; then held=true; fi ;;
+      locked|"locked "*) locked=true ;;
+      "")
+        if $held; then
+          if [[ "$wt" -ef "$claim_dir" ]]; then return 1; fi
+          if [[ -z "$HELD_AT" ]]; then HELD_AT="$wt"; HELD_LOCKED=$locked; fi
+        fi
+        wt="" held=false locked=false
+        ;;
+    esac
+  done < <(git worktree list --porcelain 2>/dev/null; echo)
+  [[ -n "$HELD_AT" ]]
+}
+
+# Is the claim path itself taken: on disk, or registered with git though gone?
+# Moving a holder onto a taken path nests it inside, or fails every time.
+claim_path_taken() {
+  local p="$1" norm line
+  [[ -e "$p" || -L "$p" ]] && return 0
+  norm="$(cd "$(dirname "$p")" 2>/dev/null && pwd -P)/$(basename "$p")" || return 1
+  while IFS= read -r line; do
+    if [[ "$line" == "worktree ${norm}" ]]; then return 0; fi
+  done < <(git worktree list --porcelain 2>/dev/null)
+  return 1
+}
+
+if branch_held_elsewhere "$BATCH_BRANCH" "$WORKTREE_DIR"; then
+  # `%q`: these commands are run as printed, and a path with a space split them.
+  RERUN="bash sysop/scripts/batch_work.sh ${BATCH_NUM}"
+  UNLOCK=""
+  if $HELD_LOCKED; then
+    # A locked worktree is skipped by `prune` and refused by `move`.
+    UNLOCK="git worktree unlock $(printf '%q' "$HELD_AT") && "
+  fi
+  echo "❌ Branch '${BATCH_BRANCH}' is checked out at ${HELD_AT}, not at ${WORKTREE_DIR}." >&2
+  echo "   Refusing the claim — nothing was written: no status flip, no branch," >&2
+  echo "   no worktree, no lock." >&2
+  echo "   This claim adopts a worktree only at ${WORKTREE_DIR}, and 'git worktree add'" >&2
+  echo "   there fails on a branch checked out elsewhere." >&2
+  if [[ ! -e "$HELD_AT" ]]; then
+    echo "   Its directory is gone; git still holds the branch for it. Prune, then re-run:" >&2
+    echo "     ${UNLOCK}git worktree prune && ${RERUN}" >&2
+  elif [[ "$HELD_AT" -ef "$MAIN_ROOT" ]]; then
+    echo "   It is the primary checkout's branch. Switch the primary back, then re-run:" >&2
+    echo "     git -C $(printf '%q' "$MAIN_ROOT") checkout $(printf '%q' "$DEFAULT_BRANCH") && ${RERUN}" >&2
+    echo "   If git refuses because ${DEFAULT_BRANCH} is checked out in another worktree," >&2
+    echo "   free it first; git -C $(printf '%q' "$MAIN_ROOT") worktree list shows where." >&2
+  elif claim_path_taken "$WORKTREE_DIR"; then
+    echo "   ${WORKTREE_DIR} is itself taken (on disk, or registered with git), so the" >&2
+    echo "   holder cannot be moved there. Free it first —" >&2
+    echo "   git -C $(printf '%q' "$MAIN_ROOT") worktree list shows what holds it — then: ${RERUN}" >&2
+  else
+    echo "   Re-run with the WORKTREE_ROOT / WORKTREE_PREFIX the worktree was made under, or move it:" >&2
+    echo "     ${UNLOCK}git worktree move $(printf '%q' "$HELD_AT") $(printf '%q' "$WORKTREE_DIR") && ${RERUN}" >&2
+  fi
+  exit 1
+fi
+
+claim_batch "$BATCH_NUM" "$BATCH_STATUS" || exit 1
+
+# A re-attach (`In Progress`, or a forced claim past `Pending`) flips nothing,
+# so `claim_batch` built no workspace; build or adopt it here.
+if ! $WORKSPACE_READY; then
+  if ! prepare_workspace; then
+    echo "   No batch lock was written. Resolve it, then re-run." >&2
+    exit 1
+  fi
+fi
+
+# ── Write the batch lock ──────────────────────────────────────
+# The re-attach path's; a Pending claim wrote its lock before its flip, inside
+# `claim_batch` (`Q-714`). After the worktree exists, so `workspace:` records a path that is really
+# there — scope_overlap.py reads the in-flight scope from that worktree's diff,
+# and sitrep_survey.py reports a lock pointing at a missing workspace as a
+# stale-lock discrepancy.
+if ! $LOCK_WRITTEN; then
+  write_batch_lock "$BATCH_NUM" "$BATCH_BRANCH" "$WORKTREE_DIR"
+fi
+
+# ── Hooks: deliberately not armed here ───────────────────────
+# Worktrees share the main repo's hooks directory, so arming from inside a new
+# worktree pushed this batch branch's sysop/scripts/hooks/* into the MAIN
+# checkout — replacing a consumer's armed checks with the shipped skeletons.
+# Dropped in Phase 150 (internal tracker #202); see the fuller note in claim_task.sh.
+# Arm explicitly from the main checkout: bash sysop/scripts/install_hooks.sh
+
+# ── Print summary ────────────────────────────────────────────
+echo ""
+echo "┌─────────────────────────────────────────────────────────────┐"
+echo "│  Batch ${BATCH_NUM} — ${BATCH_TITLE}"
+echo "├─────────────────────────────────────────────────────────────┤"
+echo "│  Path:   ${WORKTREE_DIR}"
+echo "│  Branch: ${BATCH_BRANCH}"
+echo "│  Status: ${BATCH_STATUS}"
+if [[ -n "$BATCH_SCOPE" ]]; then
+echo "│  Scope:  ${BATCH_SCOPE}"
+fi
+if [[ -n "$BATCH_VERIFY" ]]; then
+echo "│  Verify: ${BATCH_VERIFY}"
+fi
+echo "└─────────────────────────────────────────────────────────────┘"
+echo ""
+echo "📝 Next steps:"
+echo "   1. cd $(printf '%q' "$WORKTREE_DIR")"
+echo "   2. Review the batch tasks in review_tasks.md"
+echo "   3. Start working!"
+echo ""
+echo "   When done: git push -u origin ${BATCH_BRANCH}"
+echo "   Cleanup:   bash sysop/scripts/cleanup_worktrees.sh --clean"

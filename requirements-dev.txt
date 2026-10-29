@@ -1,0 +1,44 @@
+# Dev dependencies for Sysop's own test suite.
+#
+# Sysop ships NO runtime requirements.txt by design — it is a
+# meta-repo, not an installable Python package. Consumers provide
+# their own runtime deps in their own venv. Scripts in
+# core/companion/scripts/ use try/except imports (e.g.,
+# validate_tasks.py:30) to tolerate the absence of pyyaml at
+# consumer-side install time.
+#
+# The runtime-vs-dev split is filed as a separate REVIEW_CHECKLIST
+# entry — do not add a runtime requirements.txt without resolving
+# that question first.
+pytest==9.0.3
+pyyaml==6.0.2
+# Phase 187. `pyproject.toml` defaults `-n auto`, so this is a HARD dep for the
+# suite, not an optional accelerant — without it pytest exits 4 on
+# `unrecognized arguments: -n`. Measured on this tree: 583s serial -> 123-160s on
+# 14 logical cores, ~4x, with the whole suite's one shared-tree write fixed
+# rather than serialized (tests/test_venv_command_word.py). Pass `-n0` to run
+# serially when a traceback is easier to read that way.
+pytest-xdist==3.8.0
+# Phase 196. A HARD dep, for the same reason pytest-xdist is one. The semgrep
+# default-ignore-list recovery (internal tracker #361) can only be tested against the real binary
+# — the defect lives in semgrep's own target discovery, which no mock reproduces
+# — so those tests carry `skipif(shutil.which("semgrep") is None)`. Without
+# semgrep installed, CI SKIPPED all eleven of them, and this phase's review round
+# measured the consequence: with the entire recovery disabled the suite was
+# BIT-IDENTICAL to the baseline, so the required `pytest` check was green over a
+# feature that had been switched off. A gate that cannot see what it gates is
+# this repo's most-repeated defect (Phases 154, 160, 186, 195). Pinned because
+# the ignore list is compiled into semgrep-core and is version-dependent; the
+# control test `test_the_directory_operand_alone_still_misses_them` is what
+# catches an upstream change to it. Wheels exist for cp313 on macOS arm64 and
+# on BOTH manylinux2014 x86_64 and manylinux2014 aarch64 — and aarch64 is the
+# one CI installs since Phase 315 moved the runner to `ubuntu-24.04-arm`. This
+# note exists to be checked against on a version bump: a release that ships
+# x86_64 and not aarch64 now breaks CI while reading as cleared.
+semgrep==1.157.0
+# Phase 341 (`Q-611`). A HARD dep: `tests/test_commonmark_code_blocks.py` parses the
+# tracked markdown files (all but one) as CommonMark and fails on an indented code block. 948 lines
+# of `review-close/SKILL.md` rendered as three on GitHub, and the guards that read
+# the raw text could not see it, because only a CommonMark reading decides where a list
+# ends. It is also `rich`'s dependency, which semgrep pulls in; the pin must satisfy both.
+markdown-it-py==4.2.0

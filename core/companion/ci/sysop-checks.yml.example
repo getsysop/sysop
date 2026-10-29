@@ -1,0 +1,83 @@
+# Sysop — Consumer CI template (GitHub Actions).
+#
+# WHAT THIS IS: a required-check workflow that makes Phase 63's `pr` merge
+# policy enforceable — a protected `main` needs a CI check to require, and Sysop's
+# git hooks are local-only (an agent can bypass them with `--no-verify`). This
+# runs the Sysop blocking-findings gate + your own test suite on every PR.
+#
+# HOW TO ENABLE (it does NOT run until you do — the `.example` suffix keeps
+# GitHub from picking it up):
+#   1. Copy it into place:  cp sysop/scripts/ci/sysop-checks.yml.example .github/workflows/sysop-checks.yml
+#   2. Edit the two TODO steps below (install your deps; run your tests).
+#   3. Commit + push, let it run green once, then in your repo's branch-protection
+#      rules for `main` mark the `sysop-checks` check as *required*.
+# See WORKFLOW.md § Merge policy → "Protecting main with CI".
+
+name: sysop-checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]   # adjust if your repo's default branch isn't `main`
+
+# One in-flight run per ref; a new push cancels the stale one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: this workflow only reads the checkout.
+permissions:
+  contents: read
+
+jobs:
+  sysop-checks:
+    # `ubuntu-24.04-arm` is an option. On Sysop's own pure-Python suite it measured ~25% faster
+    # at the same 2 workers (x64 mean 363 s over 20 samples, arm64 mean 272 s over 12). It can
+    # break a project with compiled dependencies lacking `aarch64` wheels, or service containers
+    # without arm64 images, and it may be unschedulable on some plans for private repos: a job
+    # that queues never reports, which blocks a required check. Measure on your own tree first.
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 — the coverage/diff stages of run_checks compare changed
+      # lines against `main`, which needs full history in a PR checkout.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      # run_checks.sh is Python-based (config parsing needs PyYAML) regardless of
+      # your project's own stack.
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+
+      # TODO: PyYAML is the floor for run_checks itself. Add the tools your
+      # .claude/checks.yml actually invokes (semgrep, diff-cover, pip-audit) and
+      # your project's own dependencies here.
+      - name: Install check tooling
+        run: pip install pyyaml
+
+      # TODO: replace with your project's test command (pytest, npm test,
+      # go test, cargo test, …). Left failing on purpose so an unedited copy of
+      # this template can never become a green — and therefore meaningless —
+      # required check.
+      #
+      # This step runs BEFORE the gate on purpose: the crown-jewel coverage gate
+      # (Phase 61b) reads a coverage report your tests produce (e.g.
+      # `pytest --cov --cov-report=xml`). Run the tests first so `coverage.xml`
+      # exists when the gate measures it — otherwise the gate finds no report and
+      # reports the coverage check as skipped (a ⚠ line, non-fatal) rather than
+      # actually gating. If your project has no coverage gate, the order is moot.
+      - name: Tests
+        run: |
+          echo "Replace this step with your project's test command." >&2
+          exit 1
+
+      # The Sysop gate: exits non-zero if any check marked `blocking: true` reports
+      # a finding not in the baseline (Phase 61b's crown-jewel coverage gate is
+      # blocking-and-non-baselineable), or if a blocking check's tool crashed
+      # (a blocking stage that fails to run can't be trusted green). Inert-but-valid
+      # on a fresh install (placeholder globs are no-ops); meaningful as you
+      # configure checks.yml.
+      - name: Sysop blocking-findings gate
+        run: bash sysop/scripts/run_checks.sh --fail-on-blocking

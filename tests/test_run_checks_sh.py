@@ -1,0 +1,352 @@
+"""Integration tests for core/companion/scripts/run_checks.sh (Phase 84).
+
+`run_checks.sh` is a thin wrapper: it refuses outside a git repo, resolves the
+toolchain PATH (worktree-aware `.venv`/node fallback), picks an interpreter,
+then `exec`s `<repo>/sysop/scripts/run_checks_impl.py --repo-root <toplevel> "$@"`.
+The Python impl is already covered by the `test_run_checks*.py` suite — these
+tests lock the *bash wrapper's* contract only: the git guard, the
+`--repo-root` injection + verbatim arg pass-through, and the repo-`.venv`
+interpreter preference. We stub `run_checks_impl.py` with a tiny argv echo so
+the wrapper is exercised without pyyaml / the real checks pipeline.
+"""
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = REPO_ROOT / "core/companion/scripts/run_checks.sh"
+
+# Stub impl: prints its argv on one line so the wrapper's hand-off is observable.
+STUB_IMPL = "import sys\nprint('IMPL_ARGV:', repr(sys.argv[1:]))\n"
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True)
+
+
+def _repo_with_stub(root):
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "test@test")
+    _git(root, "config", "user.name", "test")
+    (root / "sysop" / "scripts").mkdir(parents=True)
+    (root / "sysop" / "scripts" / "run_checks_impl.py").write_text(STUB_IMPL)
+    return root
+
+
+def _run(cwd, *args, env=None):
+    return subprocess.run(
+        ["bash", str(SCRIPT), *args],
+        cwd=str(cwd), capture_output=True, text=True, env=env,
+    )
+
+
+def _bytecode_env():
+    """The caller's environment minus both bytecode switches.
+
+    A mutation battery runs under `PYTHONDONTWRITEBYTECODE=1` and a fresh
+    `PYTHONPYCACHEPREFIX`. Inherited, the first makes the wrapper's own export
+    untestable and the second sends bytecode out of the tree, so the two tests
+    below would pass or fail on the runner's settings rather than the wrapper's.
+    """
+    env = dict(os.environ)
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    env.pop("PYTHONPYCACHEPREFIX", None)
+    return env
+
+
+def _impl_argv(stdout):
+    """Parse the stub's `IMPL_ARGV: [...]` echo into a python list."""
+    import ast
+    for line in stdout.splitlines():
+        if line.startswith("IMPL_ARGV:"):
+            return ast.literal_eval(line[len("IMPL_ARGV:"):].strip())
+    raise AssertionError(f"no IMPL_ARGV line in:\n{stdout}")
+
+
+def test_not_a_git_repo_exits_1(tmp_path):
+    r = _run(tmp_path)
+    assert r.returncode == 1
+    assert "Not inside a git repository" in r.stderr
+
+
+def test_injects_repo_root_and_passes_mode_through(tmp_path):
+    repo = _repo_with_stub(tmp_path / "repo")
+    r = _run(repo, "--mode", "security")
+    assert r.returncode == 0, r.stderr
+    argv = _impl_argv(r.stdout)
+    assert "--repo-root" in argv
+    root_arg = argv[argv.index("--repo-root") + 1]
+    assert os.path.realpath(root_arg) == os.path.realpath(str(repo))
+    # Verbatim pass-through of the user's flags, after the injected --repo-root.
+    assert argv[-2:] == ["--mode", "security"]
+
+
+def test_default_invocation_injects_only_repo_root(tmp_path):
+    repo = _repo_with_stub(tmp_path / "repo")
+    r = _run(repo)
+    assert r.returncode == 0, r.stderr
+    argv = _impl_argv(r.stdout)
+    assert "--mode" not in argv
+    assert argv[0] == "--repo-root"
+    assert len(argv) == 2  # just --repo-root <path>
+
+
+def test_prefers_repo_venv_interpreter(tmp_path):
+    # A repo-local .venv/bin/python3 must be preferred over PATH python3 (the
+    # worktree-toolchain-resolution intent). The shim announces itself then
+    # execs a real python3 so the stub impl still runs.
+    real_py = shutil.which("python3")
+    if real_py is None:
+        pytest.skip("no python3 on PATH to back the venv shim")
+    repo = _repo_with_stub(tmp_path / "repo")
+    venv_bin = repo / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    shim = venv_bin / "python3"
+    # exec the real interpreter by ABSOLUTE path: run_checks.sh prepends this
+    # .venv/bin to PATH, so a bare `python3` would re-resolve to this shim
+    # (an infinite exec loop).
+    shim.write_text(f'#!/bin/sh\necho "VENV_PYTHON_USED"\nexec {real_py} "$@"\n')
+    shim.chmod(0o755)
+    r = _run(repo, "--mode", "quality")
+    assert r.returncode == 0, r.stderr
+    assert "VENV_PYTHON_USED" in r.stdout, "wrapper did not prefer repo .venv python"
+    assert _impl_argv(r.stdout)[-2:] == ["--mode", "quality"]
+
+
+# ── Phase 212: the wrapper must never leave bytecode in a consumer's tree ─────
+
+
+def test_wrapper_suppresses_bytecode_in_the_consumer_tree(tmp_path):
+    """`run_checks.sh` exports PYTHONDONTWRITEBYTECODE=1 before exec'ing the impl.
+
+    Without it CPython caches beside the vendored source, so every pre-scan mints
+    `sysop/scripts/__pycache__/` and `sysop/scripts/run_checks/__pycache__/` in
+    the consumer's repo — 12 files — which a consumer with no bytecode ignore
+    then tracks and re-dirties on every run (`Q-041`/`Q-126`).
+
+    This guard exists because the phase's own review round found the export had
+    NO test: deleting the line left the whole suite green. The install-cycle
+    tests that used to be sensitive to bytecode churn were repaired in the same
+    phase to stop depending on it — correctly, but that removed the only thing
+    reacting to this, so the sensitivity is restored here as a direct assertion
+    rather than as a side effect of something else.
+    """
+    root = _repo_with_stub(tmp_path / "c")
+    # A real importable module beside the impl, and an impl that imports it —
+    # a stub that imports nothing can never write a cache, so this fixture is
+    # what makes the assertion capable of failing.
+    (root / "sysop" / "scripts" / "_probe_mod.py").write_text("VALUE = 1\n")
+    (root / "sysop" / "scripts" / "run_checks_impl.py").write_text(
+        "import sys, os\n"
+        "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
+        "import _probe_mod\n"
+        "print('IMPL_ARGV:', repr(sys.argv[1:]))\n"
+    )
+    r = _run(root, env=_bytecode_env())
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    caches = sorted(str(p.relative_to(root)) for p in root.rglob("__pycache__"))
+    assert caches == [], (
+        "run_checks.sh left bytecode in the consumer tree — the "
+        "PYTHONDONTWRITEBYTECODE export is missing or ineffective: " + str(caches)
+    )
+
+
+def test_the_bytecode_probe_fixture_can_actually_fail(tmp_path):
+    """Non-vacuity control for the test above.
+
+    Runs the SAME fixture with the wrapper's own suppression explicitly undone,
+    and asserts bytecode IS written. Without this, an impl that imported nothing
+    (or an interpreter that cached nowhere) would make the sibling pass while
+    testing nothing at all — which is exactly how the export shipped unguarded.
+    """
+    root = _repo_with_stub(tmp_path / "c")
+    (root / "sysop" / "scripts" / "_probe_mod.py").write_text("VALUE = 1\n")
+    impl = root / "sysop" / "scripts" / "run_checks_impl.py"
+    impl.write_text(
+        "import sys, os\n"
+        "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
+        "import _probe_mod\n"
+        "print('IMPL_ARGV:', repr(sys.argv[1:]))\n"
+    )
+    env = _bytecode_env()
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import sys, os;"
+         "sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[1])));"
+         "import _probe_mod",
+         str(impl)],
+        cwd=str(root), capture_output=True, text=True, env=env,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert list(root.rglob("__pycache__")), (
+        "the fixture cannot write bytecode even with suppression off, so the "
+        "sibling test proves nothing"
+    )
+
+
+# ── Q-679: a worktree's own venv is on PATH ahead of the main repo's ──────────
+
+WHICH_IMPL = ("import shutil\n"
+              "print('TOOL_AT:', shutil.which('q679tool'))\n")
+
+
+def _tool(bin_dir, tag):
+    """A `q679tool` executable in `bin_dir`; the name is ours so no real PATH entry answers."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    tool = bin_dir / "q679tool"
+    tool.write_text(f"#!/bin/sh\necho {tag}\n")
+    tool.chmod(0o755)
+    return tool
+
+
+def _main_and_worktree(tmp_path, impl=WHICH_IMPL):
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q", "-b", "main")
+    _git(main, "config", "user.email", "test@test")
+    _git(main, "config", "user.name", "test")
+    (main / "sysop" / "scripts").mkdir(parents=True)
+    (main / "sysop" / "scripts" / "run_checks_impl.py").write_text(impl)
+    _git(main, "add", "-A")
+    _git(main, "commit", "-qm", "init")
+    wt = tmp_path / "wt"
+    _git(main, "worktree", "add", "-q", "--detach", str(wt))
+    return main, wt
+
+
+def _tool_at(stdout):
+    for line in stdout.splitlines():
+        if line.startswith("TOOL_AT:"):
+            return line[len("TOOL_AT:"):].strip()
+    raise AssertionError(f"no TOOL_AT line in:\n{stdout}")
+
+
+@pytest.mark.parametrize("venv", [".venv", "venv"])
+def test_a_worktrees_own_venv_tool_wins_over_the_main_repos(tmp_path, venv):
+    main, wt = _main_and_worktree(tmp_path)
+    _tool(main / ".venv" / "bin", "MAIN")
+    local = _tool(wt / venv / "bin", "WORKTREE")
+    r = _run(wt)
+    assert r.returncode == 0, r.stderr
+    assert os.path.realpath(_tool_at(r.stdout)) == os.path.realpath(str(local))
+
+
+def test_a_worktree_without_a_venv_still_finds_the_main_repos_tool(tmp_path):
+    main, wt = _main_and_worktree(tmp_path)
+    tool = _tool(main / ".venv" / "bin", "MAIN")
+    r = _run(wt)
+    assert r.returncode == 0, r.stderr
+    assert os.path.realpath(_tool_at(r.stdout)) == os.path.realpath(str(tool))
+
+
+def test_a_tool_missing_from_the_worktrees_venv_falls_back_to_the_main_repos(tmp_path):
+    main, wt = _main_and_worktree(tmp_path)
+    tool = _tool(main / ".venv" / "bin", "MAIN")
+    (wt / ".venv" / "bin").mkdir(parents=True)
+    r = _run(wt)
+    assert r.returncode == 0, r.stderr
+    assert os.path.realpath(_tool_at(r.stdout)) == os.path.realpath(str(tool))
+
+
+def test_the_interpreter_keeps_its_main_first_order_in_a_worktree(tmp_path):
+    """Q-679 moves PATH only. `self_check.sh` probes interpreters in this script's order
+    (main `.venv`, main `venv`, this checkout's, PATH), so the interpreter must not follow
+    the tools to the worktree's venv."""
+    real_py = shutil.which("python3")
+    if real_py is None:
+        pytest.skip("no python3 on PATH to back the venv shims")
+    main, wt = _main_and_worktree(tmp_path)
+    for root, tag in ((main, "MAIN_PYTHON_USED"), (wt, "WORKTREE_PYTHON_USED")):
+        shim = root / ".venv" / "bin" / "python3"
+        shim.parent.mkdir(parents=True)
+        shim.write_text(f'#!/bin/sh\necho "{tag}"\nexec {real_py} "$@"\n')
+        shim.chmod(0o755)
+    r = _run(wt)
+    assert r.returncode == 0, r.stderr
+    assert "MAIN_PYTHON_USED" in r.stdout and "WORKTREE_PYTHON_USED" not in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("wt_venv", [".venv", "venv"])
+def test_a_main_plain_venv_interpreter_wins_over_any_worktree_venv(tmp_path, wt_venv):
+    """`self_check.sh` reports the interpreter as main `.venv`, main `venv`, this checkout's
+    `.venv`, its `venv`, PATH. A bare `python3` fallback resolved through PATH, where the
+    worktree's venv now comes first, so the order is explicit (Q-679)."""
+    real_py = shutil.which("python3")
+    if real_py is None:
+        pytest.skip("no python3 on PATH to back the venv shims")
+    main, wt = _main_and_worktree(tmp_path)
+    for root, venv, tag in ((main, "venv", "MAIN_PYTHON_USED"),
+                            (wt, wt_venv, "WORKTREE_PYTHON_USED")):
+        shim = root / venv / "bin" / "python3"
+        shim.parent.mkdir(parents=True)
+        shim.write_text(f'#!/bin/sh\necho "{tag}"\nexec {real_py} "$@"\n')
+        shim.chmod(0o755)
+    r = _run(wt)
+    assert r.returncode == 0, r.stderr
+    assert "MAIN_PYTHON_USED" in r.stdout and "WORKTREE_PYTHON_USED" not in r.stdout, r.stdout
+
+
+def test_a_worktree_venv_is_found_from_a_subdirectory(tmp_path):
+    """Lens B: `$PWD/.venv/bin`, the filing's own idiom, passed every test run from the root."""
+    main, wt = _main_and_worktree(tmp_path)
+    _tool(main / ".venv" / "bin", "MAIN")
+    local = _tool(wt / ".venv" / "bin", "WORKTREE")
+    sub = wt / "pkg" / "deep"
+    sub.mkdir(parents=True)
+    r = _run(sub)
+    assert r.returncode == 0, r.stderr
+    assert os.path.realpath(_tool_at(r.stdout)) == os.path.realpath(str(local))
+
+
+def test_the_main_repos_plain_venv_tools_are_the_fallback(tmp_path):
+    """Lens B: since Phase 408 the interpreter no longer reaches the main `venv/` through PATH,
+    so only tools do, and nothing tested a main `venv/` layout for them."""
+    main, wt = _main_and_worktree(tmp_path)
+    tool = _tool(main / "venv" / "bin", "MAIN")
+    r = _run(wt)
+    assert r.returncode == 0, r.stderr
+    assert os.path.realpath(_tool_at(r.stdout)) == os.path.realpath(str(tool))
+
+
+def test_a_worktrees_dot_venv_wins_over_its_plain_venv_for_tools_and_interpreter(tmp_path):
+    real_py = shutil.which("python3")
+    if real_py is None:
+        pytest.skip("no python3 on PATH to back the venv shims")
+    main, wt = _main_and_worktree(tmp_path)
+    dot = _tool(wt / ".venv" / "bin", "DOT")
+    _tool(wt / "venv" / "bin", "PLAIN")
+    for venv, tag in ((".venv", "DOT_PYTHON_USED"), ("venv", "PLAIN_PYTHON_USED")):
+        shim = wt / venv / "bin" / "python3"
+        shim.write_text(f'#!/bin/sh\necho "{tag}"\nexec {real_py} "$@"\n')
+        shim.chmod(0o755)
+    r = _run(wt)
+    assert r.returncode == 0, r.stderr
+    assert os.path.realpath(_tool_at(r.stdout)) == os.path.realpath(str(dot))
+    assert "DOT_PYTHON_USED" in r.stdout and "PLAIN_PYTHON_USED" not in r.stdout, r.stdout
+
+
+def test_pyright_reads_the_worktrees_own_environment(tmp_path):
+    """Wade's ruling on Phase 408's round, lens A: a worktree's own venv is the environment
+    its imports resolve against. pyright with no `venvPath` takes the first `python3` on
+    PATH, so that is the worktree venv's, even when the interpreter running the checks is the
+    main repo's. An incomplete worktree venv therefore reports its missing packages."""
+    impl = ("import shutil\nprint('TOOL_AT:', shutil.which('python3'))\n")
+    main, wt = _main_and_worktree(tmp_path, impl=impl)
+    real_py = shutil.which("python3")
+    if real_py is None:
+        pytest.skip("no python3 on PATH to back the venv shims")
+    for root in (main, wt):
+        shim = root / ".venv" / "bin" / "python3"
+        shim.parent.mkdir(parents=True)
+        shim.write_text(f'#!/bin/sh\nexec {real_py} "$@"\n')
+        shim.chmod(0o755)
+    r = _run(wt)
+    assert r.returncode == 0, r.stderr
+    assert os.path.realpath(_tool_at(r.stdout)) == os.path.realpath(
+        str(wt / ".venv" / "bin" / "python3"))

@@ -1,0 +1,22 @@
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+# `tests` is on the path so guard modules can import the shared reversal layer
+# (`tests/_reversal.py`) rather than re-implementing it — the duplicate-then-diverge
+# shape `Q-367` filed after three modules had already done so.
+pythonpath = ["core/companion/scripts", "scripts", "tests"]
+# `-n auto` (Phase 187): 583s serial -> 123-160s, ~4x on 14 logical cores, on the suite
+# as it was then (3,142 tests). It has more than doubled since: read the ratio, not the times.
+# The serial run is already 84% CPU-bound (224s user + 266s sys against 583s wall),
+# so the win is spreading that CPU across cores, NOT reclaiming idle -- and the
+# unusually large SYS half is the thousands of real subprocesses this suite drives
+# by design. Parallelism costs more total CPU, not less. `--dist load`
+# is xdist's default and is kept deliberately over `loadfile`, which would have
+# masked the one real defect this change found by putting a module's tests back on
+# one worker. Requires pytest-xdist (pinned in requirements-dev.txt); pass `-n0`
+# for a serial run.
+addopts = "-ra --strict-markers -n auto"
+markers = [
+    "requires_node: skip when npx/eslint not on PATH",
+    "requires_pip_audit: skip when pip-audit not on PATH",
+]

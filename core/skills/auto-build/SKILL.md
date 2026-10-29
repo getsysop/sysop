@@ -1,0 +1,1324 @@
+---
+name: auto-build
+description: Orchestrate parallel claiming, planning, and execution of independent tasks from tasks/index.yml — picks a batch under a complexity ceiling (optionally restricted to explicit task IDs passed as arguments, e.g. from a /roadmap ordering, which may come from outside the current-focus phase), sequentially pre-claims each task on main, then per task runs plan-only → adversarial-reviewer → execution agents (orchestrator-driven; spawned agents do not nest further by design). Parks on adversarial-review blockers; auto-executes the rest. Human stays the merge gate via /review-close.
+argument-hint: "[max-count] [TASK-ID ...] [--dry-run] [--unattended] [--agent <name>]"
+model: opus
+---
+<!-- sysop:model-roles frontmatter=reasoning inline=reasoning -->
+
+Read `tasks/index.yml`, pick a batch of N independent claimable tasks under a complexity ceiling, sequentially claim each on `main` (mirroring `/auto-fix`'s `batch_work.sh` pattern), then per task run three phases at the orchestrator layer, each on its own model role: plan-only agent → adversarial-reviewer agent → execution agent. Findings classified by the orchestrator itself (spawned sessions do not nest further agents — a deliberate design choice, see Step 6). Tasks with `blocker` findings park (worktree + lock intact, plan in `sysop/runtime/claim/<TASK_ID>/`, verdict in the worktree's `sysop/runtime/auto-build/` scratch dir); the rest auto-execute. The human resumes parked tasks manually and runs `/review-close` on executed branches.
+
+This skill does NOT merge anything. It batches the front of the pipeline (claim + plan + execute) up to the point where the human re-engages.
+
+Run it in the main conversation, never through an Agent call — its per-task waits can outlive a subagent's prompt cache.
+
+> **Helper names** referenced in this skill (e.g., `_sanitize_log`, `useAbortableFetch`, `getDisplayError`, `redact_api_keys`, `shared_cli.py`) are placeholders — substitute the equivalent helpers from your project's `convention_map.md`. Worked examples may also reference specific batch numbers, file paths, or env-var names from the originating project; treat those as illustrations, not literal requirements.
+
+## Pre-flight: Permission Guard
+
+Verify `.claude/settings.json` (with `.claude/settings.local.json`, if present) carries the allow-rules this skill depends on. Under `dontAsk` mode a missing rule is auto-denied with no prompt, halting mid-batch — worst case after Step 5 has pre-claimed several tasks on main.
+
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
+
+- `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 5.2 sequential pre-claim (also invoked transitively by every spawned execution agent's local context).
+- `Bash(python3 -:*)` — Step 1's queue-read/readiness-filter heredoc and Step 5.1's yaml-round-trip status flip (both single `python3 - <<` commands; venv PyYAML is resolved by an in-heredoc `sys.path` bootstrap, not a `.venv/bin/python3` command word or an env prefix — either of which would bind to no rule).
+- `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 5.3 post-claim validator. Bare `python3` is the command word the step prescribes: the script self-resolves venv PyYAML via its own `sys.path` bootstrap, so one form serves every consumer. The `.venv/bin/python3` rules stay only so a hand-typed venv invocation is not denied.
+- `Bash(python3 sysop/scripts/ignored_refs.py:*)` — Step 7c item 4c's ignored-file check, run by each execution agent in its worktree.
+- `Bash(git add tasks/index.yml)` — **bound by no step in this skill** since the build that moved Step 5.4's staging and commit inside `claim_task.sh --commit-claim` (covered by `Bash(bash sysop/scripts/claim_task.sh:*)` above). Step 5's rollback path does **not** bind it either: it runs `git checkout` alone, and stages nothing — and a later review kept it that way: the `HEAD --` form, which would have *un*-staged, was refused for destroying a concurrent session's staged claim. Retained because it is **subsumed by `Bash(git add:*)`** and **bound elsewhere** — `/claim-task` Step 7d and Step 7f Option C, `/review-close` — so it is live, just not from here. Those are its own grounds, stated inline: an earlier version of this bullet deferred to "the same grounds as the rule below", and the rule below was deleted as unbound. Grounds 1 in `WORKFLOW.md` § 8.2a *When a rule stops being bound*.
+- `Bash(python3 sysop/scripts/git_check.py:*)` — Step 5.0's primary-checkout check, the Step 5 rollback's `nothing-staged` check, and Step 7c's body-file check.
+- `Bash(git checkout:*)` — Step 5 rollback path (`git checkout tasks/index.yml`, chained into `git_check.py nothing-staged`; the wider `HEAD --` form was refused because it destroys a concurrent session's staged claim).
+
+Read-only git operations (`git rev-parse`, `git log`, `git branch --show-current`) used by Phase 6a/6e HEAD capture and Phase 7 envelope recovery are auto-passed by the classifier and do not require allow-rules; they are documented here for completeness. The Step 1 heredoc's in-flight overlap check imports `sysop/scripts/scope_overlap.py` **in-process** — it runs inside the same already-permitted `python3 -` heredoc, and its `git -C <worktree> diff --name-only` reads are read-only subprocesses inside that process — so it adds **no** new permission rule.
+
+If any required rule is missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "pre-claims a batch of tasks on `main` via heredoc'd python + `claim_task.sh`, then spawns parallel agents per task — silent denial mid-batch would leave half-claimed state in `tasks/index.yml`"). Do not proceed — unless the guard's step 3 mode check applies.
+
+If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
+
+## Step 0: Parse Arguments
+
+Parse `$ARGUMENTS`:
+
+- **Bare integer `N`** (1–4) → raw-count override. Default: `4`. Clamp to [1, 4].
+- **Task IDs** — any token matching the schema ID grammar (`^[A-Z][A-Z0-9-]{2,80}$`, the same `_TASK_ID_RE` that `validate_tasks.py` enforces; e.g. `FEAT-0012 TECH-DB-BOOTSTRAP`) → explicit-subset restriction. Collect every such token as `SUBSET_IDS`; Step 1 narrows the candidate pool to them. Typical source: the `Run it:` line of a `/roadmap` ordering, or a deadline-driven hand-pick. Naming a task lifts the current-focus filter for it and nothing else: the other eligibility filters and the batch ceilings still apply (see Steps 1–2).
+- **`--dry-run`** → select batch and present math; stop after the confirmation prompt without spawning.
+- **`--unattended`** → no human is present. Step 4 prints the batch and does not ask; a Step 5 abort stops claiming, and one that leaves the claim state unverified writes the halt marker and ends the run (Step 5 *Unattended abort*); Step 8 repeats what Step 4 printed. Nothing else changes: a `blocker` still parks its task, and nothing merges.
+- **`--agent <name>`** → the owner written into each lock as `agent: <name>`, passed to `claim_task.sh` at Step 5.2. The token after `--agent` is the name, never a task ID or `N`. One token of letters, digits and `. _ @ + -`, at most 64; the script refuses anything else before it writes. Check it against that pattern here as well: a mismatch, or `--agent` with no name after it, prints usage and stops before anything is claimed. Default `anonymous`, the script's own.
+- Unrecognized argument → print usage and stop:
+  ```
+  Usage: /auto-build [N] [TASK-ID ...] [--dry-run] [--unattended] [--agent <name>]
+    N — max raw batch count (1-4, default 4). Force N=1 for DB-heavy verify suites.
+    TASK-ID ... — restrict the batch to an explicit task subset (e.g. from a
+                  /roadmap ordering). A named task may sit outside the
+                  current-focus phase; every other eligibility filter and the
+                  batch ceilings still apply, and requested IDs that don't
+                  survive them are reported with per-ID reasons, never
+                  silently dropped.
+    --dry-run — preview batch without spawning agents.
+    --unattended — no confirmation; a Step 5 abort stops
+                   claiming, and one that leaves a claim unverified
+                   writes sysop/runtime/auto-build-halt.md and ends the run.
+    --agent <name> — the lock's `agent:` owner (default anonymous).
+  ```
+
+**Read the halt marker before anything else.** Read `sysop/runtime/auto-build-halt.md` in the primary checkout (the directory Step 5.0 requires) with the `Read` tool. If it exists and the run is `--unattended`, print it and stop without claiming: an earlier unattended run left a claim it could not verify, and no human has reconciled it. An attended run mentions it in one line and goes on. A human deletes the file after reconciling.
+
+## Step 1: Read Queue & Filter Claimable
+
+Single pass through `tasks/index.yml` only — do not open any per-task body files yet. Use `python3` with `yaml.safe_load`; venv PyYAML is resolved by the heredoc's in-process `sys.path` bootstrap (per convention).
+
+**Launch-lane filter:** only tasks in the project's currently-active phase are eligible. The active phase is the one with `current_focus: true` in `tasks/index.yml § phases` (exactly one phase carries the flag; the validator enforces this). Tasks in any other phase are excluded unless Step 0 named them.
+
+**Explicit-subset restriction (optional):** when Step 0 collected `SUBSET_IDS`, the pool is the named tasks that pass the frontier's filters, with **one** filter lifted: a named task may sit in any phase. Every other eligibility rule (open status, no `user_action` / `on_hold_until` / lock, met `depends_on`) still applies to it, and so do the Step 2 solo invariants and ceilings. An unnamed task outside the current-focus phase stays excluded. Each named task outside the current-focus phase prints `lane=OUT-OF-LANE (phase <N>)` and is marked so in the Step 4 table, where the human confirms it knowingly. Under `--unattended` nobody confirms it: naming the task was the decision. Requested IDs that don't survive are printed as `EXCLUDED <id> <reason>` lines and surfaced to the human verbatim — never silently dropped.
+
+> **Subset vs. lane shift.** Pass IDs when a deadline or a `/roadmap` ordering picks *these tasks first*, from the current lane or another — an ephemeral execution preference that steers one batch and moves no lane. If the project itself has re-prioritized (the important work now lives in another phase, or deserves its own), that's a **lane shift**: reshape `phases:` via `/intake` re-entry and flip `current_focus` instead, so every unnamed run follows it. Don't restructure phases just to steer one batch — phases are launch lanes with history, not sprint buckets.
+
+```bash
+# Substitute the Step 0 task-ID list for <subset ids> — space-separated, or the EMPTY
+# string when no subset was given. It is a value you hold from Step 0, NOT a shell
+# variable: nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a
+# *Persistence boundary*), so `"$SUBSET_IDS"` expands to "" here and silently widens the
+# pool to the whole frontier — the exact inversion of the "never silently dropped"
+# invariant this step states.
+# Passed as ONE quoted positional arg, so the whole list — spaces and all — is a single
+# argv element that Python splits. Quoting sidesteps the shell word-splitting that argued
+# for env-passing before (an unquoted operand splits in bash, not zsh; a quoted one never
+# splits), and it keeps an unsubstituted placeholder from being read as a redirection.
+# `python3` command word (not `.venv/bin/python3`) + in-heredoc PyYAML bootstrap so
+# `Bash(python3 -:*)` matches as a single simple command (BeanRider ISSUE-0049).
+python3 - "<subset ids>" <<'PY'
+import os, sys, glob
+try:
+    import yaml
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    import glob, os, subprocess
+    _sites = []
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+            env=dict((_k, _v) for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
+        )
+        _g = _r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        _g = ""
+    for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+        for _layout in (".venv", "venv"):
+            _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+    sys.path[:0] = _sites
+    import yaml
+from pathlib import Path
+
+# Step 0 explicit subset; empty set = no restriction.
+subset = set(sys.argv[1].split())
+
+try:
+    with open("tasks/index.yml", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+except Exception as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e})")
+    raise SystemExit(2)
+
+phases = data.get("phases", []) or []
+active = next((p for p in phases if p.get("current_focus")), None)
+if active is None:
+    print("ERROR: no phase has current_focus: true in tasks/index.yml")
+    raise SystemExit(2)
+active_phase = active.get("number")
+
+tasks = data.get("tasks", []) or []
+by_id = dict((t["id"], t) for t in tasks)
+try:  # `glob` answers [] for a directory it cannot list, and every claim would read as free
+    locks = set(n[:-5] for n in os.listdir("sysop/runtime/locks") if n.endswith(".lock"))
+except (FileNotFoundError, NotADirectoryError):
+    locks = set()
+except OSError as e:
+    print(f"ERROR: sysop/runtime/locks could not be listed ({type(e).__name__}); cannot tell which tasks are claimed")
+    raise SystemExit(2)
+order = dict(Low=0, Medium=1, High=2)
+# unlock_count[id] = number of OPEN tasks that list `id` in depends_on and sit in
+# the active phase or are named in the subset: the pools a later unnamed run, or a
+# re-run with the same IDs, batches from. A next-cycle lookahead: a dependent is
+# never batchable in the same run as its prerequisite. Direct dependents only; a
+# dependent still blocked by OTHER unmet deps is counted anyway (good enough).
+unlock_count = {}
+for t in tasks:
+    if t.get("status") != "open" or (t.get("phase") != active_phase
+                                     and t["id"] not in subset):
+        continue
+    for dep in t.get("depends_on") or []:
+        unlock_count[dep] = unlock_count.get(dep, 0) + 1
+
+def ready(t):
+    if t.get("status") != "open": return False
+    if t.get("user_action"): return False
+    if t.get("on_hold_until"): return False
+    if t["id"] in locks: return False
+    # A named ID lifts the current-focus filter, and only that filter.
+    if t.get("phase") != active_phase and t["id"] not in subset: return False
+    for dep in t.get("depends_on") or []:
+        if by_id.get(dep, {}).get("status") != "done":
+            return False
+    return True
+
+candidates = [t for t in tasks if ready(t)]
+
+# Explicit-subset narrowing (Step 0): the named IDs that pass ready(), which
+# skips only the current-focus filter for them. Report every requested ID that
+# didn't survive, with the first applicable reason.
+if subset:
+    selected_ids = set(t["id"] for t in candidates if t["id"] in subset)
+    for tid in sorted(subset - selected_ids):
+        t = by_id.get(tid)
+        if t is None:
+            reason = "not in tasks/index.yml"
+        elif t.get("status") != "open":
+            reason = f"status is '{t.get('status')}', not open"
+        elif t.get("user_action"):
+            reason = "user_action: true — needs the human, not an agent"
+        elif t.get("on_hold_until"):
+            reason = f"on hold until: {t.get('on_hold_until')}"
+        elif tid in locks:
+            reason = "active lock in sysop/runtime/locks/ — already claimed"
+        else:
+            unmet = [d for d in t.get("depends_on") or []
+                     if by_id.get(d, {}).get("status") != "done"]
+            reason = "unmet depends_on: " + ", ".join(unmet)
+        print(f"EXCLUDED\t{tid}\t{reason}")
+    candidates = [t for t in candidates if t["id"] in selected_ids]
+
+# Leg B: in-flight overlap awareness. Grade each candidate against
+# work already building in another worktree (a second concurrent batch, or a
+# manual /claim-task) using the shared scope-overlap primitive, so this doesn't
+# re-derive the inference /claim-task and /roadmap already share. SOFT signal —
+# it de-prioritizes an overlapping candidate in the sort (secondary to
+# unblocker-first, so a foundational task is never buried) and annotates the
+# Step 4 table; it NEVER hard-excludes (worktree isolation makes a collision
+# recoverable rework, not corruption). Degrade silently to "no overlap data" if
+# the primitive can't be imported (advisory-non-blocking, matching
+# scope_overlap.py's own stance) — the batch math is unaffected either way.
+inflight_verdict = {}    # tid -> "likely" | "unknown" | "possible" | "none"
+inflight_overlaps = {}   # tid -> [(in_flight_task_id, verdict, detail), ...]
+inflight_count = 0
+try:
+    import sys as _sys
+    if "sysop/scripts" not in _sys.path:
+        _sys.path.insert(0, "sysop/scripts")
+    import scope_overlap as _so
+    _wt_cache = {}
+    def _reader(ws):
+        if ws not in _wt_cache:
+            _wt_cache[ws] = _so._worktree_changed_paths(ws)
+        return _wt_cache[ws]
+    for _c in candidates:
+        _a = _so.assess(_c["id"], worktree_reader=_reader)
+        inflight_count = _a.in_flight_count
+        inflight_verdict[_c["id"]] = _a.max_verdict
+        inflight_overlaps[_c["id"]] = [(o.task_id, o.verdict, [o.reason] if o.verdict == "unknown" else o.evidence) for o in _a.overlaps]
+except Exception:
+    inflight_verdict, inflight_overlaps, inflight_count = {}, {}, 0   # any failure → no annotation, batch math unchanged
+
+orank = dict(none=0, possible=1, unknown=2, likely=3)
+
+# Sort: unblocker-first, THEN in-flight-overlap-avoidance (soft, secondary),
+# then effort, then id. Overlap is secondary to unlock_count on purpose —
+# /auto-build's awareness is always-on (no opt-in flag), so it must not bury a
+# foundational unblocker just because it touches an in-flight file; it only
+# breaks ties among equally-foundational candidates toward the non-colliding
+# one. (Contrast /next-task --avoid-inflight, where the human opted in, so there
+# overlap is the PRIMARY key.) With nothing in flight every rank is 0 and this
+# reduces to the overlap-unaware sort exactly. Ordering only; the Step 2 solo
+# invariants + ceilings still decide the batch.
+candidates.sort(key=lambda t: (
+    -unlock_count.get(t["id"], 0),
+    orank.get(inflight_verdict.get(t["id"], "none"), 0),
+    order.get(t.get("effort"), 9),
+    t["id"],
+))
+
+for t in candidates:
+    v = inflight_verdict.get(t["id"], "none")
+    lane = ("focus" if t.get("phase") == active_phase
+            else f"OUT-OF-LANE (phase {t.get('phase')})")
+    print(f"{t['id']}\t{t.get('effort','?')}\t{t.get('blast_radius','?')}\t"
+          f"unlocks={unlock_count.get(t['id'], 0)}\tinflight={v}\t"
+          f"phase={t.get('phase','?')}\t{t.get('body','?')}\tlane={lane}")
+
+# Human-readable overlap detail for the Step 4 In-flight overlap annotation.
+# One `# overlap` line per (candidate, in-flight task) collision; absent when
+# nothing overlaps. `# inflight-set` reports how many tasks are building now.
+if inflight_count:
+    print(f"# inflight-set\t{inflight_count} task(s) building now")
+    for _c in candidates:
+        for (otid, ov, ev) in inflight_overlaps.get(_c["id"], []):
+            shared = ", ".join(ev[:4]) + (f", +{len(ev)-4} more" if len(ev) > 4 else "")
+            print(f"# overlap\t{_c['id']}\t{ov}\t{otid}\t{shared}")
+PY
+```
+
+If it exits 2 with an `ERROR:` line, stop and report that line: with the index or the locks unreadable, nothing can be batched safely. Otherwise parse the output into the candidate list. The `unlocks=N` field is each task's `unlock_count` (open tasks that `depends_on` it and sit in the current-focus phase or are named: next cycle's pool, never this batch); the `inflight=<verdict>` field is its collision risk against work building in another worktree right now (`likely` / `unknown` / `possible` / `none`, from the shared scope-overlap primitive). `unknown` means an input the primitive needed could not be read, so it cannot rule an overlap out; it sorts behind `possible` and ahead of `likely`, and is never read as clear. The list is already sorted **unblocker-first, then in-flight-overlap-avoidance, then effort, then id** — so among equally-foundational candidates a non-colliding task comes first. Report total claimable count and carry both `unlocks` and `inflight` forward — `unlocks` appears in the Step 4 batch table, and any `# overlap` / `# inflight-set` detail lines feed the Step 4 **In-flight overlap** annotation. When nothing is in flight (or the primitive was unavailable), every candidate reads `inflight=none` and there are no `# overlap` lines — the sort *order* reduces to the overlap-unaware result exactly (only the always-present `inflight=none` field is added to each line). The last field, `lane=`, is `focus` or `OUT-OF-LANE (phase <N>)`; only a named task can carry the second, and it reappears in the Step 4 table. On a subset run, also carry every `EXCLUDED` line forward verbatim — they reappear under the Step 4 table. If zero candidates remain **without** a subset, stop:
+
+```
+No claimable tasks in the current-focus phase (`<active_phase>`) of tasks/index.yml.
+Edit `current_focus:` in `tasks/index.yml § phases` if the lane should shift,
+or name the tasks for one batch: /auto-build <TASK-ID ...>.
+Run /next-task to surface user-action items.
+```
+
+If zero candidates remain **with** a subset, stop with the per-ID reasons instead of the generic message:
+
+```
+None of the requested tasks are claimable — per-ID reasons above.
+Fix what's fixable (finish a dependency, release a lock, clear a hold) or
+re-run /auto-build without IDs to batch the open frontier.
+```
+
+## Step 2: Apply Batch-Sizing Rule
+
+Inline math (no standalone script in v1 — promote to `sysop/scripts/select_batch.py` after 3-5 cycles when the shape stabilizes). The walk below is identical whether Step 1 produced the full frontier or an explicit subset — the solo invariants and ceilings never loosen because a task was named; a subset can add a task from another phase, never a task past a ceiling.
+
+> **K=12 sum ceiling + cross-module cap 2 — adopted 2026-07-17 from gdp's settled `TECH-AUTO-CLAIM-LOOSEN-GATE-EXPERIMENT` (permanent "keep" 2026-07-13).** gdp validated the ramp over 23 K=12 cycles against a 61-cycle K=8 baseline: executed/cycle **+78%** (1.34 → 2.39), cost per executed task down (6.40 → 5.14 USD), **zero reopened/abandoned merges** in either bucket, and the conflict-rate rise (2.82% → 7.89%) statistically indistinguishable from baseline (Fisher two-sided p = 0.28). The architectural/migration solo invariants (`a.`, `b.`) are **unchanged** — they guard genuine serialization, not conflict probability. Raising K is **parity/headroom, not a speed lever**: the real throughput ceiling is `/review-close` (human-paced), so this mainly cuts forced-solo batches rather than accelerating the pipeline. **Revert trigger:** a telemetry review (in a consumer running `/auto-build` at scale) showing sustained non-trivial `conflict_pre` growth *plus* a first reopened/abandoned merge → revert `K=12 → 8` and cross-module cap `2 → 1` in the rules and worked examples below. Prior ramps: K=6 → K=8 (2026-05-27), K=8 → K=12 experimental (2026-06-27). Sysop ships no telemetry stack (no consumer runs `/auto-build` at gdp's cadence yet), so the figures above are gdp's; the values are adopted on that evidence.
+
+```
+weight = effort_weight × blast_radius_weight
+
+effort_weight:       Low=1   Medium=2   High=4
+br_weight:           single-file=1   single-module=1.5
+                     cross-module=2.5   architectural=4
+
+Iterate candidates in sorted order. For each, BEFORE adding to batch, check:
+
+1. Solo invariants — if matched and batch is non-empty → SKIP this candidate
+                    if matched and batch is empty     → ADD alone, then STOP
+   a. blast_radius == "architectural"
+   b. body file contains "migrations/" or "ALTER TABLE" (case-insensitive)
+      [open the body file ONLY when checking this candidate, not all candidates]
+   c. candidate.weight > K=12 (heavier than the entire batch ceiling)
+      [no other in-batch task could possibly fit; running alone is the
+      only viable shape. Same Solo-invariants semantics: batch empty
+      → ADD alone, STOP. This preempts rule 3's STOP-with-empty-batch
+      path for any task that does exceed K. NOTE: since the K=6→K=12
+      ramp (2026-07-17, see the provenance note above), the max
+      non-architectural weight is High × cross-module = 10.0 ≤ 12, so
+      this invariant is now DORMANT for non-architectural tasks — none
+      can be heavier than the ceiling. Only a High-effort architectural
+      task (weight 16) exceeds it, and all architectural tasks already
+      solo via `a.` regardless of weight. Retained for
+      correctness/headroom, and it re-arms if K is ever reverted.]
+   d. solo == true  (index field; absent/false means no)
+      [The task mutates state shared OUTSIDE the
+      filesystem view — a global lockfile, a singleton registry, a live
+      schema, a shared fixture corpus — so disjoint paths do not make it
+      safe to run alongside anything. This is the one solo condition that
+      is NOT derivable from the tree: `blast_radius` grades surface area
+      and scope_overlap.py grades path overlap, and neither can see it.
+      Invariant `b.` is the hardcoded special case (SQL migrations found by
+      body-text grep) and stays — dropping it would silently unprotect
+      every existing task that never declares the field. Read from the
+      index entry, so unlike `b.` this opens no file.]
+   [High-effort tasks are NOT solo — dropped per gdp 04cc2c84 (2026-05-21).
+   Six weeks of mined data showed zero conflicts attributable to High-effort
+   pairings while the gate was the binding parallelism constraint. High
+   contributes weight 4 under the K=12 sum ceiling, which is the real
+   conflict-throttle.]
+
+2. Cross-module cap — if blast_radius == "cross-module" and the batch already
+   contains 2 cross-module tasks → SKIP
+   [cap raised 1 → 2 in the 2026-07-17 K=6→K=12 ramp — up to two
+   cross-module tasks may share a batch]
+
+3. Sum ceiling — if sum(weight) + candidate.weight > K=12 → STOP
+
+4. Count ceiling — if raw_count + 1 > N (default 4, from Step 0) → STOP
+
+Otherwise ADD candidate to batch and continue.
+```
+
+**Bounded body reads:** body files are opened only for candidates the Step 2 rules actually check — each add *or* skip is one read (the solo-invariant 1b check needs the body) — a handful per `/auto-build` invocation, not 35; the STOP rules bound the iteration.
+
+**In-flight overlap is a soft signal, not a Step 2 gate.** The `inflight=<verdict>` field from Step 1 already did its job: it reordered candidates so a non-colliding task is preferred among equally-foundational ones. The Step 2 rules above (solo invariants, cross-module cap, K=12/N ceilings) reason only about the tasks *within this batch* and are **unchanged** — a fresh candidate that overlaps an in-flight worktree is still eligible; it was just sorted a little lower and will be flagged for the human at Step 4 (under `--unattended`, in Step 8's report). This is deliberate: worktree isolation makes an overlap a recoverable merge conflict at `/review-close`, not corruption, so the human owns the call (the guided-mode "genuine tradeoff" branch). The more aggressive option — extending the cross-module cap to *hard-exclude* against the in-flight set (an in-flight cross-module task touching module X blocks a fresh cross-module candidate touching X) — is **deferred** (recorded in `tools/COLLISION_AWARENESS_SPEC.md` § Leg B, a maintainer-side design doc that is not in the public tree — the reason is stated here in full): it would silently drop legitimately-claimable work, so it ships only if the soft flag proves too weak in real use.
+
+**Imported-provenance re-estimate:** a candidate whose `surfaced_by` contains the literal `imported` sentinel was brought in from a pre-Sysop backlog by `/onboard` — its recorded `effort`/`blast_radius` are archaeological guesses, not design-time signal. When such a candidate comes up for the checks above, its body is being opened anyway (the same single read the solo-invariant check budgets); re-estimate both fields from the body and the surface it names, and run rules 1–4 on the **heavier** of recorded vs. re-estimated, per field — never the lighter, so the discount can only tighten the gate. Show any change in the Step 4 table (`Medium→High (re-est)`), and do not rewrite `index.yml` — the human corrects the record, not the gate.
+
+**Worked-example fixtures** (sanity-check reference; the model should be able to reproduce these on demand):
+
+> Examples A–G and I assume no candidate unblocks another (every `unlock_count` = 0), so the Step 1 sort reduces to effort-ascending then id — the pre-unblocker-first order — and "first candidate" reads as before. Example H shows how a non-zero `unlock_count` reorders the pool.
+
+- **Example A** — 4× Low + single-file → batch of 4 (sum = 4.0, under K=12). Take all four; the N=4 count ceiling stops further additions (the sum ceiling is slack here — N binds first).
+- **Example B** — 2× Medium + single-module (each weight 3.0) → sum = 6.0, under K=12. Subsequent Low + single-file candidates keep fitting under the sum ceiling until the N=4 count ceiling binds: +Low (7.0, batch 3), +Low (8.0, batch 4 → N=4 STOP). At K=12 the count ceiling, not the sum ceiling, is the binding gate for small-weight tasks. (Under the old K=6 ceiling this example STOPped at sum 6.0 with just the two Mediums.)
+- **Example C** — First candidate is High + architectural → batch size 1 (architectural solo invariant fires; takes the task alone regardless of effort). The High effort itself does not solo — see Example F.
+- **Example D** — First candidate is Medium + cross-module (weight 5.0, under K=12). Take it. Under the raised cross-module cap of 2, a *second* cross-module task may now join: another Medium + cross-module (5.0) fits (5.0 + 5.0 = 10.0, under K=12) and is allowed (2 cross-module ≤ cap). A *third* cross-module candidate hits the cap → SKIP. A subsequent Low + single-file (weight 1.0) still fits under the sum ceiling (10.0 + 1.0 = 11.0, under K=12). (Under the old cap of 1, that second cross-module task was SKIPped and this batch stayed at one cross-module task.)
+- **Example E** — First candidate's body contains `migrations/` → batch of 1 (migration serialization).
+- **Example F** — First candidate is High + single-file (weight 4 × 1 = 4.0, under K=12). No solo invariant fires (architectural rule does not match single-file; migrations rule does not match the body; heavy-solo `c.` needs weight > 12). Take it. A subsequent Low + single-file (weight 1.0) fits cleanly (4.0 + 1.0 = 5.0, under K=12) — the High task pairs with the Low task. Further additions are throttled by the **N=4 count ceiling** before the K=12 sum ceiling: another Low + single-file (5.0 + 1.0 = 6.0, batch 3) still fits; a Medium + single-module after that (6.0 + 3.0 = 9.0, under K=12, batch 4 → N=4 STOP). At K=12 the count ceiling binds first for this mix. (Under the old K=6 ceiling the sum reached the ceiling first and STOPped on weight, not count.)
+- **Example G** — First candidate is High + cross-module (weight 4 × 2.5 = 10.0). At K=12 this **no longer trips the heavy-solo invariant `c.`** (10.0 ≤ 12), so — unlike under the old K=6 ceiling, where `c.` forced it solo — the task is taken and can pair: a subsequent Low + single-file (1.0) fits (10.0 + 1.0 = 11.0, under K=12). The cross-module cap (rule 2) would permit a second cross-module task, but here the **sum ceiling binds first** — even the lightest cross-module task (Low + cross-module = 2.5) would push the sum to 12.5 > 12 → STOP — so this batch pairs the heavy task with a single-file Low only. This is the loosened gate's intended change: High × cross-module tasks were the single largest source of forced-solo batches under K=6 (historically, weight 10.0 > K=6 tripped `c.` and forced this shape solo; before rule `c` existed it hit rule 3's STOP-with-empty-batch and `/auto-build` refused to run).
+- **Example H (unblocker-first ordering)** — Active-phase open candidates: `TECH-A` (Low + single-file, weight 1.0, **unlocks 0**), `TECH-B` (Low + single-file, weight 1.0, **unlocks 0**), `TECH-C` (Medium + single-module, weight 3.0, **unlocks 3** — three open same-phase tasks list `TECH-C` in `depends_on`). The Step 1 sort key `(unlock_count desc, effort asc, id)` orders them **`TECH-C`, `TECH-A`, `TECH-B`** — `TECH-C` leads on `unlocks=3` despite being the heaviest and highest-effort; the two leaves tie at `unlocks=0` and fall through to effort-then-id. (Pre-unblocker-first the order was `TECH-A`, `TECH-B`, `TECH-C`.) At the default N=4 all three fit (sum 3.0 + 1.0 + 1.0 = 5.0 < K, count 3 ≤ 4) → same batch *set*, only the claim order differs, so nothing observable changes downstream. **The reorder changes which tasks get claimed only when a ceiling binds:** force `N=2` and the new order claims **`TECH-C` + `TECH-A`** (the unblocker + one leaf; sum 4.0, count 2 stops the rest), leaving `TECH-B`; the old order claimed **`TECH-A` + `TECH-B`** (both leaves), leaving the unblocker `TECH-C` for a later cycle. Claiming `TECH-C` now makes its three dependents eligible next cycle — the pool-enlarging lookahead the sort exists for. **Tradeoff:** unblocker-first spent part of this batch's budget on a heavier task (weight 3.0) ahead of a 1.0 leaf to widen the *next* cycle's pool. When the unblocker is itself a heavy-solo (weight > K, rule `1c`), unblocker-first only changes the order it is *considered* — it still claims alone; the solo invariants and ceilings are unchanged by the sort.
+- **Example I (`solo: true`)** — First candidate is `TECH-LOCKFILE`: Low + single-file, weight 1.0, `solo: true`. Nothing about its *shape* would solo it — `a.` needs `architectural`, `b.` needs a migration in the body, `c.` needs weight > 12, and at 1.0 it is the lightest thing in the pool — but invariant `d.` fires on the declared field, so the batch is **1** and batching STOPs. This is the case the other three invariants structurally cannot reach: the task regenerates a shared lockfile every module resolves against, so a second task editing a completely unrelated file still races it. Had `TECH-LOCKFILE` been considered *second*, with a batch already non-empty, it would have been SKIPped and left for a later cycle — same semantics as `a.`/`b.`/`c.`.
+
+## Step 3: Surface DB-Contention Warning
+
+> **Parallel DB contention warning**: if the eligible batches share a verify command that mutates the same database (e.g. `APP_ENV=test pytest` against a shared test database), parallel execution can race on schema/seed fixtures and produce flaky FAIL verdicts. For DB-heavy batches, prefer running the lifecycle sequentially (one task at a time via `/claim-task`), or force concurrency=1 here by passing `1` as the bare-integer argument to `/auto-build`.
+
+Print this warning before the confirmation gate. Do not auto-detect — that would require running each task's plan; the warning is the bake-in.
+
+## Step 4: Confirm with Human (single destructive-gate; none under `--unattended`)
+
+Print the batch composition table:
+
+```
+## Proposed Batch
+
+| Task                        | Effort | Blast Radius    | Unlocks | Weight |
+|-----------------------------|--------|-----------------|---------|--------|
+| <TASK-ID>                   | <eff>  | <br>            | <u>     | <w>    |
+| ...                         | ...    | ...             | ...     | ...    |
+|                                                        Total: <sum> / 12.0
+```
+Write a task whose Step 1 row carries `lane=OUT-OF-LANE (phase <N>)` as `<TASK-ID> OUT-OF-LANE (phase <N>)` in the **Task** cell. The **Unlocks** column is each task's `unlock_count` from Step 1 — how many open tasks in the current-focus phase, or named, `depends_on` it — next cycle's pool, not this batch. It explains the row order (unblocker-first) and does not enter the weight math. For an imported-provenance task whose fields were re-estimated (Step 2), render the changed cell as `recorded→re-estimated (re-est)` so the human sees the gate ran on the heavier value.
+
+On a subset run, append a **Requested but not batched** list under the table — the fate of every ID the human asked for, before they confirm:
+
+- each `EXCLUDED <id> <reason>` line from Step 1, verbatim;
+- each subset task that survived the Step 1 filters but was cut by the Step 2 walk, with the **Step 2 rule** that cut it — a solo invariant, the cross-module cap, or the K=12 / N ceilings (e.g. `TECH-B — claimable, but exceeded this batch's K=12 / N=<N> ceilings — re-run /auto-build TECH-B after this batch merges`; `TECH-DB — claimable, but architectural tasks solo — re-run /auto-build TECH-DB alone`).
+
+Shown-equals-dropped: never let a requested ID vanish between the argument list and the confirmation gate.
+
+**In-flight overlap annotation.** When Step 1 emitted any `# overlap` lines, append an **In-flight overlap** block under the table so the human sees the collision risk *before* confirming — shown-equals-claimed, the sibling of the subset "Requested but not batched" list:
+
+```
+In-flight overlap (worktrees building now: <inflight-set count>):
+  ⚠ TECH-C — likely conflict with in-flight TECH-B (both touch src/api/routes.py) → expect a merge conflict at /review-close
+  ⚠ FEAT-D — possible overlap with in-flight TECH-B (same dir: src/api/) → lower risk
+```
+
+Build each line from a `# overlap` record (`candidate`, `verdict`, `in-flight task`, then the shared paths, or for `unknown` the input that could not be read). Each record carries its own verdict against that one in-flight task. Write an `unknown` record as `⚠ FEAT-E — overlap unknown with in-flight TECH-F (<the input that could not be read>) → repair it and re-run to grade the overlap`. This is **advisory, not a veto**: the batch already de-prioritized these in the Step 1 sort, but an overlapping task the ceilings admitted stays in the proposed batch — the human may accept it (the conflict is recoverable rework). If they'd rather not, they re-run with an explicit subset that omits it. Under `--unattended` nobody is asked: an admitted overlapping task is claimed, and the block reaches the human through Step 8's report. When Step 1 emitted no `# overlap` lines (nothing in flight, or no collisions), omit this block entirely.
+```
+Estimated fan-out (per the lifted adversarial flow — see Steps 6a-6e):
+  - Plan-only phase:    up to <N> concurrent `planner`-role agents (one per task)
+  - Adversarial phase:  up to <N> concurrent `plan-review`-role agents (one per task, after plan returns)
+  - Execution phase:    up to <N> concurrent `executor`-role agents (one per task, after review absorbed)
+Peak concurrency: <N>. Total spawns across the cycle: ~<3N> agent sessions.
+```
+
+Ask the human: "proceed?". Wait for confirmation. If `--dry-run`, stop here.
+
+**Under `--unattended`, print all of the above and do not ask.** Go on to Step 5, or stop here on `--dry-run`.
+
+This is the **only** destructive-action gate, and `--unattended` removes it. Rolling-window refills in Step 6 draw exclusively from this confirmed batch list — no spawns are added beyond what the human approved here (under `--unattended`, beyond the batch printed here).
+
+## Step 5: Sequential Pre-Claim on Main
+
+Pre-create worktrees on `main` for the confirmed batch, mirroring `/claim-task` Step 4a-4d for each task. Sequential because each commit on `main` must be visible before the next claim runs.
+
+**First, once, run 5.0 as a call of its own and stop on a non-zero exit.** The batch's block below has no `set -e`, so a check inside it could not stop 5.1:
+
+```bash
+# 5.0 — this loop WRITES cwd-relative (5.1) and COMMITS primary-relative (5.4), and in
+#        a linked worktree those are two different trees: 5.1 flips the worktree's index,
+#        `--commit-claim` finds the primary one unflipped, re-flips it, commits there —
+#        reporting "the Step 4a edit was not on disk" when it was, in a checkout it never
+#        looked at — and leaves the worktree dirty with the claim committed somewhere the
+#        operator is not standing. The inline HEAD test that 5.4 once carried
+#        halted on this by ACCIDENT (a linked worktree is not on the default branch); this
+#        step is that guard made explicit, because `--commit-claim`'s own Rule A check
+#        reads the primary checkout's HEAD and so cannot see where the caller stands.
+#        `--git-dir` equals `--git-common-dir` only in the primary checkout.
+#        This prints `OK: this is the primary checkout` or a `STOP:` line.
+python3 sysop/scripts/git_check.py primary-checkout
+```
+
+Then, for each task in the confirmed batch:
+
+```bash
+# Substitute this task's id for <TASK_ID> and its branch name for <BRANCH_NAME> at every
+# occurrence below — they are values you hold, not shell variables, and nothing survives
+# from one fenced block to the next (`WORKFLOW.md` § 8.2a *Persistence boundary*), so
+# `"$TASK_ID"` is the empty string here. There is no `set -e`: 5.1 exits 1 on its
+# not-in-index guard and 5.2 exits on the script's usage guard, but the block KEEPS GOING,
+# so 5.3 and 5.4 run anyway against a tree nothing claimed. Read each step's exit status
+# and stop on the first non-zero rather than trusting the block to halt for you.
+# Quote both placeholders: an unsubstituted `"<TASK_ID>"` fails loudly, an unquoted one is
+# a redirection — a syntax error in final position, and in mid-command position a silent
+# read from a file of that name if one happens to exist.
+
+# 5.1 — flip index.yml status open → in_progress. `python3` command word + in-heredoc
+# PyYAML bootstrap so `Bash(python3 -:*)` matches as a single simple command.
+python3 - <<'PY' "<TASK_ID>"
+import sys
+try:
+    import yaml
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    import glob, os, subprocess
+    _sites = []
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+            env=dict((_k, _v) for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
+        )
+        _g = _r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        _g = ""
+    for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+        for _layout in (".venv", "venv"):
+            _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+    sys.path[:0] = _sites
+    import yaml
+import os, tempfile
+from pathlib import Path
+task_id = sys.argv[1]
+index_path = Path("tasks/index.yml")
+try:
+    with index_path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+except Exception as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e}). "
+          "Nothing was changed.", file=sys.stderr)
+    sys.exit(1)
+# A concurrent writer that truncates in place leaves this file zero-length for a
+# moment, and `safe_load("")` returns None — which then dies on `.get` with a raw
+# AttributeError and loses the claim. Previously this
+# step WAS such a writer, which is why the guard is paired with the atomic write
+# below: converting only one of the two leaves the other half of the race open.
+if data is None:
+    print("ERROR: tasks/index.yml read as empty — a concurrent writer was mid-write. "
+          "Nothing was changed; re-run this step.", file=sys.stderr)
+    sys.exit(1)
+found = False
+for t in data.get("tasks", []):
+    if t.get("id") == task_id:
+        if t.get("status") != "open":
+            print(f"ERROR: refusing to flip status; current='{t.get('status')}'", file=sys.stderr)
+            sys.exit(1)
+        t["status"] = "in_progress"
+        found = True
+        break
+if not found:
+    print(f"ERROR: {task_id} not in index", file=sys.stderr)
+    sys.exit(1)
+# tempfile + os.replace, NOT `open(path, "w")`. A truncate in place is not just
+# non-atomic for THIS writer — it makes every concurrent READER see a zero-length
+# file, which is the crash the `data is None` guard above reports. `mkstemp` rather
+# than a fixed `<path>.tmp`, so two writers cannot collide on the temp name either
+# (the same class of race). Same directory, so the replace is atomic; `realpath` so a
+# symlinked index is written THROUGH rather than replaced, and the mode is carried
+# across. The shape `/claim-task` Step 4a and `--release` were converted to, and
+# gave `--commit-claim` when it added it; this step was the last in-place writer.
+real = os.path.realpath(index_path)
+mode = os.stat(real).st_mode & 0o7777
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real),
+                           prefix=os.path.basename(real) + ".", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            data,
+            f,
+            sort_keys=False,
+            default_flow_style=False,
+            allow_unicode=True,
+            width=120,
+        )
+    os.chmod(tmp, mode)
+    os.replace(tmp, real)
+except BaseException:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+    raise
+PY
+
+# 5.2 — create worktree + lock. <AGENT_NAME> is the `--agent` value, or `anonymous`.
+bash sysop/scripts/claim_task.sh --lock "<TASK_ID>" "<BRANCH_NAME>" "<AGENT_NAME>"
+# If non-zero exit: roll back the index.yml flip as § Abort handling prescribes —
+# the checkout AND the verification that follows it, which are one unit,
+# and abort the batch (don't leave half-claimed). Report which task failed.
+# There is nothing to COMMIT here, and no `git commit` belongs on this path. 5.1's flip
+# is uncommitted (5.4 commits it, and this path is entered before 5.4), so the checkout
+# leaves the tree clean and a bare `git commit` exits 1 over a rollback that SUCCEEDED —
+# in the middle of an abort, against a block that says stop on the first non-zero.
+# A `git diff --cached --quiet ||` guard is worse, not safer: the predicate is
+# satisfied only when something ELSE is staged, which the commit then captures under a
+# `rollback:` subject, and it is the same predicate that was removed from `/claim-task`
+# Step 4d for exiting 0 over a task still `open` at HEAD. `/claim-task`'s own
+# rollback for this identical flip is the checkout alone; this step now matches it.
+
+# 5.3 — validate schema invariants
+python3 sysop/scripts/validate_tasks.py
+# If non-zero: report validator output verbatim; abort the batch.
+
+# 5.4 — commit the claim, through the owner `/claim-task` Step 4d already uses. This
+#        step was once hand-rolled, and the script is stronger in
+#        three ways. It holds the tracker write mutex across the whole read-flip-commit,
+#        so a rival claim cannot interleave. It applies `_shared/main-push-guard.md`
+#        Rule A INSIDE that critical section — the inline `test` it replaced ran as its
+#        own command, so HEAD could move between the check and the commit. And it
+#        RE-FLIPS when the status has come back `open`, repairing a rival's clobber of
+#        5.1's uncommitted edit instead of committing over it; 5.1's atomic write closes
+#        the torn read, but only this arm repairs a lost flip. It resolves the default
+#        branch itself, so nothing here substitutes `<default branch>` any more — the
+#        literal `main` halted this loop on a `master` repo, and resolving it
+#        is now the script's job rather than the operator's. Commit message unchanged.
+#        One protection this LOSES, stated because it was real: the hand-rolled
+#        commit failed with `nothing to commit` whenever 5.1 had refused, so it
+#        was an accidental second tripwire on the no-`set -e` hazard the preamble
+#        names. `--commit-claim` exits 0 on an already-`in_progress` task (its
+#        resume path), so the loop now runs green past a refused 5.1 and the
+#        preamble's rule — read each step's status, stop on the first non-zero —
+#        is the only thing standing there.
+#        On a non-zero exit STOP and reconcile; do not hand-commit the flip.
+bash sysop/scripts/claim_task.sh --commit-claim "<TASK_ID>"
+```
+
+Branch-name generation (matches `/claim-task` Step 3): the directory is the id's leading `^[A-Z][A-Z0-9]*` segment lowercased and the leaf is the whole id lowercased (`FEAT-X` → `feat/feat-x`, `OPS-FOO` → `ops/ops-foo`); or honour `branch:` field in `index.yml` if present.
+
+5.4's script also fast-forwards the task's worktree to the default branch, which now holds its claim: 5.2 branched before that commit existed, so without it every worktree read `open` for its own task. A `⚠️` line from 5.4 means it could not, and that it still exited 0 over a committed claim.
+
+Collect `(task_id, worktree_path, branch_name)` tuples. Worktree path is `${WORKTREE_ROOT:-..}/${WORKTREE_PREFIX:-$(basename "$REPO_ROOT")}-<task-id-lowercase>/` — note **both** overrides the script honors: `WORKTREE_PREFIX` on the leaf (an earlier version of this sentence omitted it) and `WORKTREE_ROOT` on the parent directory, which is why the default is written here as a defaulted `..` rather than a literal one. The path is computed by `sysop/scripts/claim_task.sh` itself, at its `WORKTREE_DIR=` assignment (cited by symbol, not line — the line number in this sentence went stale and stayed wrong for a long time), so the orchestrator just records what the script printed rather than recomputing.
+
+**Abort handling:** if any pre-claim step fails, roll back the partial state for **that one task** (`git checkout tasks/index.yml` plus the verification below, which is the whole rollback: no `git commit` belongs here, guarded or not. Entered from 5.2 or 5.3 there is literally nothing to commit — see the note at 5.2.
+
+**Verify the rollback; do not widen the command.** The bare checkout restores from the **index**, so over a *staged* flip it is a silent no-op: measured, `Updated 0 paths from the index`, **exit 0**, task still `in_progress`. Nothing in 5.1–5.3 stages the index, so on those entries there is usually nothing to detect — but an external stager reaches this path (a concurrent `/claim-task` Step 7d or 7f Option C `git add`, `/review-close`'s staging, an operator's `git add -A`).
+
+`git checkout HEAD -- tasks/index.yml` was built as the fix and **disqualified by execution**: it restores the index too, so when the staged content is *another session's* claim it silently resets that task as well — measured, exit 0, no output, a second task's `in_progress` reverted to `open`. Since the one state where the staged flip is reliably *ours* (a failed `--commit-claim`) is the state this section already tells you not to roll back in, a wider command only ever destroys someone else's work. So the rollback stays precise and gains a check:
+
+```bash
+git checkout tasks/index.yml && python3 sysop/scripts/git_check.py nothing-staged tasks/index.yml
+```
+
+**`STOP: tasks/index.yml has staged changes` means the rollback is unverified:** the checkout restored the staged copy rather than `HEAD`'s, so the task may still be `in_progress`. Stop. `Bash(git checkout:*)` and `Bash(python3 sysop/scripts/git_check.py:*)` cover the two halves.
+
+**Entered after a 5.4 failure, still do not run the checkout at all — follow 5.4's own note and stop and reconcile.** The `HEAD --` fix removes one of the two reasons an earlier version recorded here and it would be wrong to leave that reason standing: the checkout is **no longer** a silent no-op over `--commit-claim`'s staged flip, and the `git commit` that would have *applied* the failed claim under a `rollback:` subject was deleted in the same change. What remains is the reason that does not depend on either — **a non-zero `--commit-claim` does not tell you which state you are in.** It holds the tracker write mutex across a read-flip-commit and refuses for several distinct causes (a rival holds the mutex, `HEAD` is off the default branch, the task is absent or not claimable, the commit itself failed). Rolling the index back from here would, in the rival-holds-the-mutex case, clobber a write another session is making to the same file — which is the hazard the mutex exists for. 5.4's non-zero exits each say what was written; read that and reconcile, rather than applying a blind rollback. The checkout is the whole rollback only for the 5.2 and 5.3 entries; plus, if a worktree was created: entered from **5.3**, `bash sysop/scripts/claim_task.sh --release <TASK_ID>`, since 5.2 succeeded and the lock is this run's (`--force`, if needed, goes **before** the task ID); entered from **5.2**, never `--release`. The lock is 5.2's last write, so a lock that exists after a 5.2 failure is whoever won the race, and releasing it destroys their claim. Run the removal 5.2's own stderr prints for the objects it says this run created (`git worktree remove "<worktree-path>"` and `git branch -D "<branch>"`), and nothing it does not name) and report which task failed. **Never `cleanup_worktrees.sh --force` here.** It takes no path operand, so it removes every non-main worktree: it would wipe the worktrees of the tasks pre-claimed earlier in *this* batch — the ones the next sentence says stay claimed — plus any other session's in-flight work (WORKFLOW.md § 8.4). Tasks already pre-claimed earlier in the batch stay claimed, with a worktree and a lock but no agent. A re-run of `/auto-build` cannot pick them up (Step 1 excludes a locked task), so the human either releases each (`claim_task.sh --release <TASK_ID>`, then commit the flip) or works it by hand in its worktree and `/document-work` / `/review-close` it.
+
+**Unattended abort.** Under `--unattended`, an abort or STOP in this step stops claiming. Do not retry, try a different rollback, or answer the reconcile question for the human. **Write the halt marker only when the claim state is not known to be clean:** 5.4 exited non-zero, the rollback printed `ROLLBACK UNVERIFIED`, or a removal the rollback prescribes failed. Then **`Write`** `sysop/runtime/auto-build-halt.md` in the primary checkout with: the UTC time; the failing task and step; the command's exit status and output, verbatim; the rollback that ran and its result; and the tasks this batch already claimed. Step 0 refuses the next unattended run while the file exists. Go to Step 8. **With no marker** (a 5.0 STOP, or a 5.1–5.3 abort whose rollback verified) nothing is half-claimed, and the cause can clear by itself: under `pr` policy a close's open PR leaves an `in_progress` task with no lock on the default branch, which fails 5.3 until the PR merges. Take the tasks this batch already claimed into Step 6 as the batch, or go to Step 8 if there are none.
+
+## Step 6: Per-Task Plan → Review → Execute (orchestrator-driven, three sequential phases)
+
+**Why three phases instead of one.** Historically Claude Code's harness blocked recursive Agent tool spawns (lifted in 2.1.172, 2026-06-10, with a 5-level cap), and spawned agents lose the fresh-eyes property if they try to self-administer the adversarial review. The orchestrator-driven shape is retained even on harness versions that permit nesting: the orchestrator (top-level session) lifts the adversarial review up one level — spawn a plan-only agent, then a separate adversarial-reviewer agent, classify findings, then spawn the execution agent. This keeps the envelope contract flat (validated for direct children only) and stays portable to non-Claude-Code consumers. See `_shared/adversarial-review.md` § "Harness constraint" for the full rationale and the re-evaluation trigger.
+
+Spawned agents must NOT use `isolation: "worktree"` (worktree pre-exists from Step 5) and MUST set the `model` each phase below names — its own role (`planner`, `plan-review` or `executor` in `.claude/served_models.yml`), never another phase's.
+
+The three phases run **sequentially within a task** but **in parallel across tasks** (rolling window up to N — shape adapted from `/auto-fix`'s batch-orchestration pattern). Peak concurrency is N; total spawns across the cycle ≈ 3N (modulo parked tasks that skip Phase 6e).
+
+### Phase 6a: Plan-Only Agents (parallel across tasks)
+
+**First, mint each task's artifact directory** in the main checkout, under the claim-artifact namespace `/claim-task` uses and `/review-close` Step 4c reaps at close. The planner writes `plan.md` there (Step 7a), 6d writes `classification.md`, and the executor writes `revised-plan.md` (Step 7c item 2). It outlives `git worktree remove`. Run from the project root, once per task:
+
+```bash
+date -u +%Y%m%dT%H%M%SZ            # the <CYCLE_TS> for the path below
+```
+
+```bash
+# `mkdir` does NOT fail on an unsubstituted placeholder: it would create a directory
+# literally named `<TASK_ID>` and every artifact would land where no reader looks. So
+# the path is substituted ONCE, into a variable, and the `case` tests that variable —
+# a partial substitution must not pass the gate and still reach the mkdir.
+CLAIM_DIR="sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>"
+case "$CLAIM_DIR" in *'<'*|*'>'*) echo "❌ Placeholder not substituted — refusing to mint the artifact directory." >&2; exit 1 ;; esac
+mkdir -p "$(dirname "$CLAIM_DIR")" && mkdir "$CLAIM_DIR" && echo "CLAIM_DIR=$(pwd -P)/$CLAIM_DIR"
+```
+
+The last `mkdir` has no `-p`, so it fails on a directory that already exists. That is what makes the post-6a plan check below mean anything: a `plan.md` left by an earlier run cannot pass for this one. On `File exists`, read the date again and re-run. Hold the printed absolute path as that task's `<CLAIM_DIR>`; the sub-agents `cd` into the worktree and write to it by that path.
+
+**Then capture each task's pre-plan HEAD.** The integrity check below compares against it, so it has to be read *before* the spawn or it means nothing. Run this once per task in the batch, substituting the worktree path Step 5 recorded:
+
+```bash
+git -C "<worktree path>" rev-parse HEAD
+```
+
+Read the SHA off stdout and hold it in your own context as that task's pre-plan HEAD — one value per task, keyed by task id, **not** in a shell variable and not in a shell associative array. Nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a *Persistence boundary*), and the check below is a later block. Because the capture happens before the spawn, there is no parallel-race window.
+
+In a **single message**, spawn `min(N, len(batch))` plan-only agents via parallel `Agent` tool calls. Each call:
+
+- `subagent_type`: `"general-purpose"`
+- `model`: `"opus"`, `effort`: `"high"` <!-- sysop:role=planner -->
+- Do NOT set `isolation: "worktree"`.
+- `description`: `"Plan <TASK_ID>"`
+- `prompt`: the **Plan-Only Agent Prompt** in Step 7a, filled with `(task_id, worktree_path, branch_name, claim_dir)`.
+
+**The plan comes back on disk, not in the agent's reply.** The reply may carry only the agent's final report, so a plan printed earlier is lost, and a summary in its place reads like a plan.
+
+**Post-Phase-6a integrity check.** The plan-only agent is instructed not to commit anything, and to write its plan to `<CLAIM_DIR>/plan.md`. Verify both in the orchestrator BEFORE spawning the reviewer:
+
+```bash
+# Assert the worktree branch HEAD is unchanged from before the plan agent ran.
+# If new commits exist, the plan agent violated the contract — abort and park.
+# A consumer that fast-forwards the worktree during 6a false-parks here; `/claim-task` Step 7a
+# accepts that case, and its REFERENCE.md § *Step 7a* says how to port the check.
+# Substitute this task's worktree path, id, claim dir, and the pre-plan HEAD you captured above.
+# `NEW_HEAD` and `PARK` are assigned right here, so they are the names safe to carry — the
+# four placeholders are values you hold. Run as written with a `"$PRE_PLAN_HEAD"` in place of
+# the literal, the right side is the empty string, the comparison is ALWAYS true, and the
+# batch parks wholesale with nothing to reveal it: `git -C ""` does not fail, it runs in
+# the CWD and returns a real SHA (a measured defect).
+#
+# The `mkdir` is `&&`-gated on a read-only probe because it is the one command here that
+# does NOT fail loudly on an unsubstituted placeholder — `mkdir -p "<worktree path>/…"`
+# happily creates a directory named `<worktree path>` and returns 0, which would land the
+# park verdict in the project root under a literal-placeholder path while the run reports
+# PARKED (found by this phase's own round).
+#
+# A missing or empty plan parks too. An unsubstituted `<claim dir>` reads as missing,
+# so that slip parks loudly rather than passing.
+NEW_HEAD=$(git -C "<worktree path>" rev-parse HEAD)
+PARK=""
+if [ "$NEW_HEAD" != "<pre-plan head>" ]; then
+  PARK="PLAN_PHASE_VIOLATION: plan-only agent committed $(git -C "<worktree path>" log --oneline "<pre-plan head>..HEAD")"
+elif [ ! -s "<claim dir>/plan.md" ]; then
+  PARK="PLAN_MISSING: plan-only agent left no plan at <claim dir>/plan.md, or an empty one"
+fi
+if [ -n "$PARK" ]; then
+  echo "PLAN-PHASE-PARK: <TASK_ID>: $PARK"
+  git -C "<worktree path>" rev-parse --show-toplevel >/dev/null && mkdir -p "<worktree path>/sysop/runtime/auto-build"
+  printf '%s\n' "$PARK" > "<worktree path>/sysop/runtime/auto-build/review.md"
+  # Mark this task PARKED and skip Phases 6b-6e for it.
+fi
+```
+
+**Then `Read` `<CLAIM_DIR>/plan.md` and store its contents as `PLAN_TEXT[<TASK_ID>]`** for each task that did not park.
+
+### Phase 6b: Adversarial-Reviewer Agents (parallel across tasks)
+
+For each task whose plan-only agent returned cleanly (no Phase-6a violation), spawn one adversarial-reviewer agent. Run these in parallel across tasks via a single message with `min(N, len(non_parked))` parallel `Agent` calls. Each call:
+
+- `subagent_type`: `"general-purpose"`
+- `model`: `"opus"`, `effort`: `"high"` <!-- sysop:role=plan-review -->
+- `description`: `"Adversarial plan review <TASK_ID>"`
+- `prompt`: the **Adversarial-Reviewer Agent Prompt** in Step 7b — the **contents of `<CLAIM_DIR>/plan.md` verbatim**, followed by the Prompt Template block from `.claude/skills/_shared/adversarial-review.md`. See the note under Step 7b on emitting it in full.
+
+When each reviewer returns, store its findings as `RAW_FINDINGS[<TASK_ID>]`.
+
+### Phase 6c: Classify Findings (orchestrator-internal)
+
+The orchestrator — at its own top level, where the Classification Rubric is the orchestrator's job to execute — classifies each finding in `RAW_FINDINGS[<TASK_ID>]` per the rubric in `_shared/adversarial-review.md`:
+
+- **`fixable`** — incorporate inline.
+- **`blocker`** — halt and park.
+
+This is **not** delegated to another sub-agent. The orchestrator reads the rubric and applies it directly. Rationale: classification is the seam where the human (via the orchestrator) stays the gate; outsourcing it to a third sub-agent would just push the same parse-and-judge logic one more layer down without adding fresh-eyes value.
+
+### Phase 6d: Halt-on-Blocker OR Write Revised Plan
+
+For each task:
+
+- **If any finding is `blocker`** → mark the task `PARKED`. Skip Phase 6e for it. The plan is already on disk at `<CLAIM_DIR>/plan.md`, the planner's own write, unrevised because parking happens before absorption. Write the verdict to a scratch directory in the worktree so the human picking up the parked task can resume:
+
+  **Write it with the `Write` tool, not from the shell.** `RAW_FINDINGS[<TASK_ID>]` is a
+  value *you* hold in context, subscripted per task — not a shell variable, not exported,
+  and nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a
+  *Persistence boundary*). A bare `"$RAW_FINDINGS"` expands to the empty string and
+  writes an **empty** `review.md`, which then reads as a successfully-written record.
+  Create the directory, then write the file's contents directly:
+
+  ```bash
+  # `&&`-gated on a read-only probe: `mkdir -p` is the one command in this skill that
+  # does NOT fail on an unsubstituted placeholder — it would create a directory literally
+  # named `<worktree path>` in the project root, return 0, and the park verdict below
+  # would be written there while the run reports PARKED. The probe fatals instead.
+  git -C "<worktree path>" rev-parse --show-toplevel >/dev/null && mkdir -p "<worktree path>/sysop/runtime/auto-build"
+  ```
+
+  - `Write` → `<WORKTREE_PATH>/sysop/runtime/auto-build/review.md` — the verbatim
+    `RAW_FINDINGS[<TASK_ID>]` for this task.
+
+  If the value is empty for this task, say so in the file rather than writing a blank
+  one — an empty record is indistinguishable from a lost one.
+
+  The orchestrator does NOT commit this file — it is scratch for the human. Step 8 references both paths in the final report.
+
+  **Mirror the verdict to a central archive so it survives worktree cleanup.** The per-worktree `review.md` above is the *only* record of why the task parked — and it is destroyed the moment the worktree is removed (`cleanup_worktrees.sh --force` removes the worktree wholesale). A parked task is by definition resumed *later*, often after that cleanup has run, so the worktree scratch alone loses the verdict exactly when the human comes back for it. Write a second copy at the **project root** — where the orchestrator runs, so it outlives any worktree — gitignored under `sysop/runtime/`. Note the archive is **not** under `sysop/runtime/auto-build/`: that dir is the per-worktree scratch home, and `/claim-task` parks here too, so the path carries no owning-skill name:
+
+  ```bash
+  mkdir -p sysop/runtime/parked
+  date -u +%Y%m%dT%H%M%SZ            # the timestamp for the filename below
+  ```
+
+  Then **`Write`** → `sysop/runtime/parked/<TASK_ID>__<timestamp>.md`, with the same
+  context-held values (again: not shell variables — see the note above):
+
+  ```markdown
+  # <TASK_ID> — PARKED <timestamp>
+
+  ## Plan (verbatim)
+
+  <PLAN_TEXT[<TASK_ID>] verbatim>
+
+  ## Adversarial verdict (verbatim)
+
+  <RAW_FINDINGS[<TASK_ID>] verbatim>
+  ```
+
+  The UTC timestamp keys the filename: a task parks at most once per cycle and cycles run minutes apart, so `<TASK_ID>__<timestamp>` is unique per park. This archive is the **durable** record — worktree cleanup never touches the project-root `sysop/runtime/parked/`. Closed work does not accumulate here: when a parked task is later resumed and closed, `/review-close` Step 4c removes its marker(s) alongside the lock — historically nothing did, so markers for done tasks piled up and this dir over-reported them as still parked. (A `claim_task.sh --release` of a parked task deliberately leaves its markers — a released park's verdict may still serve the next claimant.) (No telemetry is emitted here; this is the standalone park-archive fix, not the `parked_reason`/`task_outcome` instrumentation it was extracted from.)
+
+- **If all findings are `fixable` (or zero findings)** → the orchestrator passes `PLAN_TEXT` **and** `RAW_FINDINGS` into the Phase-6e execution agent's prompt and the **executor** absorbs the findings inline. **The orchestrator produces no `REVISED_PLAN`.** The executor writes the plan it will implement to `<CLAIM_DIR>/revised-plan.md` (Step 7c item 2). No separate plan-revise agent in v1 — see "Out of scope for v1" below.
+
+  **Write the classification record first — this arm is the dominant path and an earlier version left nothing on disk at all.** `_shared/adversarial-review.md` requires that a finding rejected after consideration have its rationale recorded "so the same issue does not resurface during human review", and — for a High-severity or security-relevant rejection that cannot get a second independent pass — that the **full per-clause** rationale be recorded "in the sealed report / plan so the next reader with independent context (the parent, the human at plan approval, the review-close gate) adjudicates it". On this arm none of those readers could reach anything: Phase 6c is orchestrator-internal, `/auto-build` emits no sealed `REVIEW_REPORT:` anywhere, and there is no plan-approval gate (Step 4's single destructive gate fires *before* planning).
+
+  Write it into the task's `<CLAIM_DIR>`, which Phase 6a minted in the **main checkout** under the same claim-artifact namespace `/claim-task` Step 7c uses and that `/review-close` Step 4c reaps at close — no new runtime directory, and closed work does not accumulate.
+
+  **`Write`** → `sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>/classification.md`, the `<CLAIM_DIR>` Phase 6a printed. Again these are values *you* hold in context, subscripted per task — not shell variables, and nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a *Persistence boundary*):
+
+  ```markdown
+  # <TASK_ID> — adversarial classification <CYCLE_TS>
+
+  Verdict: ALL FIXABLE (<N> findings) — proceeding to execution.
+
+  ## Findings and dispositions
+
+  <one entry per finding in RAW_FINDINGS[<TASK_ID>]: the finding as the reviewer
+  stated it, then `Disposition: absorbed` or `Disposition: rejected`.>
+
+  ## Rejection rationale (per clause)
+
+  <for each REJECTED finding, every clause it asserted and why each one fails.
+  `_shared/adversarial-review.md` § Compound findings: refuting one clause does not
+  reject the finding, and a rationale naming only the disproved clause is how a real
+  issue is lost. If nothing was rejected, write "none rejected" — an empty section is
+  indistinguishable from a lost one.>
+  ```
+
+  **What this record is and is not.** It is the orchestrator's account of its own 6c classification, durable and readable by a human and by `/review-close`. It is **not** an input to Phase 6e — v1 still hands the executor `PLAN_TEXT` + `RAW_FINDINGS` and lets it absorb inline, so the executor's absorption and this record are two independent readings of the same findings and may differ. The executor records its own reading beside this one, in `revised-plan.md`. Say that rather than implying the executor followed this record; a record that claims to bind execution and does not is worse than one that says what it is.
+
+### Phase 6e: Execution Agents (parallel across tasks)
+
+For each non-parked task, spawn one execution agent. Run these in parallel across tasks via a single message with parallel `Agent` calls (rolling-window refill if there are more non-parked tasks than the concurrency cap). Each call:
+
+- `subagent_type`: `"general-purpose"`
+- `model`: `"sonnet"`, `effort`: `"high"` <!-- sysop:role=executor -->
+- Do NOT set `isolation: "worktree"`.
+- `description`: `"Execute <TASK_ID>"`
+- `prompt`: the **Execution Agent Prompt** in Step 7c, filled with `(task_id, worktree_path, branch_name, claim_dir, plan_text, raw_findings)`.
+
+**Pre-execution HEAD capture (load-bearing for Phase 7).** Immediately BEFORE spawning each Phase-6e agent, capture the worktree branch HEAD so Phase 7 can compare against it:
+
+```bash
+# Substitute this task's worktree path. Run once per task at Phase-6e spawn time.
+git -C "<worktree path>" rev-parse HEAD
+```
+
+Read the SHA off stdout and hold it in your own context as that task's pre-exec HEAD — one value per task, keyed by task id, **not** in a shell variable and not in a shell associative array. Phase 7 is a later block and nothing carries into it (`WORKFLOW.md` § 8.2a *Persistence boundary*); it takes the value as a substituted literal, the same shape as the pre-plan HEAD in Phase 6a. Because the capture happens in the orchestrator's own context before spawning, there is no parallel-race window even when Phase 6e fans out across tasks.
+
+Phase 7 (below) uses this value to distinguish "agent omitted the envelope but the work landed" from "agent failed and nothing landed".
+
+### Rolling-window refill on completion
+
+When a background agent's completion notification arrives in any phase:
+
+1. Collect that agent's result. For Phase 6e, get the envelope by trying — in this order, first hit wins — (a) read `sysop/runtime/subagent-envelopes/<TASK_ID>.json` (`SubagentStop` hook output; resolve `<repo>/sysop/runtime/subagent-envelopes/` against the main repo root via `git rev-parse --git-common-dir`); (b) regex-parse the YAML envelope from the LAST fenced block of the agent's return text (existing behavior — see Step 7c). After consuming the JSON file, `rm -f sysop/runtime/subagent-envelopes/<TASK_ID>.json` to keep the dir clean for in-flight handoff; leave `_unparseable_*.json` diagnostics in place (the hook reclaims them after 7 days; you never delete them).\
+1‑record. **Re-read the `## Test decision` record at the branch tip before this task counts as executed** — for a Phase-6e agent only, and only when its envelope says `STATUS: EXECUTED`. **Numbered `1‑record` rather than renumbered into the sequence**, for the reason item `3‑record` carries in this same file: shifting `2` and `3` down one would rewrite markers other steps cite by number to say nothing new.
+
+**Why this exists, and what a self-check structurally cannot catch.** `/claim-task` has two layers on this record — the executor's own grep at Step 7e, and **Step 8's authoritative read-back**, which reads the revision that will actually be graded and blocks before `/document-work`. This orchestrator had only the first: item `3‑record` is written by the same agent that reports its own success, so an executor that reports `EXECUTED` without running its check, or that writes the section into the **main checkout** instead of the worktree (on no branch, invisible to `/review-close` Step 2d), produces an envelope indistinguishable from a compliant one. No grep run by the writing agent can see either. This step is the second layer, and it is the same block `/claim-task` Step 8 runs — pinned identical by `tests/test_autobuild_record_readback.py`, because a second copy that drifts is worse than none.
+
+**Substitute this task's id, branch, and the repo-root-relative body path — three values you already hold per task. This block touches no run directory**, which is why it ports without change.
+
+```bash
+# Substitute all three literally and QUOTED. Stdlib only, heredoc + positional args per
+# the heredoc convention.
+#
+# <BODY_PATH_FROM_REPO_ROOT> has its own name because item `3‑record` below already uses
+# <BODY_PATH_AS_RESOLVED> for a DIFFERENT value -- the `body:` value as-is, joined onto
+# <WORKTREE_PATH>. One name for two values is how this block shipped inert once already.
+#
+# This one is relative to the REPO ROOT, and `/auto-build` has no resolver step that
+# produces it, so DERIVE it per task from the `body:` value Step 1 read out of
+# `tasks/index.yml`:
+#
+#     body: open/<TASK_ID>.md          (canonical)  ->  tasks/open/<TASK_ID>.md
+#     body: tasks/open/<TASK_ID>.md    (legacy)     ->  tasks/open/<TASK_ID>.md  (as-is)
+#
+# Test the prefix; neither shortcut is safe. Blind concatenation yields
+# `tasks/tasks/open/...` on the legacy spelling. Blind pass-through yields `open/...`,
+# which `git show refs/heads/<branch>:open/...` reports as ABSENT -- and this block then takes its
+# NOT ON BRANCH arm and **exits 0**. Item `1‑record` fails the task on that arm, but its
+# text tells the operator the body is merely untracked: the wrong cause, printed over the
+# exact state this gate exists to catch, by a reader of item `3‑record`'s definition.
+python3 - <<'RECORD_PY' "<TASK_ID>" "<BRANCH_NAME>" "<BODY_PATH_FROM_REPO_ROOT>"
+import re, subprocess, sys
+from pathlib import Path
+
+claim_id, branch, body_rel = sys.argv[1], sys.argv[2], sys.argv[3]
+if any("<" in a for a in (claim_id, branch, body_rel)):
+    print("ERROR: placeholder not substituted: {!r} {!r} {!r}".format(
+        claim_id, branch, body_rel), file=sys.stderr)
+    sys.exit(2)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+
+# `<rev>:<path>` -- the literal colon is what makes this a branch-tip read. Without it,
+# `git show <path>` means `git show HEAD -- <path>` and exits 0 off the WRONG revision:
+# the one failure here that can fabricate a pass (Step 2d documents it at length). The
+# operand is built by .format() so it cannot lose the colon.
+try:
+    r = subprocess.run(["git", "-C", str(main_root), "show", "refs/heads/{}:{}".format(branch, body_rel)],
+                       capture_output=True, text=True)
+except UnicodeDecodeError as e:  # a body that is not UTF-8 takes the UNREADABLE arm below
+    r = subprocess.CompletedProcess([], 1, "", "not UTF-8: {}".format(e))
+if r.returncode != 0:
+    err = (r.stderr or "").strip()
+    # git says "does not exist in '<rev>'" when the path is absent from the worktree too,
+    # and "exists on disk, but not in '<rev>'" when it is present but untracked. The
+    # DOCUMENTED case here -- an /add-task body nobody committed -- always leaves the file
+    # on disk, so it produces the SECOND message. Testing only the first inverted the two
+    # populations: the benign case got a raw fatal and the suspicious one got reassurance.
+    if "does not exist in" in err or "exists on disk, but not in" in err:
+        print("NOT ON BRANCH -- {} is absent at {}.".format(body_rel, branch))
+        print("  Expected ONLY for a body left untracked in the main checkout "
+              "(/add-task filed it, nobody committed it): 7e writes the main-checkout "
+              "copy and says so in its final message. Confirm that is what happened; "
+              "otherwise the body path is wrong, or the branch is not this claim's.")
+    else:
+        print("UNREADABLE -- {}:{}".format(branch, body_rel))
+        print("  " + err)
+    sys.exit(0)
+
+# Headings OUTSIDE fenced blocks. `tasks/schema.md` documents that `## Plan` carries the
+# reviewed plan verbatim in a fence, and that "the fenced plan contains its own
+# '## Test decision' line" -- it orders the real section FIRST so a first-match reader
+# meets it first. A fence-blind reader does not get that guarantee: it matches the plan's
+# copy, so a body with no real record reads as compliant.
+# A leading BOM keeps `^#` from matching and would report a false MISSING, which BLOCKS.
+lines = r.stdout.lstrip("\ufeff").split("\n")
+HEAD = re.compile(r"^(#{1,6})\s*(.*)$")
+WANT = re.compile(r"^\s*test\s+decision\b", re.I)
+
+def fence_mark(line):
+    """`(char, length)` if this line is a fence marker, else None.
+
+    This is Step 7f's `fence_mark`, and it is the same function on purpose -- copy it,
+    never re-derive it. Same for `fence_closes` below. THREE properties are
+    load-bearing, and this block shipped missing a different one each time. A body can
+    be fenced with ``` OR ~~~; a fence is closed only by the SAME character at the SAME
+    length or longer; and a closer carries NO info string. Step 7f's own writer emits a
+    FOUR-backtick outer fence whenever the plan it wraps contains an ordinary ```-block,
+    so a 3-backtick reader treats the plan's first inner fence as the close, reads the
+    rest of the plan as unfenced, and certifies the plan's own copy of `## Test decision`
+    as the record. Measured: a real option-C body with no record at all passed. The
+    info-string half reproduces the same way -- see `fence_closes`."""
+    s = line.lstrip()
+    for ch in ("`", "~"):
+        if s.startswith(ch * 3):
+            n = 0
+            while n < len(s) and s[n] == ch:
+                n += 1
+            return ch, n
+    return None
+
+def fence_closes(line, open_mark):
+    """True only if `line` CLOSES the fence `open_mark` opened.
+
+    Three properties, not two. Same character, at least as long -- and **no info
+    string**, which is the one an opener is allowed to carry and a closer is not.
+    A ```json line nested inside a plain ``` fence satisfies the first two, so a
+    reader without the third believes it has LEFT the fence while still inside it,
+    and then reads the fence's own lines as content. That is the fabricating
+    direction, not the dropping one.
+
+    The closer decision lives here, in one place, precisely because it was split
+    across two loops before and only one of them remembered it."""
+    mark = fence_mark(line)
+    return (bool(mark) and mark[0] == open_mark[0] and mark[1] >= open_mark[1]
+            and not line.strip().strip(mark[0]))
+
+def headings(fence_aware):
+    out, open_mark = [], None
+    for i, ln in enumerate(lines):
+        mark = fence_mark(ln)
+        if mark:
+            if fence_aware:
+                if open_mark is None:
+                    open_mark = mark
+                elif fence_closes(ln, open_mark):
+                    open_mark = None
+            continue
+        if open_mark is not None:
+            continue
+        m = HEAD.match(ln)
+        if m:
+            out.append((i, len(m.group(1)), bool(WANT.match(m.group(2)))))
+    return out, open_mark is not None
+
+heads, unterminated = headings(True)
+if unterminated:
+    # A body whose fence never closes swallowed everything after it. Answering MISSING
+    # there would block a claim over a malformed body, so fall back to a fence-blind
+    # read -- which can only err toward accepting, and Step 2d re-reads this same record
+    # at the merge. Say so either way: the body needs fixing.
+    print("NOTE -- unbalanced ``` fence in {}; read fence-blind.".format(body_rel))
+    heads, _ = headings(False)
+
+wanted = [h for h in heads if h[2]]
+if not wanted:
+    print("MISSING -- no test-decision heading at {}:{}".format(branch, body_rel))
+    sys.exit(1)
+
+# Scope the template test to THAT section, not the whole body: the plan fence can quote
+# the schema, and a whole-body test would refuse a claim whose record is perfectly good.
+start, level, _ = wanted[0]
+end = next((i for i, lv, _ in heads if i > start and lv <= level), len(lines))
+section = "\n".join(lines[start + 1:end])
+if "<recorded at /claim-task plan time" in section:
+    print("TEMPLATE -- the section is still the schema placeholder at {}:{}".format(
+        branch, body_rel))
+    sys.exit(1)
+print("test-decision record present at {}:{}".format(branch, body_rel))
+RECORD_PY
+```
+
+**On `MISSING` or `TEMPLATE` (exit 1), this task's Step 8 status becomes `FAILED`**, with the printed lines as its `Notes` — **and so does `NOT ON BRANCH`, which on this path is a failure rather than the benign state its own text describes.** That arm exits 0 because `/claim-task` can legitimately meet a body `/add-task` left untracked in the main checkout. `/auto-build` cannot: Step 5 pre-claims from a committed `tasks/index.yml` on the default branch, so a body that is absent at the branch tip means the path was derived wrong or the body was never committed, and neither may pass as executed. **`UNREADABLE` (also exit 0) fails the task the same way**, with its printed lines as the `Notes`: a record that cannot be read cannot be verified. **Read the printed line, not just the exit code.** Whichever fired, **the batch continues** — go on to item 2 and refill as normal. Halting the whole run on one branch's missing record would strand every sibling that wrote theirs correctly, and deferring the check to the end would put it furthest from the work.
+
+**Do not write the record yourself from `PLAN_TEXT[<TASK_ID>]`.** You hold the plan and could, but a record composed by the orchestrator is further from the diff than one written by the agent that made the change. A `FAILED` verdict the human can act on beats a record nobody stands behind — `/claim-task` Step 8 carries the same prohibition in as many words.
+
+**Then copy any `IGNORED-REF:` lines the agent quoted (Step 7c item 4c) into that task's Step 8 `Notes`.**
+
+**Then check that `<CLAIM_DIR>/revised-plan.md` exists.** If it does not, write `no revised-plan.md: the executor skipped item 2` into that task's Step 8 `Notes`. It does not change the status.
+
+2. If the queue still has unstarted batch tasks at the same phase, spawn one more agent with the same shape in a single new message.
+3. No polling, no sleeping — the harness delivers completion notifications.
+
+When all Phase-6e agents have returned (or all tasks parked), proceed to Step 8.
+
+## Step 7: Agent Prompt Templates
+
+Three distinct prompts, one per phase. Each is verbatim with placeholders filled. **None of these prompts instructs the agent to call the Agent tool** — the orchestrator does all fan-out itself, keeping the spawn hierarchy flat (a deliberate choice even on Claude Code ≥2.1.172, where nesting is permitted; see Step 6).
+
+### Step 7a: Plan-Only Agent Prompt
+
+---
+
+**START OF PLAN-ONLY AGENT PROMPT**
+
+You are planning roadmap task `<TASK_ID>` for the `/auto-build` orchestrator. Your **only** job is to produce a structured plan in the format below and write it to `<CLAIM_DIR>/plan.md`. Do NOT execute, do NOT spawn sub-agents, do NOT commit, and write no file but that one.
+
+The worktree at `<WORKTREE_PATH>` is already claimed — lock at `sysop/runtime/locks/<TASK_ID>.lock`, branch `<BRANCH_NAME>`, `tasks/index.yml` flipped to `in_progress` on main by the orchestrator.
+
+**Working directory:** `<WORKTREE_PATH>` (cd here first).
+
+### Steps
+
+1. **Read context.** Open `tasks/open/<TASK_ID>.md` for the task brief. Read `.claude/convention_map.md` and `.claude/security_map.md` for files the task is likely to touch. Read sibling files referenced in the task body as needed.
+2. **Produce the plan.** Structure:
+   - **Task summary** — one paragraph restating the task and goal.
+   - **`## Constraints & Risks`** preamble — one bullet per file/directory the plan will touch, citing applicable conventions from `.claude/convention_map.md` AND applicable security checks from `.claude/security_map.md`, plus cross-cutting rules (logger formatting, APP_ENV default, log sanitization, fetch redirect guards). One bullet per risk; no prose padding. Include a `### Coverage gap` subsection listing files with no matching map section (write `_(none)_` if every file matches).
+   - **`## Test decision`** — state either **`test <X> proves <Y>`** (the regression test, existing or new, that pins the behaviour this change touches) or **`no test because <Z>`** with a reviewable rationale. Make `Z` reviewable, not a hand-wave: the plan reviewer scrutinises it under `_shared/adversarial-review.md` finding 7, which flags a behaviour-touching task whose decision is missing — so an omission here is caught before an executor is spawned, not at the merge. **Decide it; do not write it.** The execution agent persists this section into the body (Step 7c Sequence item 3‑record), because the body write has to land in the worktree on the branch and you are forbidden from editing worktree files.
+   - **`## Implementation Steps`** — numbered steps with concrete file paths, line ranges, and expected diffs.
+3. **Hard constraints:**
+   - Do **NOT** edit any file in the worktree (no `Edit` / `Write` tool call inside it).
+   - Do **NOT** run `git commit` or any state-changing command. The one write you make is `<CLAIM_DIR>/plan.md`.
+   - Do **NOT** invoke the Agent tool — the orchestrator handles fan-out.
+
+### Write the plan to disk
+
+Write the full plan to `<CLAIM_DIR>/plan.md` with the `Write` tool. That file is the orchestrator's only input: it reads the plan from there, and a missing or empty file parks this task. A plan that exists only in a message is lost, because the orchestrator sees only the report you hand back.
+
+`<CLAIM_DIR>` is an **absolute path in the main checkout, outside your worktree**. Use it exactly as given — do not re-derive it, do not make it relative to the working directory above, and do not `git add` it. The directory already exists. The file's contents, with no enclosing fence:
+
+```markdown
+<task summary>
+
+## Constraints & Risks
+- ...
+
+### Coverage gap
+- ...
+
+## Test decision
+test <X> proves <Y>   ("no test because <Z>" is the other legal form)
+
+## Implementation Steps
+1. ...
+2. ...
+```
+
+### Final message
+
+End the report you hand back with the line `PLAN_WRITTEN: <CLAIM_DIR>/plan.md`, with the path as given. Do not repeat the plan there. If the consuming project wires up sub-agent cost attribution, also emit `SPEND_USD: <float>` on a line before it. Otherwise omit it — `_shared/adversarial-review.md § Caller contract` documents the opt-in pattern.
+
+**END OF PLAN-ONLY AGENT PROMPT**
+
+---
+
+### Step 7b: Adversarial-Reviewer Agent Prompt
+
+The orchestrator constructs this prompt as the **contents of `<CLAIM_DIR>/plan.md` verbatim** — the `PLAN_TEXT[<TASK_ID>]` it read from that file after Phase 6a — immediately followed by the **Prompt Template** block copied verbatim from `.claude/skills/_shared/adversarial-review.md`. The sub-agent returns a prioritized list of concrete `file:line` findings under 500 words.
+
+> **Emit the file in full, and if you cannot, say so in the prompt rather than abbreviating silently.** Copying a long plan into a prompt is still generated text: on a measured 3-task cycle with plans of ~200–400 lines, the orchestrator abbreviated all three, and one reviewer returned a finding describing *the transcription*, not the plan. The harm is bidirectional and leaves identical evidence either way: a dropped clause manufactures a phantom finding the executor is dispatched to fix, and a smoothed one hides a real finding. A prompt that opens "the plan below is abridged" produces findings a classifier can discount. Inlining rather than handing the reviewer the path is `/claim-task`'s trade too: the reviewer cannot skip a plan it was handed.
+
+Set the same agent params as Step 7a except `model: "opus"`, `effort: "high"` <!-- sysop:role=plan-review --> (the `effort` is this line's, never 7a's: with none here, pass none) (`subagent_type: "general-purpose"`, `description: "Adversarial plan review <TASK_ID>"`).
+
+No additional wrapper text — the shared template already supplies the framing. The orchestrator stores the returned text as `RAW_FINDINGS[<TASK_ID>]`.
+
+### Step 7c: Execution Agent Prompt
+
+---
+
+**START OF EXECUTION AGENT PROMPT**
+
+You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
+
+- Claimed the task: worktree at `<WORKTREE_PATH>`, lock at `sysop/runtime/locks/<TASK_ID>.lock`, branch `<BRANCH_NAME>`, `tasks/index.yml` flipped to `in_progress` on main.
+- Produced an implementation plan (`<PLAN_TEXT>` below).
+- Run a fresh-eyes adversarial review of that plan (`<RAW_FINDINGS>` below) and classified all findings as `fixable`. No `blocker` findings remain — if any had existed, this agent would not have been spawned.
+
+**Working directory:** `<WORKTREE_PATH>` (cd here first; do not run from the project root).
+
+### Plan (as produced by the plan-only agent)
+
+```
+<PLAN_TEXT verbatim>
+```
+
+### Adversarial review findings (all `fixable`)
+
+```
+<RAW_FINDINGS verbatim>
+```
+
+### Sequence
+
+1. **Absorb findings into the plan.** Re-read the plan above. For each `fixable` finding in `<RAW_FINDINGS>`, decide:
+   - **Incorporate** — revise the plan so the implementation accounts for it.
+   - **Reject after consideration** — record why in item 2's file, so the same issue does not resurface during human review.
+2. **Write the revised plan to `<CLAIM_DIR>/revised-plan.md`** with the `Write` tool, before you implement. It is the only record of what you decided; the orchestrator's `classification.md` beside it is its own reading of the same findings, not yours. `<CLAIM_DIR>` is an **absolute path in the main checkout, outside your worktree**: use it as given and do not `git add` it. It is in the main checkout on purpose, because the record has to outlive `git worktree remove`. Contents: the plan as you will implement it, then a `## Findings` section with one line per finding, `absorbed` and what changed, or `rejected` and why, clause by clause. **There is no `ExitPlanMode` call:** a spawned agent does not have that tool.
+3. **Implement** per the revised plan.\
+3‑tier. **When the work surfaces something adjacent, fix it here — that is the default.** Each finding gets one of three outcomes; nothing is parked.
+
+   1. **Fix it in this branch** — whatever module it is in, and past a one-line change, as long as the close can still review the branch. Read the code before you change what it does, and add a test when the fix changes behaviour. **Never, at any size:** migrations, anything that writes to production, and auth or payment logic. Record each fix as one line under an `## Also fixed` heading in the task body — **the same write as item 3‑record**, in your worktree and never the main checkout (an edit there is on no branch and reaches no PR) — so the close reviews it as *intended* scope rather than as an unexplained hunk, and the test decision covers it. **One write, not two:** `tasks/schema.md` § *Also fixed* puts this section between `## Test decision` and `## Plan`, and one write emits both sections in that order.
+   2. **File a task** only when it cannot be fixed now: it needs a design decision or a human action, it is too large to review in this branch, or it is on the never-list. Add it to an existing open task in that module before opening a new entry. A filed task is the path step 5b's stub check is about; a fix or a drop produces no `<PREFIX>-<NAME>` token for it to resolve.
+   3. **Drop it** when nothing is wrong: nothing is broken today, it is a preference or a hypothetical, or it is already handled. A real future condition goes in a comment or a test at the site, not in a ledger.
+
+   **When an answer from the human would make it fixable** — a design choice, which of two readings is intended, permission for a never-list item — this run has nobody to ask, so file the task and write the question into its body with the fix you would make for each answer and the one you recommend. The next session starts from the question rather than re-deriving it.
+
+   **`tasks/notes.md` is retired — write nothing to it.** A consumer's existing ledger is theirs to clear; leave it alone.\
+3‑record. **Persist the `## Test decision`** section into the task's body file, from the plan's `## Test decision` element above. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If item 3‑tier produced any in-branch fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. **The order is the schema's contract; do not restate the reason you may have read elsewhere.** Two sibling sites justify it as protecting a first-match reader from a heading quoted inside the fenced plan. That is true of the *test-decision* reader, which is fence-blind, and **false of the `## Also fixed` reader**, which `/review-close` Step 2d says in as many words is fence-aware and does not depend on the ordering. Follow the order because the schema declares it and a human reads the body top-down, not because of a protection that reader does not need.
+
+   **If the body already carries a `## Test decision`, REPLACE that section — do not append a second one.** This is not hypothetical: `/claim-task --plan-only` (option C) writes `## Test decision` and `## Plan` into the body and then **releases the claim**, so the task returns to `open` carrying a record, and `/auto-build` Step 1 can claim it — Phase 6a spawns a fresh planner and never inspects the body. A second section leaves two, and every reader downstream takes the first match, so the stale one wins and is reported as verified. If the existing record still holds, say so in your final message and leave it; if your plan's decision differs, replace it and say why.
+
+   **Numbered `3‑record` rather than renumbered into the sequence**, for the reason item `3‑tier` carries the same shape: an executor reads the visible numeral, so shifting `4`, `4b`, `5`, `5b`, `6` and `7` down one to open a slot would rewrite six markers that other steps and this repo's guards cite by number, to say nothing new.
+
+   **If the plan carries no `## Test decision` element, do not compose one from the diff and pass it off as the plan's.** The planner is asked for one and the plan reviewer flags its absence (`_shared/adversarial-review.md` finding 7), so reaching this item without one means something upstream did not happen. Write the decision the implementation actually supports — a record Step 2d can verify beats an absence it can only halt on — and **say in your final message that the plan carried none and this decision is yours**, so the provenance gap reaches the human through the envelope instead of disappearing into a body that looks planner-reviewed.
+
+   **Then read it back, before you go on.** Nothing on this path used to write this record at all: `/review-close` Step 2d classified every autonomous branch `missing`, and because this skill claims through `claim_task.sh --lock` the ownership probe answered `OWED`, which is precisely the condition under which the *"Record not owed"* disposition is withheld — so every close of every autonomous branch put a human in front of a waive-or-hold choice with no third answer. The record is cheap here and expensive there. Confirm the heading is really in the file you just wrote:
+
+   ```bash
+   python3 sysop/scripts/git_check.py file "<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>" && grep -niE -A1 '^#+[[:space:]]*test[[:space:]]+decision\b' "<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>"
+   ```
+
+   **`STOP: no such file` means the path is wrong, not the record:** `<BODY_PATH_AS_RESOLVED>` is the `body:` value from `tasks/index.yml`, which is relative to `tasks/` (e.g. `open/<TASK_ID>.md`). Exit 3 means a placeholder is still in it.
+
+   **Any other non-zero exit (no `STOP:` line; `grep` found no heading) means the section is not there — go back and write it.** `-A1` prints the line under the heading, so a section still reading `<recorded at /claim-task plan time …>` is visible to you here — that is the schema template, not a record, and Step 2d classifies it `missing` too, so replace it.
+
+   **Know exactly what this proves, because an earlier version of this step claimed more and was wrong in both directions at once.** It is a **shallow** check, the same shape `/claim-task` Step 7e ships: it catches the write that silently did not happen, and nothing else. It does **not** verify that the record is real. `grep` cannot tell a heading in the body from one inside a fenced block, so on a body carrying a `## Plan` section — whose fence quotes its own `## Test decision` line — a hit can be a quotation.
+
+   That version tried to assert the record itself, requiring one of the two legal forms under the heading. Its own review round disqualified it on measurement. **Too permissive where it mattered:** `grep -A2` returns the union of *every* match's window, so a legal form quoted inside `## Plan` satisfied it while the real section was empty — and it exited **0** on a body with no unfenced heading at all, the exact failure it existed to catch. **Too strict everywhere else:** run over the live consumer corpus it rejected **166 of 207** bodies that carry a perfectly good record, with the false message *"empty section, or still the schema placeholder"*. The mechanism was wrong, not its parameters — a fence-blind scan of the whole file cannot answer "does the first *real* section hold a legal form".
+
+   The check that *can* answer it is fence-aware and reads one section: `/claim-task` Step 8's verifier, which is what makes that path's shallow grep affordable. **This path has no such backstop** — the orchestrator parses your envelope and never re-reads the body — and building one is filed for later rather than approximated here. A shallow check that says so is worth more than a strong-sounding one that certifies clean over the failure it names.
+4. **Post-fix convention verification** (the same gate `/claim-task` Step 7e's executor runs internally): list changed files via `git diff --name-only <default branch>...HEAD`, check each against **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) for the relevant section — **both maps, matching what this skill's own planner reads.** The autonomous path had the same one-map gap `/claim-task` Step 7e had, and the parenthetical above claims parity with that step, so fixing one and not this one would have made the claim false as well as the behaviour wrong, scan new lines for the listed conventions, fix any regressions before committing.\
+4b. **Run the consumer's pre-merge verification gates.** The consumer project's `<project>/CLAUDE.md` has a `## Pre-merge verification` section (per WORKFLOW.md § 6.1) that may contain two subsections:
+   - **`### Always`** — full-tree commands run unconditionally (lint, typecheck, tests).
+   - **`### Ratchet (changed files only)`** — a single bash block that filters `git diff --name-only origin/<default branch>...HEAD` to specific file types and invokes lint/typecheck against changed files only (empty filtered list short-circuits and passes).
+
+   Run the commands listed under each subsection that is present. If both subsections are absent, skip this step — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree), and the consumer accepts the risk. (`4a-post` also runs the Sysop pre-scan on its own, declared or not — so the promoted checks are not part of what the consumer is accepting risk on; the branch-in-isolation pass is.) Note the division of labour: this run verifies **this branch in its own worktree**, and is the only thing that ever does — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it.
+
+   Treat any non-zero exit like an implementation finding: fix the underlying issue, do not silence it without a `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>` justified inline. If the gate exits non-zero and you cannot fix it (e.g., missing toolchain dependency in the worktree), emit `STATUS: FAILED` with the stderr in `ERROR`.\
+4c. **Check for gitignored files your work reads.** From `<WORKTREE_PATH>`, run `python3 sysop/scripts/ignored_refs.py . <default branch>`. **Exit 0**: go on. **Exit 1**: quote every `IGNORED-REF:` line in your final message, and do not commit the file, edit `.gitignore` or file a task for it. **Any other exit** means the script failed: put its error in your final message and go on.
+5. **Post-fix UI verification** (the same gate `/claim-task` Step 7e's executor runs internally) only if any `frontend/` files changed — invoke `.claude/skills/_shared/ui-verify.md`.\
+5b. **Invoke `/document-work --non-interactive`** via the `Skill` tool to commit your work, write `sysop/runtime/pending-docs/<sanitized-branch>.md`, and enforce the follow-up stub check.
+
+   The `--non-interactive` flag (see `/document-work` Step 0) tells the skill to:
+   - Derive the commit message from `tasks/index.yml § tasks[]` `title:` + `<TASK_ID>` rather than prompting the human (Step 2).
+   - Skip Step 4's "confirm pending docs" human-confirm prompt; the orchestrator + reviewer pair gated the work. The pending-docs body prints to stdout so this agent's transcript captures it.
+   - Skip Step 5's `git push` (do NOT push from the worktree — `/review-close` owns the push to origin).
+
+   Non-interactive invariants the agent MUST honor when invoking `/document-work --non-interactive`:
+   - **Step 3b follow-up stub check** — if you surfaced a follow-up task in the work, file the stub (entry in `tasks/index.yml` + body file under `tasks/open/`) BEFORE invoking `/document-work`. The relaxed hard-constraint below permits this. The Step 3b gate fires whether invoked interactively or via `--non-interactive`.
+
+   If `/document-work` exits non-zero (e.g., Step 3b hard-fail on an unfiled follow-up ID), treat it as the existing Step 7 failure path: do not retry; emit `STATUS: FAILED` with the `/document-work` stderr in `ERROR`.
+6. On success → emit envelope with `STATUS: EXECUTED`.
+7. On exception or test failure → do **NOT** add a retry loop. The post-fix convention pass in step 4 above already includes one-fix-and-recheck semantics; that's the budget. Emit envelope with `STATUS: FAILED` and the error text in `ERROR`.
+
+### Hard constraints
+
+- Do **NOT** invoke the Agent tool — the orchestrator has already done the planning + adversarial-review fan-out. No nested adversarial pass, even on harness versions (Claude Code ≥2.1.172) where nested spawns are permitted.
+- Do **NOT** flip `status:` fields in `tasks/index.yml` — `/claim-task` (open → in_progress) and `/review-close` (in_progress → done) own status transitions.
+- ADDING a new task entry (a follow-up surfaced during the work) IS allowed — but it is Sequence item 3‑tier's **second** outcome, not the default: fix first. When a follow-up is filed, `/document-work` Step 3b (follow-up stub check) requires every `<PREFIX>-<NAME>` token in pending-docs prose to resolve to a real entry in `tasks/index.yml` — file the entry + body file before invoking `/document-work`, or whitelist it intentionally per `tasks/schema.md`.
+
+### Required final-message format
+
+Emit exactly this YAML block as the LAST content in your final message, with NO content after the closing backticks:
+
+```yaml
+TASK: <TASK_ID>
+STATUS: EXECUTED | FAILED
+WORKTREE: <absolute path, no trailing slash>
+BRANCH: <branch name>
+PARKED_REASON: none
+ERROR: <error description if FAILED, else "none">
+```
+
+If the consuming project wires up sub-agent cost attribution, also emit `SPEND_USD: <float>` on a line BEFORE the closing envelope. Otherwise omit it — `_shared/adversarial-review.md § Caller contract` documents the opt-in pattern.
+
+Execution agents never emit `STATUS: PARKED_ON_QUESTION` — parking happens at the orchestrator layer in Phase 6d before the execution agent is spawned. A malformed envelope (missing keys, content after the closing backticks, status not in {EXECUTED, FAILED}) causes the orchestrator to classify your run as `FAILED` with reason `envelope parse error` — subject to the **Phase 7: Envelope Recovery** filesystem check below, which can reclassify an envelope-parse miss back to `EXECUTED` when the commit landed and `sysop/runtime/pending-docs/<branch>.md` exists. The valid envelope STATUS enum remains `{EXECUTED, FAILED}`; `EXECUTED (envelope-recovered)` is an orchestrator-synthesized rendering annotation used only in the Step 8 report — execution agents must not emit it.
+
+**END OF EXECUTION AGENT PROMPT**
+
+---
+
+## Phase 7: Envelope Recovery
+
+**Why this exists.** Execution agents sometimes complete their work cleanly (commit landed on the worktree branch AND `sysop/runtime/pending-docs/<branch>.md` written by `/document-work`) but omit the required Step 7c YAML envelope. Strict envelope-only classification would FAIL these runs as `envelope parse error` despite the substantive work being correct. Phase 7 cross-checks the filesystem so an envelope-discipline miss does not become a false-positive FAIL — while remaining observed-state-only (it never synthesizes an EXECUTED claim where work did not actually land).
+
+**Scope.** Phase 7 fires ONLY for tasks whose Phase-6e envelope failed to parse via BOTH the `SubagentStop` JSON path AND the existing regex-parse-the-return-text path. Tasks resolved via either of those two upstream paths pass through Phase 7 untouched (no extra git invocations). With the `SubagentStop` hook in place, Phase 7 moves from "expected sometimes-fires" to "rare-edge-case-only" — fires only when the sub-agent never emitted any envelope at all (e.g., crashed mid-write) or both parsers genuinely missed the envelope's existence.
+
+### Phase 7 procedure (per task with malformed/missing envelope)
+
+The orchestrator (top-level session, holding the per-task `PRE_EXEC_HEAD` captured in Phase 6e) runs:
+
+```bash
+# Substitute this task's worktree path for <worktree path> and the pre-exec HEAD you
+# captured at Phase-6e spawn time for <pre-exec head>. Both are values you hold, not
+# shell variables — nothing survives from Phase 6e's block to this one (`WORKFLOW.md`
+# § 8.2a *Persistence boundary*). `BRANCH_NAME` and the two below are assigned right
+# here, so those names ARE safe to carry within this block.
+#
+# Canonical branch-name sanitization — matches /document-work's convention
+# (git branch --show-current | tr / -). Do NOT substitute a bash parameter
+# expansion; keep the tr form for parity with the rest of the workflow.
+BRANCH_NAME=$(git -C "<worktree path>" branch --show-current | tr / -)
+
+# Filesystem check: did the work actually land?
+NEW_COMMITS=$(git -C "<worktree path>" log --oneline "<pre-exec head>..HEAD" | wc -l | tr -d ' ')
+PENDING_DOC_EXISTS=$(test -f "<worktree path>/sysop/runtime/pending-docs/$BRANCH_NAME.md" && echo true || echo false)
+
+# Load-bearing AND-check: BOTH conditions must hold for recovery. Either one
+# alone is insufficient — commits without a pending-doc means /document-work
+# never ran (so /review-close has nothing to consolidate), and a pending-doc
+# without commits means the agent fabricated documentation against an empty
+# diff. Recovery is observed-state-only; it confirms an envelope-parse miss
+# against the filesystem, it does NOT synthesize a new EXECUTED claim.
+if [ "$NEW_COMMITS" -ge 1 ] && [ "$PENDING_DOC_EXISTS" = "true" ]; then
+  # Reclassify for Step 8 reporting only — the YAML envelope STATUS enum
+  # itself remains {EXECUTED, FAILED}; this label is an orchestrator-side
+  # rendering annotation, not a value any agent emits.
+  RECOVERED_STATUS="EXECUTED (envelope-recovered)"
+else
+  # Keep FAILED with a more specific reason than bare "envelope parse error".
+  RECOVERED_STATUS="FAILED"
+  RECOVERED_ERROR="envelope parse error AND no committed work found"
+fi
+```
+
+### Reporting in Step 8
+
+Tasks reclassified to `EXECUTED (envelope-recovered)` MUST appear in the Step 8 result table with that exact sub-status (not bare `EXECUTED`) so envelope-discipline drift is visible to the human merge-gate. The Notes column should call out the recovery (e.g., `envelope omitted; recovered via filesystem check (N commits, pending-doc found)`).
+
+### Acceptance test (manual)
+
+A deliberately broken envelope test — return only the literal text `done.` from the execution agent — should:
+
+- Recover to `EXECUTED (envelope-recovered)` in Step 8 if both the commit and `sysop/runtime/pending-docs/<branch>.md` landed.
+- Stay `FAILED` with reason `envelope parse error AND no committed work found` if either is missing.
+
+## Step 8: Final Report
+
+After all in-flight Phase-6e agents have returned envelopes — and all Phase-6d-parked tasks have been written to their scratch directories — produce the final report.
+
+If `SPEND_USD:` was wired in by the consuming project, cumulative spend aggregates from every spawned sub-agent across all three phases (plan + reviewer + execution) plus any spend the orchestrator itself incurred. Tasks parked in Phase 6d still contribute the plan + reviewer spend even though no execution agent ran. If `SPEND_USD:` is not wired in, omit the spend column from the table and the cumulative-spend line.
+
+**Under `--unattended`, print Step 4's output first, unchanged:** the batch table, the *Requested but not batched* list and the *In-flight overlap* block, whichever Step 4 printed. Give each task Step 5 claimed before an abort that wrote the halt marker a row with status `CLAIMED, NOT STARTED` and Step 5's release advice in its Notes. If Step 5 wrote the halt marker, follow them with one line naming it.
+
+Print the result table:
+
+```
+## Auto-Build Complete
+
+| Task        | Status                          | Worktree                            | Branch        | Spend (plan+rev+exec) | Notes                                            |
+|-------------|---------------------------------|-------------------------------------|---------------|-----------------------|--------------------------------------------------|
+| TECH-X      | EXECUTED                        | ../<project>-tech-x/                | tech/tech-x   | $X.XX                 | sysop/runtime/pending-docs/<branch>.md written; classification at sysop/runtime/claim/TECH-X/<CYCLE_TS>/classification.md; ready for /review-close |
+| TECH-W      | EXECUTED (envelope-recovered)   | ../<project>-tech-w/                | tech/tech-w   | $X.XX                 | envelope omitted; recovered via Phase 7 filesystem check (N commits, pending-doc found) |
+| TECH-Y      | PARKED                          | ../<project>-tech-y/                | tech/tech-y   | $X.XX                 | <one-line summary>; verdict at sysop/runtime/auto-build/review.md |
+| TECH-Z      | FAILED                          | ../<project>-tech-z/                | tech/tech-z   | $X.XX                 | <error from ERROR>                               |
+
+Cumulative orchestrator + agent spend: $X.XX  (logged only; no enforcement in v1)
+
+Next steps:
+  - Resume PARKED tasks: cd into the listed worktree. The plan-only agent's raw
+    plan is at `sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>/plan.md` in the main checkout,
+    and the orchestrator wrote the adversarial verdict to the worktree's
+    `sysop/runtime/auto-build/review.md` (parking happens BEFORE inline absorption,
+    so plan.md is the unrevised plan). Read both, resolve the blocker (answer
+    the question, add the missing source data, etc.), then continue the work
+    manually — implement it yourself, or hand it to `/claim-task`, which now
+    orchestrates plan → independent review → classify → execute in
+    sub-agents. **It does not enter plan mode; nothing in that pipeline does.** The `sysop/runtime/auto-build/` scratch
+    directory is not committed by the orchestrator; clean it up before
+    `/document-work`. If the worktree was already cleaned up (e.g. via
+    `cleanup_worktrees.sh --force`, which removes every non-main worktree
+    wholesale), the same plan + verdict survive at the
+    project root under `sysop/runtime/parked/<TASK_ID>__<timestamp>.md` — the
+    durable copy the orchestrator mirrored in Phase 6d.
+  - Read an EXECUTED task's adversarial classification at
+    `sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>/classification.md` (Phase 6d) — which
+    findings the orchestrator absorbed, which it rejected, and the per-clause reason
+    for each rejection. This is the only durable record of that judgment; before
+    this record existed the all-fixable path wrote nothing at all, so a rejected finding left
+    no trace for anyone to disagree with. The executor's own reading sits beside it
+    in `revised-plan.md` (Step 7c item 2), and the planner's `plan.md` with them. The
+    directory lives in the main checkout, survives `git worktree remove`, and
+    `/review-close` removes it when the task closes.
+  - For EXECUTED tasks: start a fresh session (`/clear`, or a new terminal),
+    then run /review-close to merge each branch — `/review-close` is
+    context-independent (it reconstructs from the committed branches, the
+    `## Test decision` records, and `sysop/runtime/pending-docs/`), so a clean session
+    reviews every pending branch even-handedly instead of inheriting one
+    task's implementation context. It discovers the `sysop/runtime/pending-docs/<branch>.md`
+    each execution agent wrote and consolidates per the consumer's
+    `## Pending documentation routing` in `<project>/CLAUDE.md`. The human
+    stays the merge gate.
+  - For FAILED tasks: cd into the worktree, inspect git status and recent logs,
+    then either fix-and-resume or roll back. To roll back, cd back to the main
+    checkout first (the release refuses to run from inside the worktree it is
+    removing), then:
+        bash sysop/scripts/claim_task.sh --release <TASK_ID>
+    That removes this task's worktree, releases its lock, and flips its status
+    back to open; then commit that flip on main (the release deliberately
+    leaves it uncommitted and prints the git command). To discard uncommitted
+    work in the worktree, --force must come BEFORE the task id
+    (--release --force <TASK_ID>) -- a trailing flag is rejected. The flip
+    step needs a PyYAML-capable python3 on PATH; without one it exits having
+    changed nothing and prints a manual recipe. Do NOT use
+    cleanup_worktrees.sh --force -- it takes no path operand, so it removes
+    every non-main worktree including the EXECUTED ones listed above that are
+    still waiting for /review-close, and it clears no lock.
+```
+
+After printing the table, the orchestrator's job is done. It does NOT run `/review-close`. The human is the merge gate.
+
+## Done (v1 success criteria)
+
+- `/auto-build` selects a batch using the Step 2 batch-sizing rule and presents per-task math to the human (Step 4), or prints it and goes on under `--unattended`.
+- After confirmation (at once under `--unattended`), the orchestrator pre-claims each task on `main` (Step 5), then runs the three-phase per-task pipeline: Phase 6a plan-only agents → Phase 6b adversarial-reviewer agents → Phase 6c orchestrator classification → Phase 6d halt-or-revise → Phase 6e execution agents (Steps 6-7).
+- Phase-6d `blocker` classification parks the task (lock + worktree intact, the plan already in `sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>/plan.md`, `review.md` written to `<worktree>/sysop/runtime/auto-build/`, and the plan + verdict mirrored to the durable project-root archive `sysop/runtime/parked/<TASK_ID>__<timestamp>.md` so they survive worktree cleanup); other tasks continue.
+- Unparked tasks reach Phase 6e and execute. Final report (Step 8) prints `EXECUTED` / `PARKED` / `FAILED` with worktree paths.
+- One full cycle on a 2-task batch of Low-effort + single-file tasks from the consumer's `tasks/open/` completes end-to-end, and the human runs `/review-close` cleanly on each resulting branch.
+- A deliberately-broken plan (task body that mentions a non-existent file) causes Phase 6c to classify a `blocker` and Phase 6d to park the task — visible in the final report and via the scratch files.
+- No nested Agent tool calls anywhere in the spawned-agent prompts (by design — the orchestrator does all fan-out, even on Claude Code ≥2.1.172 where nesting is permitted).
+- No model-guard halt anywhere in the flow (an earlier build removed the transcript-based guard; the harness honors each spawn's `model` pin directly).
+
+## Out of scope for v1
+
+Deferred to v2+:
+
+- **Hard spend / token caps.** v1 logs cumulative spend (when wired up by the consumer) but does not enforce a kill switch.
+- **Timeout-and-release on parked agents.** Default is parked-forever — the human resumes manually.
+- **Auto-merge of clean batches.** Human stays the merge gate.
+- **`/parked-agents` companion or resume helper.** Manual `cd` into the worktree.
+- **Standalone `sysop/scripts/select_batch.py`.** Promote after 3-5 cycles when the batch-math shape stabilizes.
+- **Auto-detecting DB-contention from task bodies.** The verbatim warning at Step 3 is the bake-in.
+- **Separate plan-revise agent in Phase 6d.** v1 absorbs `fixable` findings inline by passing `PLAN_TEXT + RAW_FINDINGS` into the execution agent's prompt. A cleaner alternative is a third sub-agent that produces an explicit `REVISED_PLAN` text the execution agent consumes verbatim. Promote when the inline-absorption shape shows drift in practice.
+- ~~**Reviewer-executor collapse for `/auto-build` Phase 6b-6e.**~~ **Closed by events, not deferred — do not re-open it.** This entry proposed porting `/claim-task`'s collapsed reviewer-executor to `/auto-build`, on handoff guidance that said to validate the interactive shape first. A later build settled it the other way: the collapse **failed in the field** and was retired, and `/claim-task` was reshaped to the shape `/auto-build` already had — an independent reviewer (7b), classification at the orchestrator itself (7c), an executor (7e). See `_shared/adversarial-review.md § "The reviewer-executor variant is retired"`, which no longer contains the handoff sentence this entry used to quote. `/auto-build` keeps its three-phase (plan-only → adversarial-reviewer → execution) shape because that shape won.
+
+## First downstream consumer
+
+TBD — Sysop has no consumer with a parallelizable batch yet. The skill ships speculatively against the day a real consumer needs it. The first cycle will surface friction via the consumer's `sysop/SYSOP_ISSUES.md`; iterate from there.

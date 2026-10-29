@@ -1,0 +1,192 @@
+---
+name: sitrep
+description: Survey the Sysop surface — locks, worktrees, branches, index entries, review batches — and report where each task sits in the lifecycle with a single top routing recommendation. Read-only.
+disallowed-tools: Edit, Write, NotebookEdit
+model: haiku
+---
+<!-- sysop:model-roles frontmatter=quick -->
+
+A read-only situation report across all active Sysop work. Surveys the filesystem + git state (locks, worktrees, `task/*` / `review/*` branches, `tasks/index.yml`, `review_tasks.md`), correlates each artifact against the others, classifies every task into a deterministic lifecycle state, and prints a scannable summary plus a top routing recommendation (which skill to invoke next, and whether to `/clear` first).
+
+> **Structural read-only guard:** the `disallowed-tools` frontmatter (Claude Code 2.1.152+) removes the file-write tools while this skill is active. Partial by design — `Bash` stays allowed for the git/python reads below, so the guard covers the dedicated write tools, not shell redirects. Non-Claude-Code harnesses ignore the key.
+
+Designed for cold-context resumption: run after a restart, after stepping away, or when one parent session needs to know what other sessions are doing without asking each one. **Never mutates state** — no file writes, no lock cleanup, no pushes, no `/triage` invocation (the recommendation is informational; the human or the routed skill is the actuator). The actuators stay `/review-close`, `/triage`, `/auto-fix`, `/auto-judge`, `/auto-build`, `cleanup_worktrees.sh`, and the consumer's hand.
+
+## Pre-flight: Permission Guard
+
+This skill shells out to `git`, `python3`, and reads under `<main-repo>/sysop/runtime/locks/`, `tasks/index.yml`, and `review_tasks.md`. It writes nothing.
+
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and confirm `permissions.allow` satisfies:
+
+- `Bash(python3 sysop/scripts/sitrep_survey.py:*)` — the survey script itself, and the skill's **only** Bash call
+
+The skill's git work — `git rev-parse` for git-common-dir resolution, `git log` / `git status` / `git branch` / `git rev-list` / `git worktree list --porcelain` — all happens **inside `sitrep_survey.py`**, as subprocesses of the permitted `python3` call, so none of it binds a Bash rule of its own (the same reasoning `/claim-task` Step 2 applies to `scope_overlap.py`). Even at the Bash layer they would need no rule: read-only forms of `git` are auto-approved in every permission mode. (All six *were* once listed as hard requirements, none shipped in the seeded allow-list, and the block ended "Do not proceed" — so an agent following this skill literally hard-stopped `/sitrep` on a fresh install. It went unnoticed for the reason internal tracker #205 gives for its own case: the one consumer exercising the path knowingly overrode the documented gate.)
+
+If the required rule is unsatisfied, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "read-only survey of active Sysop tasks; shells `git` plumbing + `python3 sysop/scripts/sitrep_survey.py` to classify lifecycle states"). Do not proceed — unless the guard's step 3 mode check applies.
+
+If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
+
+## Step 0: Parse Arguments
+
+Parse `$ARGUMENTS` for optional flags:
+
+- **`--json`** — emit the structured classification as JSON to stdout (default is the human-readable text report). The shape is a stable contract for scripts; its key list and versioning rule are in `sitrep_survey.py`'s module docstring.
+- **`--stale-days N`** — override the abandoned-claim threshold (default 7 days). Used when investigating a long-paused task that should not yet be flagged.
+
+No positional arguments. `/sitrep` always surveys the entire Sysop surface; per-task investigation is the human's follow-up via `git`/`cat` after seeing the report.
+
+## Step 1: Run the Survey Script
+
+Invoke from the repo root (the script resolves `git rev-parse --git-common-dir` itself, so it works from any worktree):
+
+```bash
+python3 sysop/scripts/sitrep_survey.py [--json] [--stale-days N]
+```
+
+The script is idempotent and read-only. It exits 0 on a successful survey regardless of how many discrepancies it finds — discrepancies are reported in the body, not via exit code. Exit 1 means the script itself failed (a missing repo, for example; an unreadable input file is not one, and is reported as an `input unreadable` discrepancy at exit 0); surface the error to the human and stop.
+
+## Step 2: Surface the Report
+
+Print the script's stdout verbatim. The report is already formatted for direct human consumption — do NOT re-summarize or paraphrase; the human is reading the same screen as you and re-summarization adds latency without adding signal.
+
+After the verbatim report, add one closing line:
+
+```
+Read-only survey — no state changed. Actuators: /review-close, /document-work, cleanup_worktrees.sh, manual git.
+```
+
+## Step 3: Offer Next Action (optional)
+
+The report's `RECOMMENDED NEXT` block names the single highest-priority next move (e.g., `→ /review-close TECH-0015`, `→ /triage`, `→ /auto-judge`). You may ask the human whether to proceed with it. Do NOT proceed without explicit confirmation — the survey is meant to inform, not actuate. The recommendation is also surfaced in `--json` output under `recommended_next` for orchestrator consumption.
+
+## Recommendation routing rules (reference)
+
+The `RECOMMENDED NEXT` block applies a priority cascade — first match wins:
+
+| Priority | State                                                                  | Recommendation                                                       | /clear nudge |
+| -------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------ |
+| 0a       | `tasks/index.yml`, `review_tasks.md`, a lock or the locks directory could not be read (an `input unreadable` discrepancy) | `repair <file>: <remedy>; then re-run /sitrep`                       | no           |
+| 0b       | Any task `lock unreadable`                                             | repair the named lock and re-run — never `--release` it              | no           |
+| 0c       | Any review batch `lock unreadable`                                     | repair the named lock and re-run — never `--release` it              | no           |
+| 0d       | A `close stopped` discrepancy (an unattended close's `sysop/runtime/close/<run-id>/STOPPED`) | a human: do the recovery the marker names, then `close_run.py clear <run-id>` | no           |
+| 0e       | Any task `awaiting --land`                                             | `/review-close --land <run-id>`, with `--unattended --agent <name>` for a hand-off requested with `--agent`; `close_run.py re-request` when no review was requested | no           |
+| 0f       | Any task `land parked`                                                 | a human: read `sysop/runtime/close/<run-id>/PARKED`, then `re-request`, `unpark` or an attended `--land` that merges; `re-request` alone when no review was requested | no           |
+| 1        | Any task `ready for /review-close`                                     | `/review-close <ID>`                                                 | no           |
+| 2        | Any review batch `ready for /review-close` (all tasks Doc-Work'd and its pending doc not stale — row `4g` takes a stale one), **or header status `Review Ready`** (its doc is not read) | `/review-close (batch N)`                                            | no           |
+| 3        | Any task `doc-work done, unpushed`                                     | `/review-close <ID>`                                                 | no           |
+| 3b       | Any task `merged, close pending`                                       | `/review-close <ID>`, or first its user step and `clear_user_action.py <ID>` when `user_action` is set, and the work its doc's `hold:` names and `pending_doc_hold.py clear <ID>` when it carries one | no           |
+| 4a       | Pending unclaimed batches exist, ≥1 lacks a `> **Triaged:**` record    | `/triage` (with sample of untriaged batch numbers; names how many carry an unstamped `Flag:` tag) | no           |
+| 4b       | Pending unclaimed batches all triaged, mix of auto + flag              | `/auto-fix` (concurrent with `/auto-judge`)                       | yes          |
+| 4c       | Pending unclaimed batches all triaged, flag-only                       | `/auto-judge`                                                        | yes          |
+| 4d       | Pending unclaimed batches all triaged, auto-only                       | `/auto-fix`                                                       | yes          |
+| 4e       | Any task `code committed, docs pending`                                | `/document-work <ID>`                                                | no           |
+| 4f       | Any task `pending doc stale`                                           | `/document-work <ID>` (re-stamps the doc's `branch_tip:`)            | no           |
+| 4g       | Any review batch `pending doc stale`                                   | `/document-work` on the batch's branch, then `/review-close (batch N)` | no           |
+| 5        | Any task `in progress`                                                 | `continue work or /document-work <ID>`                               | no           |
+| 5b       | Any review batch `in progress`                                         | `continue work on batch <N> (branch <branch>) then /document-work`   | no           |
+| 6a       | Any task `parked, work in progress`                                    | read the park marker; `--resume <RUN_ID>` only when a run exists — the claim committed before it parked | no           |
+| 6b       | Any task `parked`                                                      | read the park marker; `--resume <RUN_ID>` only when a run exists     | no           |
+| 6c       | Any task `awaiting approval`                                           | `/claim-task <ID> --resume <RUN_ID>` — approve or revise the plan    | no           |
+| 6d       | Any review batch `parked, work in progress`                            | read the park marker; `--resume <RUN_ID>` only when a run exists — the batch committed before it parked | no           |
+| 6e       | Any review batch `parked`                                              | read the park marker; `--resume <RUN_ID>` only when a run exists     | no           |
+| 6f       | Any review batch `awaiting approval`                                   | `/claim-task BATCH-<N> --resume <RUN_ID>` — approve or revise the plan | no           |
+| 6g       | Any task `claimed, no branch`                                          | recreate the branch, or `claim_task.sh --release <ID>`               | no           |
+| 6h       | Any review batch `claimed, no branch`                                  | recreate the branch, or `batch_work.sh --release <N>`                | no           |
+| 6i       | Any review batch `empty batch`                                         | `verify review_tasks.md batch contents`                              | no           |
+| 6j       | Any task `planning`                                                    | `resume planning for <ID>`                                           | no           |
+| 6k       | Any task `stale`                                                       | `investigate <ID>; confirm dead and rm the lock if abandoned`        | no           |
+| 7a       | No active work, **> 4** open roadmap tasks (deeper than one `/auto-build` batch) | `/roadmap` (strategy view: group + order before batching; with sample of open IDs) | no           |
+| 7b       | No active work, **1–4** open roadmap tasks (fits one batch)            | `/auto-build` (with sample of open IDs)                             | yes          |
+| 8        | Truly idle (no work, no roadmap, every input read)                     | none — block reads `(idle …)`                                        | no           |
+
+**Rows `0a`–`0c` gate on the three inputs every other row is read through: the index, `review_tasks.md` and the locks.** An unreadable `tasks/index.yml` reads as an empty index, so without `0a` the survey ends in row `8`'s *idle* over live work. A lock that cannot be read, or parses to no fields (an empty file, a YAML list), has unknown fields, not empty ones: `0b`/`0c` route to the repair, because reading its empty `branch` as `claimed, no branch` would route a possibly-live claim to `--release`. A lock that is a mapping without `branch:` is readable and stays `claimed, no branch`. **A round receipt does not gate:** only the round-coverage check reads it, so an unreadable one is a plain `round receipt unreadable` discrepancy and routing is unaffected.
+
+**Row `4e` is not a batch row**, despite sitting in the `4` block: `4a`–`4d` route the review-batch queue and `4e` routes a single task whose build is committed but undocumented. It is placed there because that task is *further along* than an in-progress one and still not closable — the same reason the code puts its arm between P4 and P5. **This row was once missing from this table**, while the arm had already shipped in `_recommended_next`'s cascade: the states table was guarded and this one was not, so a state could be wired into the cascade with no routing row and nothing went red. A guard added since closes that, and finding this row absent is what it found first.
+
+**Rows `6a`, `6b`, `6d` and `6e` withhold the `--resume` line when there is no run to resume.** An `/auto-build` park writes a marker and no `/claim-task` run: its `sysop/runtime/claim/<ID>/<CYCLE_TS>/` directory has no hex half, and `--resume` there would re-plan and drop the blocker. The recommendation names the marker instead.
+
+**Rows `6a`–`6f` report a stall; they never assert one from absence.** `sysop/runtime/` is gitignored, the `SubagentStop` envelope is Claude-Code-only, and a `--resume` onto a rebuilt worktree legitimately carries no artifacts — so a claim with nothing on disk stays `6j planning`, exactly as before. The probe only ever upgrades a classification on positive evidence (a park marker, or a `classification.md` verdict). Absence is *unknown*, never *did not run*.
+
+**Rows `6d`–`6f` are `6a`–`6c` on the review-batch path.** `_claim_stall` was always claim-kind agnostic — the runtime paths are keyed by `<CLAIM_ID>`, which is `BATCH-<N>` for a batch — but it had exactly one call site, and `run_survey`'s lock loop `continue`s on a `BATCH-` prefix before reaching it. A `/claim-task` Step-7c park of a review batch therefore reported `in progress — continue work; 0 of N tasks have Doc-Work trailers yet`, which is what an unstarted claim reports. The two classifiers stay separate; the batch one makes its own call under the same rule, so the two paths cannot drift into different answers about what a park is. The batch states are **additive** in `--json`: they are new values of the existing `review_batches[].state` string, with the evidence in the existing `notes` array — no new keys and no reshape, so a consumer that passes the state through is unaffected.
+
+**Rows `6a` and `6d` are the park with work, and the rule has three arms, applied identically on both paths.** An earlier version of the park probe ran only for a claim with 0 commits ahead of the default branch, on the premise that a park is "by construction the state where nothing has been produced" — false for two shipped park sites (`planner-integrity.md` = `VIOLATED` is recorded when HEAD moved or left the task branch during 7a, usually by a planner commit; an executor `STATUS: BLOCKED` parks after the executor ran), so a marker beside one commit reported `in progress`. Now: **0 commits and park evidence → `parked` / `awaiting approval`** (rows `6b`/`6c`, `6e`/`6f`); **commits, and the park is the latest event → `parked, work in progress`** (rows `6a`/`6d`, outranking every commit-shape state including `ready for /review-close`, because a park is a human decision pending and the trailer state of the commits it parked on does not answer it); **commits newer than the park → the claim resumed** and reports its ordinary state, with the marker named in `notes`. The third arm exists because a `--resume` never removes a marker — the close does (`/review-close` Step 4c for a roadmap claim, `close_batch.sh` for a batch), and so does `batch_work.sh --release` for a batch (`claim-task/SKILL.md` § *What cleans it up*) — so between a `--resume` and the close a live claim carries a marker beside its new commits, and calling that `parked` would send the human back to a marker they already acted on. "Latest event" is the later of the marker's write time and the UTC stamp in its name (the run's start, which bounds the park from below), against the newest commit's author date; when neither can be read, the park stands.
+
+**Rows `6g`–`6i` are diagnostics, and their states once had no row and no arm.** A state a classifier emits with no arm in the cascade drops off `RECOMMENDED NEXT` *and* the ordered list together — a review round recorded that shape for `code committed, docs pending`, and it was reproduced for a parked batch whose branch had been deleted: it classified `claimed, no branch` (that arm precedes the park arm on purpose, since a branchless claim is the more actionable diagnosis and `--resume` cannot work without the branch), its park notes were dropped, and it vanished. The fix keeps the ordering, carries the park evidence into `notes`, and gives the state an arm; the same sweep gave `empty batch`, batch `in progress` (row `5b`) and `stale` (row `6k`) theirs. `tests/test_sitrep_park_wip.py` derives the state set from both classifiers and drives one of each through both tables, with no allowlist.
+
+**`FAILED IN MERGED BATCHES` is a report section, never a row.** A task `/auto-judge` failed keeps its open box and its `> Failed:` note in a batch `close_batch.sh` still marks `Merged`, and every row above reads only `Pending` and `In Progress` batches. The section names each such task with its batch number, decided by `close_batch.sh`'s own rule for which tasks it held. It changes no recommendation, and `--json` carries it as `failed_in_merged_batches`. `archive_review_tasks.py` still warns and never blocks before it moves them out.
+
+The `/clear` nudge fires on every recommendation that spawns parallel reasoning-tier agents (`/auto-fix`, `/auto-judge`, `/auto-build`). It is intentionally always-on for those skills because `sitrep` cannot see the caller's context size and the cost of an unneeded nudge is small.
+
+### Why `/sitrep` does not auto-invoke `/triage`
+
+**Priority 2's `Review Ready` arm is computed by the script, from the raw `review_tasks.md` headers**: `sitrep_survey.py` filters to `Pending`/`In Progress` before building `review_batches` (and the `--json` payload `/roadmap` reads — that contract is unchanged), so a `Review Ready` batch never enters that list. The survey therefore carries the live-status batches on their own field (`review_ready_batches`, read from the raw headers) and `_recommended_next`'s P2 arm fires on it first — the cascade table above documents what the script computes, not an instruction to re-derive it by hand (Step 2's print-verbatim rule stands). Do not confuse it with the near-identical *terminal* status `Ready for Review` (a finished batch, no recommendation).
+
+When pending batches lack a `> **Triaged:**` record, `/sitrep` recommends `/triage` but does not run it. (Routing on the `Triaged:` record rather than on `Flag:`-tag presence is what lets 4a distinguish "classified as auto" from "never read" — as `Flag:`-keyed states, those were the same state, so an all-auto queue re-recommended `/triage` on every run.) The read-only property is worth defending: `/sitrep` is meant to be safe to invoke reflexively when cold-resuming, with no risk of "did that just write something?" The extra keystroke to run `/triage` after `/sitrep` is cheap; the violated invariant is not.
+
+## Classification states (reference)
+
+The survey script classifies each discovered task into exactly one state. Listed here so consumers reading the output know what each label means. **Review batches have their own vocabulary** — enumerated in `roadmap/SKILL.md`'s `--json` `state` field, and actuator-keyed in its § *Batch actuators* table — but it now shares this table's **Parked**, **Parked, work in progress** and **Awaiting approval** signals, read with `<CLAIM_ID>` = `BATCH-<N>`; rows `6d`–`6f` above route them. It shares **Pending doc stale** too, for a batch whose every task carries a trailer; row `4g` routes it:
+
+| State | Deterministic signal |
+|---|---|
+| **Lock unreadable** | A lock file at `<git-common-dir>/sysop/runtime/locks/<ID>.lock` could not be read or parsed (permissions, a non-UTF-8 byte, bad YAML), or parsed to no fields (an empty file, a YAML list or scalar). Its fields are unknown, so no other state is inferred from them; the next action names the lock and the repair, never a release. Precedes every other state, on both paths |
+| **Claimed, no branch** | Lock present at `<git-common-dir>/sysop/runtime/locks/<TASK_ID>.lock`; the lock records no branch (task path) or the recorded branch does not exist (batch path). Park evidence, when present, is carried in `notes` |
+| **Planning** | Lock + branch present; branch has 0 commits ahead of the default branch |
+| **In progress** | Branch has ≥1 commits ahead of the default branch (reachable from neither the local branch, its remote-tracking ref, nor a recorded PR head `refs/sysop/merged-pr-heads/*` that `/review-close` Step 4d writes under `pr`); no commit on the branch carries a `Doc-Work:` trailer |
+| **Code committed, docs pending** | At least one commit carries `Doc-Work: <TASK_ID>` but **no pending-doc exists** for the branch — the normal terminal state of `/claim-task`'s build pipeline, whose executor emits the trailer without running `/document-work` |
+| **Pending doc stale** | A `Doc-Work: <TASK_ID>` commit and a pending-doc, and commits landed on the branch after the doc's `branch_tip:` — `/review-close` Step 3b refuses such a doc. Counted in the workspace the doc was found in. A `branch_tip:` that is absent, not a string, a `<…>` placeholder, not 7–64 hex characters, or unresolvable leaves the task in the two states below, with the reason in `notes`; so does a doc in the main checkout when the branch has no workspace of its own, which Step 3b never measures |
+| **Ready for `/review-close`** | At least one commit ahead of the default branch carries `Doc-Work: <TASK_ID>`, a pending-doc exists for the branch and is not stale (the row above), and the branch is pushed to origin |
+| **Doc-work done, unpushed** | As above with a pending-doc present; local ahead of `origin/<branch>` (or no upstream tracked) |
+| **Parked, work in progress** | Lock + branch, ≥1 commits ahead, and park evidence (a marker, or a `verdict: BLOCKED` run) whose time — the later of its write time and the stamp in its name — is **not older than** the newest commit's author date — the claim committed and then parked. Park evidence *older* than the newest commit means the claim resumed; it takes its ordinary state with the marker named in `notes` |
+| **Parked** | Lock + branch, 0 commits ahead, and a park marker `sysop/runtime/parked/<ID>__*.md` exists — either origin, `/auto-build` Phase 6d or `/claim-task` Step 7c, since both write that filename shape. Also reached when the newest run's `classification.md` reads `verdict: BLOCKED` with no marker on disk, which is reported as the park it is with the missing marker named |
+| **Awaiting approval** | Lock + branch, 0 commits ahead, no park marker, and the newest run under `sysop/runtime/claim/<ID>/` carries a `classification.md` reading `verdict: PROCEED` with no `outcome.md` — `/claim-task` Step 7d's human gate, reached and not answered |
+| **Merged, close pending** | Lock + branch, a pending doc in the main checkout's `sysop/runtime/pending-docs/` naming the branch, and either a recorded PR head (`refs/sysop/merged-pr-heads/<PR>`) containing its tip — a previous `pr` close squash-merged it — or, failing that, its local tip an ancestor of the default branch or its remote-tracking ref, the branch not being the default branch itself — a previous `direct` close merged it, or the branch never moved past its cut point. Either way no live tip past what contains it (the lock's workspace ref, `origin/<branch>` as last fetched) and no uncommitted work in a workspace on it, the main checkout included when it is on the branch (tracked changes only there); a close held its pending-doc, or `/document-work` wrote it into the main checkout for a claim with no commits of its own, which the close then reviews. Checked before the park, `planning` and `stale` arms, which would misread its 0 commits ahead |
+| **Awaiting --land** | Listed in the `kept_locks` of a sealed `/review-close --request-review` hand-off still pending (`awaiting`, `requesting` or `request-failed`), under `sysop/runtime/close/<run-id>/` with its `AWAITING` marker; reported with `has_lock` false, and a note, when the kept lock is gone. Its close ran to an open PR; only `/review-close --land <run-id>` merges it and removes the lock (`--land <run-id> --unattended --agent <name>` for a hand-off requested with `--agent`), or `close_run.py re-request` first when no review was requested. |
+| **Land parked** | As *Awaiting --land*, with a `PARKED` record beside the marker, written by `close_run.py park` or by the unattended land. Only a human moves it on: fix and `close_run.py re-request`, `close_run.py unpark` (or `re-request` alone when no review was requested), or an attended `--land` that merges. |
+| **Stale** | Lock or worktree exists, no commit activity in ≥ `--stale-days` (default 7); flagged as a candidate for human triage. Never a task whose branch a held pending doc names; that one gets a note instead |
+
+> **The trailer is not by itself a record that `/document-work` ran.** It was a
+> proxy for that, and stayed true only while `/document-work` was its sole emitter. Now
+> `/claim-task` Step 7e's executor emits `Doc-Work: <CLAIM_ID>` from its own
+> commit, so a branch where documentation was written and one where it was skipped became
+> indistinguishable to this survey — which then routed the operator past `/document-work`
+> while `/claim-task`'s own final report told them to run it. The two states are separated
+> by the presence of the pending-doc `/document-work` Step 3 writes. `/auto-fix` and
+> `/auto-judge` write one too, and `/auto-build` writes one via `/document-work
+> --non-interactive` — so the signal is not "only one skill writes the doc" but that the
+> doc and the `Doc-Work:` trailer have **disjoint producers**: none of those three emits
+> the trailer, and the state requires both. It is looked up in the branch's **workspace**, not on the
+> branch: `sysop/runtime/` is gitignored, so the file is never committed and a git-side
+> read would report it absent for every branch alike. Workspace resolution mirrors
+> `/review-close` Step 0's three arms (git-listed worktree → the lock's recorded
+> `workspace:` → the conventional sibling directory), because a `--clone` claim is listed
+> by no worktree and a `--clone` without `--lock` is recoverable by neither of the first two.
+
+The `Doc-Work:` trailer was introduced partway through the workflow's history — commits older than its introduction do not carry it and would misclassify as "in progress." The survey script applies a one-time fallback: if a commit's subject matches `<type>: ... (<TASK_ID>)` AND the branch is tracking `origin/<branch>` AND there are no later commits, treat as "ready for `/review-close`" with a `~` marker on the state to flag the heuristic. This fallback applies only to commits older than the trailer's introduction; the survey script reads its own embedded `PHASE_40_COMMIT` constant for the cutoff. Remove this fallback once all in-flight branches older than that cutoff close out.
+
+## Discrepancy categories (reference)
+
+The survey flags every mismatch between filesystem reality and the state files. Each discrepancy is paired with a suggested investigation, never an automated action:
+
+| Discrepancy | Detection | Suggested investigation |
+|---|---|---|
+| Stale lock | Lock exists, no worktree on disk | Investigate, then `rm <lock-path>` if dead |
+| Orphan worktree | Worktree exists, no matching lock, and its branch is no live batch's | Check uncommitted and ignored work (`git status --ignored`), then `git worktree remove` (after `git worktree unlock` when it is locked, as the printed action says) |
+| Orphan branch | Task-shaped branch (a fixed directory such as `task/`, `feat/`, `fix/`, `review/` or `batch/`, or `/claim-task` Step 3's derived `<prefix>/<prefix>-…` name for a prefix the index uses) with no lock, no worktree and no index entry, and no live batch's | Investigate, delete if dead |
+| Batch branch without lock | A worktree or task-shaped branch on the `> **Branch:**` of a `Pending`, `In Progress` or `Review Ready` batch, with no lock on that branch | In Progress: `batch_work.sh <N>` re-attaches and rewrites the lock (after moving the worktree to the path it names, if it sits elsewhere), or `--release <N>`. Pending: `batch_work.sh <N>` claims it, or the orphan removal. Review Ready: `/review-close`. A `BATCH-<N>.lock` naming another branch: make the two agree |
+| Index drift (in_progress without lock) | `tasks/index.yml` says `in_progress`, no `sysop/runtime/locks/<id>.lock` | Resync index or recreate lock |
+| Abandoned claim | Lock + worktree exist, no commits + claimed ≥ stale-days ago | Confirm dead with human, release lock |
+| Uncommitted work in stale worktree | Dirty status + no commits in N days | DO NOT cleanup — likely user's parked work |
+| Abandoned review round | `sysop/runtime/pending-rounds/*.pending` older than 2h | Re-run the skill; delete the marker only once the round is confirmed dead |
+| Close stopped | `sysop/runtime/close/<run-id>/STOPPED` exists: an unattended `/review-close` parked durably, and every later close refuses until it is cleared | Do the recovery it names, then `python3 sysop/scripts/close_run.py clear <run-id>` |
+| Branch held | `sysop/runtime/close/holds/<branch>.json` exists: an unattended close held the branch at its head (a `VERDICT: BLOCKED` or an unanswered question), and unattended runs skip it until the head moves; it does not change `RECOMMENDED NEXT` | An attended `/review-close` (which asks its question), a new head, or `close_run.py unhold <branch>` once its cause is fixed |
+| Unattended auto-build halted | `sysop/runtime/auto-build-halt.md` exists: an `/auto-build --unattended` run left a claim it could not verify, and later unattended runs stop until it is gone | Read it, reconcile the tasks it names (finish the claim, or `claim_task.sh --release <TASK_ID>`), then delete it |
+| Input unreadable | `tasks/index.yml`, `review_tasks.md`, a lock or the locks directory could not be read or parsed; reported next to the default-branch line, since every state in the report is read through these | Apply the named remedy (restore read access, re-save as UTF-8, or repair the YAML), then re-run `/sitrep` |
+| Round receipt unreadable | A receipt under `sysop/runtime/round-receipts/` could not be read, or is not a JSON object; only the round-coverage check reads it, so it does not gate `RECOMMENDED NEXT` | Delete it, or restore it from the round that wrote it — it is machine-written, so its content cannot be repaired by hand |
+| Round coverage | Newest receipt in `sysop/runtime/round-receipts/` recorded no coverage, a solo round with no reason, a narrowed round with no basis, a Full round that reached under a third of its scope, or a fan-out round with no per-worker `Fan-out coverage` line | Fill the round header's `Coverage` / `Fan-out coverage` line (Step 5b), or relabel the round `Sampled` and name the basis |
+
+## Deferred features
+
+- **`--cleanup-stale`** — actuate cleanup based on discrepancies. Deferred until classification accuracy is validated across 2–4 weeks of real use.
+- **`--task <TASK_ID>`** — drill into a single task's full state (lock contents, plan file, commit log, etc.). Deferred; today's report renders the per-task summary, and the human reads individual files for detail.
+- **Telemetry log** — append each invocation's classification + timestamp to `.sitrep.log` for trend analysis. Deferred until eyeballing the printed output proves insufficient.

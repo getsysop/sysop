@@ -1,0 +1,2130 @@
+---
+name: claim-task
+description: Claim a roadmap task or review batch — creates lock and worktree, then orchestrates plan → adversarial review → execute
+argument-hint: "<TASK_ID or BATCH_NUMBER> [--review-plan | --no-review-plan] [--resume <RUN_ID>]"
+model: opus
+disallowed-tools: Edit, Write, NotebookEdit
+---
+<!-- sysop:model-roles frontmatter=reasoning inline=reasoning -->
+
+Claim a roadmap task or review batch, create an isolated worktree, then **orchestrate** the work: spawn a planner, spawn an independent reviewer, classify the findings yourself, optionally gate on the human, spawn an executor, then ask the human its questions and spawn a second executor for the answers. Follow these steps in order.
+
+> **This skill is an orchestrator. It never implements.** It does not enter plan mode, does not call `ExitPlanMode`, and does not edit files. Its whole body is: claim, spawn, gate, spawn, ask, spawn, report. **Run it in the main conversation, never through an Agent call** — its planner, reviewer and executor waits can each outlive a subagent's prompt cache.
+>
+> **What `disallowed-tools` above does and does not buy** — state this honestly rather than treating the frontmatter as a proof. It denies the `Edit` / `Write` / `NotebookEdit` tools, so the orchestrator cannot quietly become the implementer by reaching for them. It is **partial by design**: `Bash` stays allowed, so shell redirects and `sed -i` are not covered. **Non-Claude-Code harnesses ignore the key entirely**, so it does nothing for a Codex consumer. It fires only when the harness *activates* this skill — when an agent is instead told to read this `SKILL.md` and follow it (path-based invocation, the only option on some harnesses), the frontmatter never fires. And it is **turn-scoped**: the documented behaviour is that the restriction clears when the user sends their next message, so any run in which the human types anything has lost it from that point. Whether it survives a sub-agent return, an `AskUserQuestion` answer, or a nested `Skill` invocation is **not established in either direction** — probed 2026-07-31 and no documentation was found for any tool-mediated boundary, which is weaker than proof that none exists and is exactly why nothing here rests on the answer. **Nothing in this skill may depend on the guard's reach past the step that invoked it.** The durable protection against an orchestrator drifting into implementing is the split spawns and the artifact set below, not this key.
+
+> **Helper names** referenced in this skill (e.g., `_sanitize_log`, `useAbortableFetch`, `getDisplayError`, `redact_api_keys`, `shared_cli.py`) are placeholders — substitute the equivalent helpers from your project's `convention_map.md`. Worked examples may also reference specific batch numbers, file paths, or env-var names from the originating project; treat those as illustrations, not literal requirements.
+
+> **Editing this skill rather than running it?** `REFERENCE.md`, beside this file, carries
+> the editor's half: what a rule protects, what its loss or softening would change, and where
+> it came from. It is not loaded with this file — open it when you are about to change the
+> skill, and author new rationale there rather than here.
+
+## Pre-flight: Permission Guard
+
+Verify `.claude/settings.json` (with `.claude/settings.local.json`, if present) carries the allow-rules this skill depends on. Under `dontAsk` mode a missing worktree-add or branch-creation rule is auto-denied with no prompt, halting before the workspace is created.
+
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
+
+- `Bash(git checkout:*)` — Step 4 rollback path on 4b/4c failure (`git checkout tasks/index.yml`, chained into `git_check.py nothing-staged tasks/index.yml`: the checkout restores from the index and no-ops over a staged flip, and the wider `HEAD --` form was refused because it destroys a concurrent session's staged claim).
+- `Bash(git worktree add:*)` — transitively invoked by `sysop/scripts/claim_task.sh`.
+- `Bash(bash sysop/scripts/claim_task.sh:*)` — Step 2's `--entry-state` query **and** Step 4b's worktree + lock creation. One rule covers both: the trailing `:*` is a prefix match over the whole argument string, so no separate `--entry-state` rule is needed (and adding one would be dead). Verified against an earlier finding that rules seeded against invocations which bind none are worse than no rule.
+- `Bash(bash sysop/scripts/batch_work.sh:*)` — Step 4 review-batch path.
+- `Bash(python3 -:*)` — Step 1's `--resume` validation, Step 2's `tasks/index.yml` lookup, Step 4a's yaml-round-trip status flip, Step 7a's pre-plan record and post-plan integrity check, **and every write the orchestrator makes at Steps 7-pre, 7c and its park path** (all are `python3 - <<'PY'` heredocs, single simple commands, so one rule covers them). This is deliberate: routing the orchestrator's reads and writes through an interpreter it is already permitted to run means the reshape adds **no** new permission surface, and it does not depend on the auto-classifier's treatment of bare `mkdir` / `cp` / `test`. It also survives this skill's `disallowed-tools: Edit, Write, NotebookEdit` frontmatter, which a `Write`-tool artifact write would not.
+- `Bash(python3 sysop/scripts/validate_tasks.py)` / `Bash(python3 sysop/scripts/validate_tasks.py:*)` and the `.venv/bin/python3 sysop/scripts/validate_tasks.py` / `.venv/bin/python3 sysop/scripts/validate_tasks.py:*` venv variants — Step 4c post-claim validator. Bare `python3` is the command word the step prescribes: the script self-resolves venv PyYAML via its own `sys.path` bootstrap, so one form serves every consumer. The `.venv/bin/python3` rules stay only so a hand-typed venv invocation is not denied.
+- `Bash(python3 sysop/scripts/scope_overlap.py:*)` (and the `.venv/bin/python3` variant) — Step 2's non-blocking overlap advisory. The `git -C <worktree> diff` it shells out to needs **no** separate rule (it's a subprocess of the permitted python call, and read-only `git` auto-passes per `_shared/permission-guard.md` § Notes). This rule is **not** load-bearing — a missing rule (or any non-zero exit) just means the advisory is skipped; the claim still proceeds.
+- `Bash(python3 sysop/scripts/ignored_refs.py:*)` — Step 7e item 5b's ignored-file check, run by the executor in its worktree.
+- `Bash(python3 sysop/scripts/claim_record.py:*)` — Step 7f item 1's write of `## Test decision` and `## Plan` into the body file (option C).
+- `Bash(python3 sysop/scripts/git_check.py:*)` — Step 4's rollback check (`nothing-staged`), and `_shared/main-push-guard.md` Rule A (`head-is`) chained with `&&` into Step 7d's and Step 7f's commits, so check and commit are one call.
+- `Bash(git commit -m "chore: release *)` — Step 7d's abandon and Step 7f step 4 commit the release flip.
+- `Bash(git commit -m "plan: record reviewed plan for *)` — Step 7f step 2 commits the reviewed plan.
+- `Bash(git add tasks/index.yml)` — Step 7d's human gate and Step 7f's Option C stage the index directly. It is **not** Step 4d's rule any more: an earlier build moved that commit inside `claim_task.sh --commit-claim`, which stages and commits under the script rule above.
+
+If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "creates an isolated worktree and a feature branch for the claimed task; queries + updates `tasks/index.yml` via heredoc'd python; runs the schema validator before committing the claim"). Do not proceed — unless the guard's step 3 mode check applies.
+
+If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
+
+## Step 1: Parse Argument & Classify
+
+Parse `$ARGUMENTS`, testing the arms in this order (`BATCH-120` also matches the task-id grammar):
+
+- **Bare integer** (e.g., `116`) or **`BATCH-<N>`** → review batch. Extract the number.
+- **Any other task id** — a token matching the schema's id grammar `^[A-Z][A-Z0-9-]{2,80}$` (`tasks/schema.md`, enforced by `validate_tasks.py`) → roadmap task, whatever its prefix: `OPS-FOO` classifies exactly as `FEAT-FOO` does. Do not check here that the id exists; Step 2's `--entry-state` answers `absent` for one that does not, and stops.
+- **Empty or unrecognized** (not a batch and not id-shaped) → print usage and stop:
+  ```
+  Usage: /claim-task <TASK_ID | BATCH_NUMBER>
+
+  Examples:
+    /claim-task FEAT-STUDIO-UI     — claim a roadmap task
+    /claim-task DATA-SERIES-CROSSWALK
+    /claim-task 120                — claim review batch 120
+    /claim-task BATCH-120          — same as above
+  ```
+
+If `--branch <name>` appears in `$ARGUMENTS`, extract it as the branch override (roadmap tasks only).
+
+**Also extract, here, the four flags the later steps read** — all optional:
+
+| Flag | Read by | Effect |
+|---|---|---|
+| `--review-plan` / `--no-review-plan` | Step 6 | Forces the plan-review preference to option A / option B, outranking any consumer config. |
+| `--plan-only` | Step 6, Step 7f | Forces the preference to option **C** — plan, review, write the plan back to the task body, release the claim, stop. **Roadmap tasks only; rejected for a batch below.** |
+| `--resume <RUN_ID>` | Step 2, Step 7-pre | Re-enters a parked or abandoned claim at the named run instead of starting a new one. |
+
+`--resume` takes a `<RUN_ID>` exactly as Step 7-pre minted it (`<UTC timestamp>-<8 hex>`). **Validate it below, after `<CLAIM_ID>` is fixed** — the run directory is keyed by the claim id, so the check is not performable until the normalisation table has run.
+
+### Reject `--plan-only` on a review batch — here, before anything is claimed
+
+**If the classification above says *review batch* and `$ARGUMENTS` contains `--plan-only`, stop.** Print exactly this and do not continue:
+
+```
+--plan-only is roadmap-only: option C writes the reviewed plan into the task's body
+file, and a review batch has no body file — its "body" is a `### Batch <N>` section
+inside the shared review_tasks.md, which is not a plan surface.
+
+Re-run without --plan-only to claim this batch under option A or B.
+```
+
+**This check cannot be deferred to Step 6, and that is the whole reason it is here.** Step 6 is where the two-options-not-three offer lives, but `_shared/plan-review-preference.md` resolution tier 1 puts the flag *above* the offer and says "never prompt when tier 1 resolves" — so `/claim-task --plan-only BATCH-5` never reaches the offer that is supposed to make C roadmap-only. Placing it at Step 6 would leave the one path that skips the offer as the one path that gets it wrong. Placing it here also means the batch is **not claimed** when the rejection fires: Step 6 runs after `batch_work.sh` has already taken the lock and committed a `review_tasks.md` mutation on `main`, so a stop there would cost a claim-and-release for a run that could never have produced anything.
+
+**Roadmap tasks are unaffected** — `--plan-only` on a roadmap task id, of any prefix, passes straight through to Step 6, which reads it as tier 1 and resolves to option C.
+
+### Normalise the claim ID here, not later
+
+Fix **both** identifiers now, before any step addresses a file by name:
+
+| Name | Roadmap task | Review batch |
+|---|---|---|
+| `<TASK_ID>` | the task ID (`TECH-0007`) | — not defined; a batch has no roadmap task ID |
+| `<BATCH_NUMBER>` | — | the bare number (`116`), what `batch_work.sh` takes |
+| `<CLAIM_ID>` | the task ID (`TECH-0007`) | **`BATCH-<N>`** (`BATCH-116`) |
+| `<default branch>` | the repository's default branch name | same |
+
+**`<default branch>` is resolved, never assumed**: run `bash sysop/scripts/default_branch.sh` — bare, reading its stdout — and substitute the name it prints. It is `main` on many consumers and `master` or `develop` on others, and every step below that compares against it or diffs from it halts on the wrong name. Run it bare rather than into a variable: an allow rule does not match past a variable assignment, and nothing survives between fenced blocks anyway.
+
+**`<CLAIM_ID>` is what every lock, runtime artifact, and envelope is keyed by**, for both kinds. `<BATCH_NUMBER>` is only ever a script argument. The distinction is load-bearing: `/claim-task 116` on a batch leaves an agent holding `116`, and a step that addresses `sysop/runtime/locks/<TASK_ID>.lock` with it looks for `116.lock` while `batch_work.sh` wrote `BATCH-116.lock` — a check that reads as "not claimed" for every batch that ever was. Normalising at Step 7 instead of here is how that class of miss happens, so it is done once, at the top, for both kinds.
+
+Where a later step names `<TASK_ID>` inside a *roadmap-only* mechanism (`tasks/index.yml` lookups, body files, branch generation), that is deliberate and correct — those steps carry an explicit **Review batches:** clause instead.
+
+### Validate `--resume <RUN_ID>` — only if it was passed
+
+Skip this entirely on an ordinary claim. **Reject an invocation that passes `--resume` with no value, or with a value that is not an existing `/claim-task` run directory** — print the available run ids and stop. Guessing here would re-enter the wrong run. Run ids *are* chronologically sortable — the timestamp half is the prefix, and the listing below is `sorted()` — but newest is not the same as correct: a run may have been superseded, abandoned, or already executed, which is what the routing table at Step 7-pre reads and what an ordering cannot tell you.
+
+```bash
+# `python3` command word + positional args — a single simple command, so `Bash(python3 -:*)`
+# matches. Substitute both placeholders literally, quoted, so an unsubstituted one fails
+# loudly instead of being read as a redirection.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>"
+import re, sys, subprocess
+from pathlib import Path
+
+claim_id, run_id = sys.argv[1], sys.argv[2].strip()
+# Runs live in the MAIN checkout (Step 7-pre), which is why this check is performable HERE,
+# before any lock has been read and before a worktree path is known.
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+claim_root = Path(common).resolve().parent / "sysop" / "runtime" / "claim" / claim_id
+
+if not run_id:
+    print("ERROR: --resume needs a <RUN_ID>", file=sys.stderr)
+    sys.exit(2)
+
+available = sorted(p.name for p in claim_root.iterdir() if p.is_dir() and re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", p.name)) if claim_root.is_dir() else []  # an /auto-build cycle dir is not a run
+if run_id not in available:
+    print("ERROR: no run '{}' under {}".format(run_id, claim_root), file=sys.stderr)
+    print("available runs: " + (", ".join(available) or "(none)"), file=sys.stderr)
+    sys.exit(3)
+print("RESUME_OK=" + str(claim_root / run_id))
+PY
+```
+
+`claim_root.is_dir()` is tested before listing it, so a claim that has never run reports `available runs: (none)` instead of raising — the error path this check exists for must not itself be the thing that crashes.
+
+## Step 2: Read Context & Validate
+
+**For roadmap tasks — resolve the entry state first.** This is the authority on whether the claim may proceed; the metadata heredoc below extracts fields, it does not adjudicate.
+
+```bash
+bash sysop/scripts/claim_task.sh --entry-state <TASK_ID>
+```
+
+Write the id out literally, here and at **every** later site — Steps 2, 4a and 4b all take it as a substituted literal. **Do not carry it in a shell variable:** nothing survives from one fenced block to the next, even inside a single step (`WORKFLOW.md` § 8.2a, *Persistence boundary*), so `"$TASK_ID"` expands to the empty string and this script exits on its usage guard. An earlier build fixed two sites in this file that broke the rule this sentence states — the `python3 -` heredocs at Step 2 and Step 4a — so treat it as load-bearing rather than advisory.
+
+It prints exactly one token and exits 0 on every resolved state:
+
+| Token | Meaning | Do |
+|---|---|---|
+| `claimable` | `status: open`, no lock | Ordinary fresh claim — **continue**. |
+| `resumable` | `status: in_progress`, **no lock** | **Stop and ask.** Ambiguous — see below. Continue only on an explicit human go-ahead. |
+| `held` | a lock exists | **Stop.** Print the lock file contents. Someone or something holds this claim. **Unless `--resume <RUN_ID>` was passed** — see below. |
+| `closed:<status>` | `done` / `deferred` / … | **Stop.** The task is not claimable. |
+| `absent` | no such id in `tasks/index.yml` | **Stop.** Mistyped id, or the task lives in `deferred/` / `archive/` — suggest `/next-task`. |
+
+A non-zero exit means the question could not be answered at all (`2` no index, `3` no python3/PyYAML, `4` unreadable index) — surface stderr verbatim and stop.
+
+**`resumable` is the ambiguous class, and it must not auto-continue.** Two very different situations produce the identical signature, and nothing on disk separates them:
+
+1. **An abandoned claim** — someone claimed the task, the lock was cleaned up, no work is in flight. Resuming is correct.
+2. **A close that is still in flight.** Under `§ Merge policy: pr`, `/review-close` Step 4c unlinks the lock on the integration branch *before the PR merges*, while the `done` flip rides the unmerged PR — so on `main` the task reads `in_progress` **with no lock** for the whole life of that PR. `review-close/SKILL.md` § *Lock-as-real-time-signal invariant* documents exactly this window. Resuming here re-claims **finished, already-reviewed work**.
+
+So: report the state, name both possibilities, and **require an explicit human go-ahead before continuing**. If the answer is to resume, continue and skip Step 4a's status flip (the status is already `in_progress`). This follows the house pattern the orchestrator spec's Q1 settles on — *surface the ambiguous class, block the unambiguous one* — rather than guessing.
+
+Two further limits, stated because the earlier draft of this step overclaimed both:
+
+- **It is not "your claim."** `claim_task.sh` records `agent: anonymous` unless a name was passed, so no code here can tell an abandoned claim of yours from a colleague's.
+- **Two shipped tools call this state a defect, not a state.** `validate_tasks.py` Invariant 9 makes `in_progress` without a lock a **blocking** validator error, and `sitrep_survey.py` reports it as `index drift (in_progress without lock)` and suggests flipping back to `open`. On the ordinary claim path that disagreement is momentary — Step 4b re-creates the lock immediately — but if you stop between here and Step 4b, you have left the tree in a state the validator rejects.
+
+**`held` plus `--resume <RUN_ID>` is the one way past the stop, and it requires the human to have named the run.** A claim that parked at Step 7c leaves its lock deliberately in place, so `--entry-state` answers `held` — correctly, because from the outside a parked claim and a colleague's live claim are indistinguishable (`claim_task.sh` records `agent: anonymous` unless a name was passed, so no code here can tell them apart). Without a way past it the artifact set would be a one-way door: the park writes a plan, a review and a verdict specifically so the work can be picked up, and then nothing could pick it up.
+
+So: on `held`, if Step 1's `--resume <RUN_ID>` check passed, print the lock contents and — **if that run has one** — its `classification.md` verdict, then continue: skip Step 4 entirely, since the claim, worktree, branch and lock all already exist, and **re-enter at Step 7-pre**, which adopts the named run rather than minting a new one and routes to the right stage from the artifacts on disk. Step 7-pre is the *only* re-entry point; nothing jumps straight to a later stage. On `held` with no `--resume`, stop as the table says.
+
+**A run parked before 7c ran has no `classification.md`, and that is ordinary, not an error** — the 7a integrity park and the 7b reviewer-failure park both happen before any classification exists. The park marker (`sysop/runtime/parked/<CLAIM_ID>__<RUN_ID>.md`) carries the reason in every case and is the file to print when the verdict is absent.
+
+<a id="resume-establishes-branch"></a>**Read `<BRANCH_NAME>` and the worktree path out of the lock — this is the only step on a resume that establishes them.** They are the `branch:` and `workspace:` fields of `sysop/runtime/locks/<CLAIM_ID>.lock`, written there by `claim_task.sh --lock` and by `batch_work.sh` alike. Step 4 is skipped on a resume, so the sites that normally establish them — Step 3 for a roadmap task, `batch_work.sh`'s summary box for a batch — never run, while all three Step 7 prompts substitute `<BRANCH_NAME>` and every envelope requires it.
+
+**This is an explicit human instruction, not an inference.** The flag *is* the go-ahead; the skill never decides on its own that a `held` claim is stale enough to take over. Note the honest limit: `--resume` on a lock genuinely held by a colleague will take their claim. That is the same trust model as `--force` elsewhere in this workflow — the human is asserting something the tree cannot verify.
+
+**`--resume` changes exactly one row of that table, and no other.** It names which *run* to re-enter; it is not a blanket override of the entry state.
+
+- On **`resumable`** it does **not** short-circuit the stop-and-ask. The ambiguity that arm exists for — an abandoned claim versus a `pr` close still in flight — is about the *task*, and naming a run says nothing about it. Report the state, name both possibilities, ask. If the answer is to resume, Step 4 still runs (the lock is missing and the schema requires it), and Step 7-pre then adopts the named run.
+- On **`closed:<status>`** and **`absent`** it changes nothing. A run directory can outlive the task it belonged to; that is not permission to re-claim a done task.
+
+**Review batches:** `--entry-state` **refuses** a `BATCH-<N>` id and exits 1, exactly as `--release` does — a batch's claim state lives in `review_tasks.md`, not `tasks/index.yml`, so answering from there would report `absent` for every batch that exists. Do not call it on the batch path; the review-batch branch below performs the equivalent check against `review_tasks.md` plus the lock (five outcomes, same shape).
+
+Then look the task up in `tasks/index.yml` via Python (never grep YAML) for the metadata Steps 3–6 need. Run:
+
+```bash
+# Substitute the task id for <TASK_ID>, per the rule above — quoted, so an unsubstituted
+# placeholder fails loudly instead of being read as a redirection.
+# `python3` command word (not `.venv/bin/python3`, no PATH prefix, no `&&` compound) so
+# the allow-rule `Bash(python3 -:*)` matches as a single simple command. PyYAML — which
+# this heredoc imports — is resolved for venv-only consumers by the bootstrap below, not
+# by the caller's interpreter choice (BeanRider ISSUE-0049).
+python3 - <<'PY' "<TASK_ID>"
+import sys
+try:
+    import yaml
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    import glob, os, subprocess
+    _sites = []
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+            env=dict((_k, _v) for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
+        )
+        _g = _r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        _g = ""
+    for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+        for _layout in (".venv", "venv"):
+            _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+    sys.path[:0] = _sites
+    import yaml
+from pathlib import Path
+
+task_id = sys.argv[1]
+index_path = Path("tasks/index.yml")
+if not index_path.exists():
+    print("ERROR: tasks/index.yml not found", file=sys.stderr)
+    sys.exit(2)
+
+try:
+    with index_path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+except Exception as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e})", file=sys.stderr)
+    sys.exit(2)
+
+tasks = data.get("tasks", []) or []
+match = next((t for t in tasks if t.get("id") == task_id), None)
+if not match:
+    print(f"ERROR: task '{task_id}' not found in tasks/index.yml", file=sys.stderr)
+    sys.exit(3)
+
+status = match.get("status")
+body = match.get("body")
+print(f"id={match['id']}")
+print(f"title={match.get('title', '')}")
+print(f"status={status}")
+print(f"phase={match.get('phase', '')}")
+print(f"effort={match.get('effort', '')}")
+print(f"user_action={match.get('user_action', False)}")
+print(f"branch={match.get('branch', '')}")
+print(f"body={body or ''}")
+
+# `in_progress` is allowed through because --entry-state above already ruled on
+# it: it reaches here only as `resumable` (in_progress with NO lock). A held
+# task stopped at the entry-state gate, so re-refusing it here would make the
+# resume path unreachable while looking like defence in depth.
+if status not in ("open", "in_progress"):
+    print(f"ERROR: task '{task_id}' has status='{status}'; only 'open' (fresh claim) or 'in_progress' (resume) tasks may be claimed", file=sys.stderr)
+    sys.exit(4)
+
+if not body:
+    print(f"ERROR: task '{task_id}' has no body path set", file=sys.stderr)
+    sys.exit(5)
+
+body_full = Path("tasks") / body
+if not body_full.exists():
+    print(f"ERROR: body file {body_full} does not exist", file=sys.stderr)
+    sys.exit(6)
+PY
+```
+
+Hard-fail (exit and report) if the script exits non-zero. Surface the stderr message verbatim. **Exit-code contract** (typed so the parent can branch without re-parsing stderr):
+
+- `2` — `tasks/index.yml` itself missing (consumer not bootstrapped, or wrong cwd), or present but unreadable (a permission error, a byte that is not UTF-8, or YAML that does not parse; stderr names which).
+- `3` — task ID not found. The user mistyped the ID, or the task lives in `deferred/` / `archive/`. Suggest `/next-task` to find a claimable one.
+- `4` — status is neither `open` nor `in_progress` (i.e. `done` / `deferred` / unknown). The task is closed; stop. `in_progress` no longer exits here — the `--entry-state` gate above already separated `resumable` (no lock) from `held` (lock present), and re-deciding it in this heredoc would just make the resume path unreachable.
+- `5` / `6` — `body:` field missing or the body file doesn't exist on disk. The index entry is broken — `validate_tasks.py` will reject it; fix the entry before re-claiming.
+
+Also list `sysop/runtime/locks/*.lock` files to surface concurrent claims:
+
+```bash
+ls sysop/runtime/locks/*.lock 2>/dev/null
+```
+
+If `sysop/runtime/locks/<CLAIM_ID>.lock` already exists, hard-fail with the file contents — another session owns this claim. Do not overwrite.
+
+This check sits in the roadmap branch; the review-batch branch has its own, below. What is uniform is the **path**: both kinds write a lock at `sysop/runtime/locks/<CLAIM_ID>.lock` (`batch_work.sh` writes `BATCH-<N>.lock`), so the `ls` listing above surfaces in-flight batches alongside in-flight roadmap tasks and is worth reading on either path.
+
+Read the body file `tasks/open/<TASK_ID>.md` in full so it is loaded as context for Step 7's prompts. (This sentence used to say "for Step 6 plan mode" — there is no plan mode, Step 6 is now the plan-review preference, and the planner reads the body itself from the main checkout. It survived the reshape unedited.)
+
+**Overlap advisory (roadmap tasks — non-blocking).** The lock check above only asks "is *this* task claimed?" — it says nothing about whether the task's *files* collide with work already in flight in another worktree. Two claims touching the same files sail through and surface as a merge conflict at `/review-close` — recoverable rework (the worktrees kept the builds isolated), but wasted work the advisory can warn about. Run the shared scope-overlap primitive:
+
+```bash
+python3 sysop/scripts/scope_overlap.py <TASK_ID>
+```
+
+(Bare `python3` is the command word: `scope_overlap.py` self-resolves venv PyYAML via its own `sys.path` bootstrap — script-anchored first (this file's ancestors, then the main checkout via git-common-dir), and only then the CWD, across both `.venv/` and `venv/` layouts — so this one form serves venv-only *and* non-venv consumers. A `.venv/bin/python3` command word would instead be `command not found` on a `venv/`-layout, poetry, conda or system-python project. Both permission rules exist.) It infers the candidate's likely scope from its `## Key files` + `blast_radius` (a *pre-plan guess*), reads the **actual** changed set of each in-flight worktree (`git diff --name-only <default branch>...HEAD` + uncommitted — the base is resolved, not assumed, and an unresolvable one degrades to uncommitted-only, prints a note naming that task's workspace, and grades that task `unknown` unless what was read shows an exact-path (`likely`) match), and prints a per-in-flight verdict — `likely` (exact path match) / `unknown` (an input it needed could not be read, named on a `why:` line) / `possible` (same directory or glob) / `none`.
+
+- **Surface the output verbatim** if it reports any overlap, `unknown` included, then continue. This is **advisory, not a gate** — overlap is a recoverable rework cost, not corruption, so the human owns the call (the guided-mode "genuine tradeoff → human owns it" branch, in contrast to the lock collision above, which *is* a false choice and correctly hard-fails). Do **not** block the claim on it.
+- The primitive is **non-blocking by construction**: it exits 0 on every degrade path (no in-flight work, missing index, absent PyYAML, an unreadable worktree). Treat *any* non-zero exit or error as "advisory unavailable — proceed"; never halt the claim because the overlap check couldn't run.
+- If it warns of a `likely` overlap, it's worth mentioning `/next-task` (which surfaces claimable tasks) as the clean alternative — but the human may legitimately choose to claim the overlapping task anyway (e.g. the collision is small, or they'll coordinate the merge).
+
+**For review batches:**
+- Read `review_tasks.md` (full)
+- Verify the batch number exists
+- Check its status (the backtick-wrapped status after the batch title):
+  - `Pending` → available **unless `sysop/runtime/locks/<CLAIM_ID>.lock` exists**. A lock on a `Pending` batch is not a contradiction: `batch_work.sh` writes the lock just before it commits the `Pending` → `In Progress` flip, so a claim in flight shows one for the moment of its commit, and a release or a claim that died between the two leaves it. So the lock is the more reliable of the two signals. If locked, report "already claimed" with the lock contents and stop.
+  - `In Progress` → check for `sysop/runtime/locks/<CLAIM_ID>.lock`. If locked, report "already claimed" and stop. If no lock, it may be resumable — proceed (the script handles this).
+  - `Review Ready` → live, but past being worked (this ladder previously had **no arm** for it, so an explicit claim was undefined behaviour): the review work is done and the batch is waiting on a human to run `/review-close` on its branch. Report exactly that and stop — claiming it would put an agent on finished work. `batch_work.sh` refuses it without `--force` — and frames that override as claim-anyway over someone's completed review, not as the follow-up-work affordance (that framing belongs to the terminal three). Do **not** read it as the near-identical *terminal* status `Ready for Review` on the next arm.
+  - `Merged`, `Complete`, `Ready for Review` → report current status and stop
+
+**`--resume <RUN_ID>` gets a batch past the "already claimed" stop, on the same terms as the roadmap `held` arm.** A batch that parked at Step 7c leaves its lock in place by design, so both locked rows above would otherwise refuse it — and a parked batch is exactly the case internal tracker #220 reported, since a review batch is the claim kind it happened on. When Step 1's `--resume` check passed and a lock exists, print the lock contents and — if the run has one — its `classification.md` verdict, then skip Step 4 (worktree, branch and lock all exist) and re-enter at Step 7-pre.
+
+**Read `<BRANCH_NAME>` and the worktree path out of `sysop/runtime/locks/<CLAIM_ID>.lock`** — its `branch:` and `workspace:` fields — exactly as the roadmap resume arm does; `batch_work.sh` writes both. This is not a repetition for symmetry's sake: skipping Step 4 skips the summary box that Step 3's review-batch clause names as the establishing site, so on this path the lock is the *only* source, and all three Step 7 prompts substitute `<BRANCH_NAME>`.
+
+The same honest limit applies: on a colleague's live lock this takes their claim.
+
+To hand a stranded batch back, use `bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>` — it reverses both halves of the claim (the `review_tasks.md` status and the lock). `claim_task.sh --release` refuses a `BATCH-*` ID on purpose: it owns `tasks/index.yml`, so it would release the lock and leave the batch reading `In Progress` forever.
+
+## Step 3: Generate Branch Name
+
+**Roadmap tasks:**
+- If `--branch <name>` was provided, use that.
+- Else if the task entry has a `branch:` field set in `tasks/index.yml` (surfaced as the `branch=...` line by Step 2's Python script), use it.
+- Otherwise, derive it from the task ID by one rule, for every prefix:
+  the directory is the id's leading `^[A-Z][A-Z0-9]*` segment
+  lowercased, and the leaf is the whole id lowercased.
+  `FEAT-X` → `feat/feat-x`, `OPS-FOO` → `ops/ops-foo`.
+  `QA2-X` → `qa2/qa2-x`, and a hyphenless id is its own
+  directory: `ABC123` → `abc123/abc123`.
+
+**Review batches:** The branch is specified in `review_tasks.md` metadata and handled by `batch_work.sh`, so nothing is *generated* here — but `<BRANCH_NAME>` still has to be **established**, because all three Step 7 prompts substitute it and every envelope requires it. `batch_work.sh` prints it in its summary box (`│  Branch: <name>`); read it off Step 4's output there and hold it in context. See Step 4's review-batch block.
+
+## Step 4: Claim the Task
+
+**Roadmap tasks** — four actions, in order. **Each is destructive — print the action before running, then run.** If any step fails, fall through to the rollback at the bottom of this section before reporting.
+
+### 4a. Flip `status: open` → `status: in_progress` in `tasks/index.yml`
+
+Do NOT edit the YAML by hand with a regex — round-trip through `yaml.safe_load` / `yaml.safe_dump` so the file stays validator-clean.
+
+**What the round-trip costs, stated accurately.** A whole-file dump reproduces the *data*, not the text. Every comment is stripped, quoting and indentation are normalised, anchors are renamed, and block scalars keep their **value** but not their **style** — a `|` literal comes back as a quoted folded scalar with a trailing blank line, and a `>-` folded scalar comes back plain. An earlier version of this note claimed sprint prose was safe because it lived in block scalars; that was measured false, and it was the stated reason the comment loss was ruled acceptable. The real reason it is acceptable is narrower: `index.yml` is machine-owned, every reader parses it, and no *value* is lost — nothing survives intact because of its construct. `tasks/README.md` § *Comments in `index.yml` do not survive* says the same thing to the consumer; prose written for a human belongs there or in the task body, never in the index.
+
+```bash
+# Substitute the task id for <TASK_ID>, per Step 2's rule — quoted, so an unsubstituted
+# placeholder fails loudly instead of being read as a redirection.
+# `python3` command word + in-heredoc PyYAML bootstrap (see Step 2's note; BeanRider
+# ISSUE-0049) — single simple command, so `Bash(python3 -:*)` matches.
+python3 - <<'PY' "<TASK_ID>"
+import sys
+try:
+    import yaml
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    import glob, os, subprocess
+    _sites = []
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+            env=dict((_k, _v) for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
+        )
+        _g = _r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        _g = ""
+    for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+        for _layout in (".venv", "venv"):
+            _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+    sys.path[:0] = _sites
+    import yaml
+import os, tempfile
+from pathlib import Path
+
+task_id = sys.argv[1]
+index_path = Path("tasks/index.yml")
+
+try:
+    with index_path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+except Exception as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e}). "
+          "Nothing was changed.", file=sys.stderr)
+    sys.exit(1)
+
+# A concurrent writer that truncates in place leaves this file zero-length for a
+# moment, and `safe_load("")` returns None — which then died on `.get` with a raw
+# AttributeError traceback and lost the claim. Rate disputed —
+# 4-5 of 100 concurrent trials author-side, 0 of 500 on an independent reconstruction
+# — but the traceback was captured, so the crash is real. Refuse in words.
+if data is None:
+    print("ERROR: tasks/index.yml read as empty — a concurrent writer was mid-write. "
+          "Nothing was changed; re-run this step.", file=sys.stderr)
+    sys.exit(1)
+
+found = False
+resumed = False
+for t in data.get("tasks", []):
+    if t.get("id") == task_id:
+        current = t.get("status")
+        if current == "in_progress":
+            # Resume path (Step 2 entry state `resumable`): already flipped by
+            # the claim this one is re-entering. Leave it alone and write
+            # nothing — re-flipping is a no-op, but treating it as an error
+            # would make the resume unreachable at the LAST guard instead of
+            # the first. Anything other than open/in_progress still refuses.
+            resumed = True
+        elif current != "open":
+            print(f"ERROR: refusing to flip status; current status='{current}'", file=sys.stderr)
+            sys.exit(1)
+        else:
+            t["status"] = "in_progress"
+        found = True
+        break
+
+if not found:
+    print(f"ERROR: task '{task_id}' disappeared between Step 2 and Step 4", file=sys.stderr)
+    sys.exit(1)
+
+if resumed:
+    # Write NOTHING on the resume path. The status is already correct, and a
+    # safe_dump round-trip of an unchanged doc still reflows the file (comments
+    # dropped, quoting and wrapping normalised) — a whole-file diff with no
+    # semantic change, which Step 4d would then commit and /review-close's
+    # dirty classifier would react to.
+    print(f"OK: {task_id} already in_progress — resuming, index untouched")
+else:
+    # tempfile + os.replace, NOT `open(path, "w")`. A truncate in place is not
+    # just non-atomic for THIS writer — it makes every concurrent READER see a
+    # zero-length file, which is the crash the `data is None` guard above
+    # reports. `mkstemp` rather than a fixed `<path>.tmp`, so two writers cannot
+    # collide on the temp name either. Same directory, so the
+    # replace is atomic; `realpath` so a symlinked index is written THROUGH
+    # rather than replaced, and the mode is carried across.
+    real = os.path.realpath(index_path)
+    mode = os.stat(real).st_mode & 0o7777
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real),
+                               prefix=os.path.basename(real) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                data,
+                f,
+                sort_keys=False,
+                default_flow_style=False,
+                allow_unicode=True,
+                width=120,
+            )
+        os.chmod(tmp, mode)
+        os.replace(tmp, real)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    print(f"OK: flipped {task_id} → in_progress in tasks/index.yml")
+PY
+```
+
+**On the resume path this step is a no-op by design.** It prints `already in_progress — resuming, index untouched` and writes nothing, so Step 4d has nothing to stage — see the resume clause there.
+
+### 4b. Run the claim script with `--lock` to create the worktree and lock file
+
+The lock file is **required** by the schema for `in_progress` tasks (see `tasks/schema.md` § lock invariant). The script creates `sysop/runtime/locks/<TASK_ID>.lock` under the **main** repo's `sysop/runtime/locks/` via `git rev-parse --git-common-dir`, so the validator resolves the same path from any working tree. Always pass `--lock`:
+
+```bash
+bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH_NAME>
+```
+
+This also creates the git worktree on `<BRANCH_NAME>`, branched from current HEAD (the default branch, if you ran the skill from there).
+
+**Take `<WORKTREE_PATH>` off this script's output and hold it in context** — it prints the lock it wrote, whose `workspace:` field is the absolute path. Do **not** derive it from a shape: the conventional location is `../<project>-<task-id-lower>/`, but `WORKTREE_PREFIX` overrides the leaf and `WORKTREE_ROOT` overrides the parent directory, and every later site — Step 7a's `git -C`, all three prompts, the executor's working directory — needs the real absolute path rather than a guess.
+
+### 4c. Validate state with `sysop/scripts/validate_tasks.py`
+
+This proves the schema invariants hold (status, lock file presence, body existence, ref integrity) before the claim commit lands on `main`:
+
+```bash
+python3 sysop/scripts/validate_tasks.py
+```
+
+If it fails, **do not proceed to 4d**. Report the validator output verbatim and fall through to the rollback below. Common causes: lock file missing (4b silently failed), body file moved, ID collision introduced upstream.
+
+### 4d. Commit the claim on the default branch
+
+**There is no `<default branch>` to substitute here any more, and that is the point** — the
+script below resolves it itself via `_git_lib.sh`'s `resolve_default_branch`, so this step
+can no longer be stopped by a hard-coded `main` on a `master` repo. Nothing to run
+bare first. It exits 0 only when the default branch holds the claim: **on any non-zero exit, stop
+and reconcile as its message says**, rather than re-flipping or committing by hand.
+
+This commit lands on the default branch in the shared **primary** worktree, and it is the one step here that writes a file every other agent is also reading. Run the script that owns it:
+
+```bash
+bash sysop/scripts/claim_task.sh --commit-claim <TASK_ID>
+```
+
+**Why a script, and not the four bash lines this step used to print.** Those lines did an unlocked `git add` + `git commit` over an index Step 4a had already rewritten in place. Between 4a and here, a concurrent claim's whole-file `safe_dump` can overwrite your flip — and the old block's `git diff --cached --quiet ||` then found nothing to commit and **exited 0**, reporting a successful claim over a task still `open` at `HEAD`. Measured over 100 concurrent trials with **two claims starting together and nothing between 4a and 4d**, it happened between 6 and 25 times depending on machine and load — silently, with the losing session going on to build against a task `/next-task` would hand to somebody else. **State the window with the number.** With 4b and 4c running in between — the shape an operator actually types — the same harness measured **0 of 100 before the fix**, because the longer gap lets one claim finish first. Two claims that start seconds apart are the real hazard, and the range is the honest figure for it: the *loss* reproduces, the *rate* does not. Post-fix the harness measures 0 of 100 in both windows on every run, and its serial control is clean in every state.
+
+**What the script does that the inline block could not.** It takes the **tracker write mutex** (`sysop/runtime/tracker.write.lock` — the same one `batch_work.sh` and `close_batch.sh` take), and inside it: applies `_shared/main-push-guard.md` **Rule A** by resolving the default branch and asserting the primary checkout's `HEAD` is still on it; **re-reads the index and re-flips if your task came back `open`**; then, with Rule A applied again at the commit, commits `tasks/index.yml` and only that path, and checks that the default branch's ref now holds the claim. The re-flip is the half that matters — a mutex taken here cannot retroactively protect the write Step 4a already made outside it, so the script repairs rather than merely serializes. It says so out loud when it re-flips, because a silent repair would look exactly like a clean run.
+
+If it refuses because another writer holds the mutex, it names the holder and writes nothing — wait and re-run rather than editing `tasks/index.yml` by hand.
+
+**Resume path (Step 2 entry state `resumable`): there is nothing to commit, and that is not an error.** Step 4a wrote no change, so the index already matches `HEAD`; the script reports `nothing to commit (resume path)` and exits 0. Rule A's `HEAD` assert still runs on both paths, because a resume commits nothing but every *later* step still assumes it is standing on the default branch.
+
+Run on the main checkout. The script resolves the primary checkout itself via `git-common-dir`, so it commits main-side wherever you invoke it from — but its Rule A assert reads that checkout's `HEAD`, so a primary checkout parked on a feature branch is refused rather than worked around. **It then fast-forwards this claim's worktree to the default branch, which now holds the claim**, so every agent in Step 7 reads this task as `in_progress` there. When it cannot fast-forward (the branch already has commits on a resume, the worktree has uncommitted changes, or git would overwrite an untracked or ignored file there), it prints a `⚠️` line saying so and still exits 0: the claim is committed, and an `open` read in that worktree is the pre-claim tree, not a lost claim.
+
+### Rollback on failure of 4b or 4c
+
+If 4b's script exits non-zero, or 4c's validator exits non-zero, undo 4a's uncommitted edit before stopping:
+
+```bash
+# VERIFY the rollback actually happened. `git checkout <path>` restores from the
+# INDEX, not from HEAD, so if anything had staged the flip this exits 0 having
+# changed nothing and the task is still `in_progress` (reproduced).
+# The staged state IS the precondition, so test it directly rather than guessing.
+git checkout tasks/index.yml && python3 sysop/scripts/git_check.py nothing-staged tasks/index.yml
+```
+
+**`STOP: tasks/index.yml has staged changes` means the rollback is unverified:** the checkout restored the staged copy rather than `HEAD`'s, so the task may still be `in_progress`. Inspect with `git diff --cached -- tasks/index.yml`, then stop and reconcile.
+
+**Why a check and not `git checkout HEAD --` (the fix that was refused).** The bare checkout restores from the **index**. If anything has staged the flip — a concurrent `/claim-task` Step 7d or 7f Option C `git add`, a `/review-close` staging pass, an operator's `git add -A` — it is a **silent no-op**: measured, `Updated 0 paths from the index`, **exit 0**, task still `in_progress`, so this step would report a rollback that did not happen.
+
+`git checkout HEAD -- tasks/index.yml` was built as the fix and **disqualified by execution**. It restores the index too, so where the staged content belongs to *another session* it destroys that session's claim: measured with session A rolling back while session B held a staged flip for a different task, the bare form left B `in_progress` (correct) and the `HEAD --` form silently reset B to `open`, exit 0, no output. And the one state in which the staged content is reliably *our own* failed claim — after `claim_task.sh --commit-claim` stages and then fails — is the state Step 4d's own note tells you not to run a rollback in at all. So wherever this checkout runs, staged content is somebody else's, and the wider command trades a false report for silent data loss.
+
+The check above closes the real defect instead: it tests the exact precondition the no-op needs, destroys nothing, and needs no new permission (`git diff` is read-only).
+
+If 4b got as far as creating anything, undo **only this task's** artifacts. Do **not** reach for `cleanup_worktrees.sh --force`: it takes no path operand, so it removes *every* non-main worktree — ACTIVE ones included — and would destroy any concurrent claim's uncommitted work (WORKFLOW.md § 8.4). Which command applies depends on how far 4b got, because `claim_task.sh` writes the lock **last** (branch → worktree → lock):
+
+- **A lock exists at `sysop/runtime/locks/<TASK_ID>.lock`** — i.e. 4b completed and 4c's validator is what failed. Use the lock-aware inverse: `bash sysop/scripts/claim_task.sh --release <TASK_ID>`. It removes the recorded worktree, releases the lock, and treats the already-`open` status left by the `git checkout` above as an info line rather than an error. It leaves the branch — add `--delete-branch` to drop it, or `git branch -d <BRANCH_NAME>` afterwards. To discard uncommitted work in the worktree, add `--force` **before** the task ID (`--release --force <TASK_ID>`): the script consumes flags only ahead of the positional and rejects a trailing one. **Its index-flip step needs a PyYAML-capable `python3` on `PATH`** — if it reports PyYAML unavailable it exits having changed nothing and prints a manual recipe; activate the project venv and re-run rather than hand-editing.
+- **No lock exists** — i.e. 4b failed before writing the lock (it is written last). `--release` refuses here on purpose, the lock being the claim record it keys on, so undo by hand: `git worktree remove <worktree-path>` if a worktree exists (it refuses on uncommitted or untracked changes; `--force` to discard), then `git branch -d <BRANCH_NAME>`. A 4b failure *at* `git worktree add` leaves the branch and no worktree, so the branch delete is the whole cleanup there — harmless if skipped, since 4b tolerates a pre-existing branch on the retry.
+
+Then report the failing step's error output and stop.
+
+**Review batches:**
+```bash
+bash sysop/scripts/batch_work.sh <BATCH_NUMBER>
+```
+The script creates the branch and worktree, writes `sysop/runtime/locks/<CLAIM_ID>.lock`, and then handles the `Pending` → `In Progress` transition in `review_tasks.md` and commits it on main, last — the same lock file, in the same main-repo-anchored directory, that `claim_task.sh --lock` writes for a roadmap task. (Review-batch state still lives in `review_tasks.md` — only roadmap tasks live in `tasks/index.yml`. The *lock* is the one thing both kinds share, which is what makes `/next-task`, `/sitrep` and `scope_overlap.py` able to see a batch and a task the same way.)
+
+**The claim's STATUS DECISION is all-or-nothing** — and only that; the writes are not, and they now come before it: a failure before the flip leaves a branch and worktree (and the lock, when removing it fails), named in the refusal, which a re-run adopts. Off the default branch, or with a dirty `review_tasks.md`, the script now **refuses before writing anything** — no branch, no worktree, no lock — and exits non-zero, because there is no consistent claim to be made from either state: the status flip has to commit on the default branch in the primary. A repo with no `origin` is not one of those cases and claims normally; only a configured remote that will not fast-forward refuses. Before this change the flip was best-effort while the lock was not, so a skipped flip left a `Pending` batch holding a lock at exit 0 and five readers disagreeing about whether it was claimed.
+
+**Take `<BRANCH_NAME>` and the worktree path off this script's summary box and hold both in context** — the `│  Branch:` and `│  Path:` lines. This is not optional bookkeeping: the roadmap path establishes `<BRANCH_NAME>` at Step 3, the batch path has no equivalent, and Step 7's three prompts and all three envelopes name it. If the script exited before printing the box, both values are in the lock it wrote — `sysop/runtime/locks/<CLAIM_ID>.lock`, fields `branch:` and `workspace:`.
+
+If the script exits non-zero, report the error output and stop.
+
+## Step 5: Report Claim Result
+
+Print a summary box:
+
+```
+## Claimed: <TASK_ID or Batch N>
+
+| Field     | Value                              |
+|-----------|------------------------------------|
+| Type      | Roadmap task / Review batch        |
+| Worktree  | ../<project>-<task-lower>/         |
+| Branch    | <branch_name>                      |
+
+Workspace: `<worktree_path>`
+
+The claim is in place. This run continues at Step 6 — plan, adversarial
+review, classification, then implementation — all in sub-agents. You are not
+being handed the worktree to work in yourself.
+```
+
+**Do not stop here and tell the human to go work in the worktree.** That is what this skill used to do, and the steps below are the run, not a suggestion. `/document-work` comes after Step 8, not after this box.
+
+## Step 6: Resolve the plan-review preference
+
+**Resolved here, once, before any agent spawns.** Planning plus review takes 5–25 minutes, so asking *afterwards* asks someone who may have walked away — and "the human didn't really review it" then happens by degradation rather than by choice. Front-loading makes it a declared decision that is always answerable.
+
+Follow `.claude/skills/_shared/plan-review-preference.md` to resolve it. That partial is the single source of truth for the resolution order (flag → `<project>/CLAUDE.md § Plan review` → ask), for the guided-mode interaction, and for the `askUserQuestionTimeout` hazard. **Never prompt when the flag or the config resolves it** — `/claim-task <CLAIM_ID>` on a configured project must stay a single command.
+
+Three options are offered on a roadmap task:
+
+| Option | Flow | For |
+|---|---|---|
+| **A — review the plan first** | planner → reviewer → **human gate** → executor | Work you want to eyeball before it lands. |
+| **B — run it** | planner → reviewer → executor | Mechanical or well-specified work; walk away. |
+| **C — plan only** | planner → reviewer → **Step 7f**: write the plan back to the task body, release the claim, stop | A task you want to think about before committing anyone to it. |
+
+**The reviewer runs on all three paths, and so does Step 7c's classification.** What differs is only what follows: A gates at Step 7d, B goes straight to the executor at 7e, C stops at 7f. Collapsing reviewer and executor on the unattended path would give the run *nobody is watching* the weaker review property, and `_shared/adversarial-review.md` § *The reviewer-executor variant is retired* already records collapsed self-classification as a known compromise. The autonomous path needs more fresh-eyes rigour, not less.
+
+**On option C the review is the deliverable, not a step toward one.** Nothing is implemented, so the artifact the human gets is the reviewed plan — which is why Step 7f writes the sealed `REVIEW_REPORT:` block into the body alongside the plan rather than a trailer line naming the verdict. Discarding the review on the one path that produces nothing else would reproduce the defect this whole shape exists to remove: a review that ran and left nothing durable.
+
+**Review batches: two options, not three, and say why.** Option C is **not offered** — a batch has no body file to persist a plan into (its "body" is a `### Batch <N>` section inside the shared `review_tasks.md`, whose six metadata keys are parsed into a shadow index two scripts consume, none of which is a plan surface), so C on a batch has no outcome except a wasted claim. State the absence in one line rather than silently offering two options: silence about a missing branch is exactly how Steps 7–8 acquired roadmap-only vocabulary in an early build, and it is the failure internal tracker #220 reported. A human who passed `--plan-only` never reaches this step — Step 1 rejected it before the batch was claimed.
+
+## Step 7: Orchestrate — plan → review → classify → gate → execute
+
+**Why this is three spawns, a classification and a gate rather than one sub-agent.** Internal tracker #220: a real `/claim-task` run on a review batch went `EnterPlanMode` → ~200 tool calls → `ExitPlanMode` with **no `Agent` call at any point**. The adversarial review, the finding classification, the sealed report and the halt-on-blocker gate were all bypassed, and it surfaced only because a human asked. Three distinct failure modes look identical from outside:
+
+1. **Drift** — the skill was read hundreds of tool calls ago and plan mode's own reminder pushes toward `ExitPlanMode`. Attention decay, not intent. This is what internal tracker #220 observed. The split spawns and the artifact set below are what address it.
+2. **Blocked** — the harness forbids the `Agent` tool outright (a system-prompt instruction outranks skill text). The agent *cannot* comply. **This shape does not prevent that, and does not claim to** — it makes it *visible*: an orchestrator whose entire body is "spawn agents" cannot silently degrade into doing the work itself without leaving an empty artifact directory and no envelopes, where a healthy run leaves three of each. Today it degrades into "just implement it", which looks normal. **Stated exactly: two skills now read that difference, and neither of them stops anything.** `/review-close` Step 2e reports, per branch, which of this claim's artifacts exist; `/sitrep` classifies a parked or awaiting-approval claim as such instead of as `planning`. Both **report, never reject** — a reporting gate that mis-resolves prints "artifacts: none found" beside a branch that has them, which is wrong, visible and harmless, whereas a rejecting one false-FAILs work already done. So the honest claim is that a blocked run is now conspicuous in two places a human already looks, not that it is prevented.
+3. **Read as not-applicable** — Step 7's prompt opened *"You are executing roadmap task `<TASK_ID>`"* and was threaded with `tasks/index.yml` machinery a review batch does not have, so an agent holding a batch claim reasonably concluded the step was not about it. Every step below is spelled `<CLAIM_ID>` and carries a `Review batches:` clause wherever behaviour differs.
+
+**Say the residual out loud rather than burying it:** a harness that forbids `Agent` produces a claim with no plan, no review and no envelope, and Sysop will *say so* rather than stop it.
+
+### Step 7-pre: resolve the run and its artifact directory
+
+**This is the only entry point to Step 7, on a fresh claim and on a `--resume` alike.** No later stage is entered directly; the routing table below decides which one this run lands on.
+
+Every run of this pipeline gets its own directory. **This is what makes a stale artifact unreachable rather than merely detectable** — a re-invocation never looks in a previous run's directory, so it cannot inherit its `review.md`. That matters most on the batch path: `batch_work.sh`'s `write_batch_lock` is idempotent by design and leaves an existing lock **as-is** (`batch_work.sh`'s `write_batch_lock`, the arm printing `Batch lock already present (left as-is)`), and its status gate still admits a re-claim of a *live* batch — `Pending` unconditionally, `In Progress` as the sanctioned resume — so a batch re-invocation would otherwise find yesterday's artifacts sitting under a lock that still looks current. Keying on the lock's `started:` stamp does **not** close this — the stamp is preserved across exactly that re-claim.
+
+**The directory lives in the MAIN checkout, not the worktree**, resolved through `git rev-parse --git-common-dir`. Three properties depend on that and none of them survive a worktree-side path: Step 1 has to validate `--resume` *before* any lock is read, so the run must be discoverable before a worktree path exists; the artifacts have to outlive `git worktree remove` and `cleanup_worktrees.sh`, which is what the park previously needed a second copy for; and the orchestrator itself runs in the main checkout, alongside the hook-written envelopes. An earlier revision created it under `<WORKTREE_PATH>` while Steps 1 and 2 looked for it in the main checkout — the two never met, and every `--resume` was rejected.
+
+```bash
+# `python3` command word + positional args — a single simple command, so `Bash(python3 -:*)`
+# matches. Substitute both placeholders literally. The second argument is the `--resume`
+# run id, or an EMPTY STRING on a fresh claim.
+python3 - <<'PY' "<CLAIM_ID>" "<RESUME_RUN_ID or empty>"
+import sys, secrets, datetime, subprocess
+from pathlib import Path
+
+claim_id, resume = sys.argv[1], sys.argv[2].strip()
+# Quoting alone does NOT make an unsubstituted placeholder loud here, the way it does at
+# Step 2 where the id is looked up and not found: this block CREATES its path, so
+# `<CLAIM_ID>` would quietly become a directory of that literal name. Refuse it instead.
+if "<" in claim_id or "<" in resume:
+    print("ERROR: placeholder not substituted: {!r} {!r}".format(claim_id, resume), file=sys.stderr)
+    sys.exit(2)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+claim_root = main_root / "sysop" / "runtime" / "claim" / claim_id
+
+if resume:
+    # ADOPT the named run. Do not mint, do not mkdir, do not touch what is in it.
+    d = claim_root / resume
+    if not d.is_dir():
+        print("ERROR: no run '{}' under {}".format(resume, claim_root), file=sys.stderr)
+        sys.exit(2)
+    run_id = resume
+    print("RESUMED=1")
+else:
+    run_id = "{}-{}".format(
+        datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        secrets.token_hex(4),
+    )
+    d = claim_root / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    # Clear the shared envelope mailbox INTO this run, moving rather than deleting. The
+    # hook keys envelopes `<CLAIM_ID>.<phase>.json` with NO run component, and Step 8 never
+    # deletes them, so a re-claim would otherwise read the PREVIOUS run's exec.json and
+    # print "Claim complete" for work this run never did. Per-run keying protects the
+    # artifact directory; this is what protects the artifact Step 8 actually reads.
+    env_dir = main_root / "sysop" / "runtime" / "subagent-envelopes"
+    moved = []
+    if env_dir.is_dir():
+        prior = d / "prior-envelopes"
+        stale = sorted(set(env_dir.glob(claim_id + ".*.json")) | set(env_dir.glob(claim_id + ".json")))
+        for p in stale:
+            prior.mkdir(parents=True, exist_ok=True)
+            p.rename(prior / p.name)
+            moved.append(p.name)
+    print("MOVED_PRIOR_ENVELOPES=" + (", ".join(moved) or "none"))
+
+print("RUN_ID=" + run_id)
+print("ARTIFACT_DIR=" + str(d))
+PY
+```
+
+Read `RUN_ID` and `ARTIFACT_DIR` off stdout and **hold them in your own context**, keyed to this claim — not in a shell variable and not in a shell array. Nothing survives from one fenced block to the next, even inside a single step (`WORKFLOW.md` § 8.2a, *Persistence boundary*), so a later `"$RUN_ID"` expands to the empty string and would silently collapse every run into one directory. Substitute them literally at each later site, exactly as `<CLAIM_ID>` is substituted. `ARTIFACT_DIR` is **absolute and outside the worktree** — the sub-agents `cd` into the worktree and still write to it by absolute path.
+
+The timestamp half of the run id is for a human reading the directory listing; the random half is what guarantees uniqueness. A timestamp alone is not enough — `started:` is second-granular, and a release followed immediately by a re-claim produces an identical one.
+
+**On a `--resume`, the mailbox is deliberately left alone.** The moved-aside envelopes belong to *earlier* runs of this claim, and a resumed run's own `plan.json` / `review.json` may still be sitting there from before it parked. The honest limit: if some *other* run of this claim ran after the one being resumed, its `exec.json` is still in the mailbox and Step 8 would read it. `--resume` is a human naming a specific run, and this is one more thing that assertion covers.
+
+#### Where a resume re-enters — read it off the artifacts, not off memory
+
+The artifacts on disk **are** the resume state.
+
+**Route on files in `<ARTIFACT_DIR>` and on nothing else.** In this order, first match wins:
+
+| State of `<ARTIFACT_DIR>` | Re-enter at | Why |
+|---|---|---|
+| `classification.md` reads `verdict: SUPERSEDED` | **stop** | Step 7d's *revise* rejected this run's plan and minted a successor. Name the successor and stop; resuming a plan a human rejected is worse than doing nothing. |
+| `classification.md` reads `verdict: BLOCKED` | **7c** | The ordinary park, and the executor's `BLOCKED` return. Re-classify **with the human's answer in hand** — the answer is the new input, and 7c is where it lands. |
+| `answers-outcome.md` reads `answers_status: BLOCKED` | **Step 8b** | The answers executor stopped on a question. Re-ask with it in hand; 8b archives that cycle's answer files before writing new ones. |
+| `answers-outcome.md` present | **Step 8** | The answers executor already ran here, or had nothing to fix. **Do not re-spawn it** — report `answers-outcome.md`. |
+| `answers.md` present | **Step 8c** | The human answered and no outcome was recorded. 8c's prepare block says whether the answers executor was already spawned. |
+| `outcome.md` reads `executor_status: EXECUTED` and `questions.md` holds a `## ` entry | **Step 8, from the stranded-body check** | The executor filed questions and nobody was asked here. A `--resume` is a human, so Step 8 re-runs its checks and 8b asks. |
+| `outcome.md` present | **Step 8** | The executor already ran and Step 8 recorded its terminal status. **Do not re-spawn it** — report `outcome.md`. |
+| `plan-only.md` present | **stop**, or **7f** | Option C already ran here. If it reads `released: yes` the run is finished — report it and stop; the next action is an ordinary fresh `/claim-task <CLAIM_ID>`. If it reads `released: no` the plan is committed and the **release did not complete**: re-enter at **Step 7f step 3** and finish it. Never route an option-C run to 7d or 7e. |
+| no `plan.md` | **7a** | Nothing was planned, or the planner failed before writing. |
+| no `planner-integrity.md`, or it reads `VIOLATED` | **7a** | The plan was never re-gated, or its integrity check recorded that HEAD moved or left the task branch during 7a. Re-plan; do not review it. |
+| no `review.md` | **7b** | The plan stands and its integrity is recorded `OK`; it has not been reviewed. |
+| no `classification.md` | **7c** | Findings exist and were never adjudicated. |
+| `verdict: PROCEED` | **7d** (option A) / **7e** (option B) / **7f** (option C) | Already adjudicated clean; the run stalled before its terminal step. Re-resolve Step 6 for this re-entry rather than assuming the original option — the flag is not recorded in the run, and `--plan-only` is as re-passable as `--no-review-plan`. |
+
+Print which row matched and why before continuing.
+
+**Two rules make this table sound, and both were installed because a round found the table wrong without them.**
+
+**1. Nothing routes off the shared envelope mailbox.** An earlier revision's first row keyed on `<CLAIM_ID>.exec.json` being present in `sysop/runtime/subagent-envelopes/`. That is a *shared* directory keyed by claim and phase with **no run component**, and a resume deliberately does not clear it — so a `BLOCKED` executor's envelope was still sitting there, the first row matched, and the resume went to Step 8, re-parked, and printed "resume with `--resume`" again. **A loop, and it made the `BLOCKED` row below it unreachable** — the row that exists for the one runtime path that actually produces a blocker question. The same shape sent a resume of an *older* run to the executor, because a later fresh claim had moved that run's envelope aside. `outcome.md` is written into **this run's** directory by Step 8, so it answers "did the executor already run *here*" without consulting anything shared.
+
+**2. Every stage that gates records its verdict as a file.** `planner-integrity.md` is why the integrity check is not lost to a crash: it lived only in orchestrator context, so a crash between the planner's return and the check left `plan.md` on disk with no marker and no verdict, and the table routed it to a reviewer — **laundering exactly the plan the check exists to catch**, reachable by a crash rather than by a park. The pre-plan SHAs get the same treatment one step earlier: 7a writes them to `pre-plan.md` before it spawns the planner, so a re-entry at 7a re-baselines on them whether or not the check ever ran.
+
+`plan.md` is written at most once per run, with one exception: the rows above reach 7a only when it is absent, or when `planner-integrity.md` is absent or reads `VIOLATED`, whose re-plan overwrites a plan no reviewer saw. Step 7d's *revise* mints a new run rather than re-planning into this one. Presence-based routing is only sound over an artifact set where each file describes one plan.
+
+**The artifact directory makes the MAIN checkout untracked-dirty on a consumer that has not run the installer.** `install.sh` seeds `sysop/runtime/` into the consumer's `.gitignore`, and git honours a working-tree `.gitignore` whether or not it has been committed, so on a bootstrapped consumer the directory is ignored and nothing shows. Where the entry is absent, do **not** key any check on the literal string `?? sysop/runtime/` — git collapses to the topmost untracked directory, so it is `?? sysop/` when nothing under `sysop/` is tracked. And do not let this decide whether the pipeline may proceed: it is a bootstrap gap, not a fault.
+
+### Step 7a: Spawn the planner
+
+#### Skip the planner when the body already carries a `## Plan` — and only the planner
+
+**Not on a run whose `<ARTIFACT_DIR>` already holds `pre-plan.md`, that Step 7-pre sent back after `VIOLATED`, or that Step 7d's *revise* minted:** go straight to the pre-plan record below. Otherwise, **before capturing HEAD or spawning anything, read the task body from the main checkout** (the same copy and the same resolution Step 2 used) **and check for a non-empty `## Plan` section.** If one is there, a previous `/claim-task <TASK_ID> --plan-only` run already planned this task and had that plan adversarially reviewed. Copy the section's content into `<ARTIFACT_DIR>/plan.md` verbatim, print one line saying where the plan came from, and go to **Step 7b**.
+
+```
+Plan found in the task body (written by a previous --plan-only run) — skipping the
+planner. The plan is re-reviewed against today's main, not inherited as reviewed.
+```
+
+**Four properties of this skip, each load-bearing:**
+
+- **It is a presence test, not a verdict test.** Non-empty `## Plan` is the whole condition. Nothing reads the `REVIEW_REPORT:` block inside it to decide anything, and no gate anywhere trusts it.
+- **It skips the planner and never the reviewer.** 7b runs on the recovered plan exactly as it runs on a fresh one. This is what makes the marker unforgeable-by-irrelevance rather than unforgeable-by-construction: a body marker is a string any agent with `Bash` can write, so the fix is to remove what forging it would buy, not to defend it. There is no path from this section to skipping a review.
+- **Re-reviewing a day-old plan is correct, not wasteful.** It was reviewed against a `main` that has since moved; today's review is against the tree the work will actually land on. The stale-plan problem and the forgery problem have one solution.
+- **Write `planner-integrity.md` for this run recording `OK` with the reason `plan recovered from body, no planner spawned`.** 7-pre's routing table refuses to review a plan whose integrity file is absent or `VIOLATED`, and the check that file records — did HEAD move or leave the task branch during 7a — is vacuously satisfied when no planner ran. Skipping the record instead would send an immediate `--resume` straight back to 7a and re-plan the task the skip exists to avoid.
+
+**Review batches:** this skip never applies. There is no per-task body file to read a `## Plan` out of, and option C is not offered on the batch path (Step 6), so a batch claim always plans fresh.
+
+**If there is no `## Plan`, or it is empty, continue with the spawn below** — the ordinary path, and the one nearly every claim takes.
+
+**Record the pre-plan HEAD and the default branch's tip first — before the spawn, not after it.** The integrity check below compares against both, and a SHA captured after the planner has already run proves nothing. Run this block before 7a's first spawn in a run, and again each time Step 7-pre routes the run back here. The first run of it in a run directory captures both SHAs into `<ARTIFACT_DIR>/pre-plan.md`; every later one holds what that file records.
+
+```bash
+# Substitute every literal, quoted; resolve <default branch> as the table above says.
+python3 - <<'PY' "<WORKTREE_PATH>" "<CLAIM_ID>" "<RUN_ID>" "<default branch>"
+import os, re, sys, subprocess
+from pathlib import Path
+
+worktree, claim_id, run_id, default = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+if "<" in worktree or "<" in claim_id or "<" in run_id or "<" in default:
+    print("ERROR: placeholder not substituted", file=sys.stderr)
+    sys.exit(2)
+env = dict((k, v) for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"))
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True, env=env).stdout.strip()
+run_dir = Path(common).resolve().parent / "sysop" / "runtime" / "claim" / claim_id / run_id
+if not run_dir.is_dir():
+    print("ERROR: no such run directory {} -- Step 7-pre mints runs".format(run_dir), file=sys.stderr)
+    sys.exit(3)
+full_id = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+def fields(p):
+    try:
+        text = p.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        print("ERROR: cannot read {}: {}".format(p, e), file=sys.stderr)
+        sys.exit(4)
+    out = {}
+    for line in text.splitlines():
+        m = re.match(r"- (pre_plan_head|pre_plan_base): *(.*)$", line)
+        if m and m.group(1) not in out:
+            out[m.group(1)] = m.group(2).strip()
+    return out
+
+record = run_dir / "pre-plan.md"
+integrity = run_dir / "planner-integrity.md"
+was = fields(integrity) if integrity.is_file() else {}
+if record.is_file():
+    held, source = fields(record), "held from pre-plan.md"
+elif "pre_plan_head" in was:
+    held, source = was, "held from planner-integrity.md (a run recorded before pre-plan.md)"
+else:
+    held, source = None, "captured"
+if held is None:
+    head = subprocess.run(["git", "-C", worktree, "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True, env=env).stdout.strip()
+    tip = subprocess.run(["git", "-C", worktree, "rev-parse", "--verify", "refs/heads/" + default],
+                         capture_output=True, text=True, env=env)
+    held = dict(pre_plan_head=head,
+                pre_plan_base=tip.stdout.strip() if tip.returncode == 0 and tip.stdout.strip() else "none")
+head, base = held.get("pre_plan_head", ""), held.get("pre_plan_base") or "none"
+if not full_id.fullmatch(head):
+    print("ERROR: recorded pre_plan_head {!r} is not a full object id".format(head), file=sys.stderr)
+    sys.exit(4)
+# Only a full id in the check's record is a baseline to compare; a mis-substituted argument is not.
+was_head, was_base = was.get("pre_plan_head", ""), was.get("pre_plan_base", "")
+if full_id.fullmatch(was_head) and (was_head != head or
+                                    (full_id.fullmatch(was_base) and was_base != base)):
+    print("ERROR: pre-plan.md and planner-integrity.md record different pre-plan SHAs", file=sys.stderr)
+    sys.exit(4)
+if not record.is_file():
+    record.write_text("# Pre-plan record — {} run {}\n\n- pre_plan_head: {}\n- pre_plan_base: {}\n"
+                      "- source: {}\n".format(claim_id, run_id, head, base, source), encoding="utf-8")
+print("PRE_PLAN_SOURCE=" + source)
+print("PRE_PLAN_HEAD=" + head)
+print("PRE_PLAN_BASE=" + base)
+PY
+```
+
+Hold `PRE_PLAN_HEAD` as `<PRE_PLAN_HEAD>` and `PRE_PLAN_BASE` as `<PRE_PLAN_BASE>`, and substitute both literally below. `none` means the default branch could not be read; the check then accepts only an unmoved HEAD. **A re-spawn in the same run keeps the SHAs you already hold: do not re-run this block for it.** The planner can write into `<ARTIFACT_DIR>`, and a re-run would read what it wrote. **A held baseline parks on any move of HEAD except onto commits the recorded tip held**, a fast-forward made after the record as well as a planner commit; the park report says which, and the remedy is to reset the worktree to `pre_plan_head`, resume, and fast-forward after the check passes. **On exit 4, stop and report it:** the run's record is not a baseline (a `pre_plan_head` that is not a full object id, two files recording different object ids, or a record it cannot read). **On any other non-zero exit, stop and report it too; never capture the SHAs by hand instead.** Not a shell variable: nothing survives from one fenced block to the next (`WORKFLOW.md` § 8.2a), and the failure is silent rather than loud — `git -C ""` does not fail, it runs in the CWD and returns a real SHA, so a comparison against an empty right-hand side is always unequal and would park every claim.
+
+Print one line first so the transcript does not go silent:
+
+```
+Spawning planner for <CLAIM_ID> — plan only, no implementation. 3–10 minutes.
+```
+
+Spawn with the `Agent` tool:
+
+- `subagent_type`: `"general-purpose"`
+- `model`: `"opus"`, `effort`: `"high"` <!-- sysop:role=planner -->
+- Do **NOT** set `isolation: "worktree"` — the worktree pre-exists from Step 4; the planner `cd`s into it.
+- Do **NOT** pass `run_in_background`. <!-- skill-audit-ok: run_in_background --> It is **not** a parameter of the `Agent` tool and its schema is closed, so a compliant call raises `InputValidationError` — and a rejected tool call is itself an invitation to proceed without the step. Sub-agents have run in the background by default since Claude Code 2.1.198.
+- `description`: `"Plan <CLAIM_ID>"`
+- `prompt`: the **Planner Prompt** below, with `<CLAIM_ID>`, `<WORKTREE_PATH>`, `<BRANCH_NAME>`, `<ARTIFACT_DIR>` filled in.
+
+---
+
+**START OF PLANNER PROMPT**
+
+You are planning `<CLAIM_ID>` for the `/claim-task` orchestrator. Your **only** job is to produce an implementation plan and write it to disk. Do NOT implement, do NOT commit, do NOT call `ExitPlanMode` (you are not in plan mode), do NOT invoke the Agent tool.
+
+The work is already claimed: worktree at `<WORKTREE_PATH>`, lock at `sysop/runtime/locks/<CLAIM_ID>.lock`, branch `<BRANCH_NAME>`.
+
+**Working directory:** `<WORKTREE_PATH>` (cd here first).
+
+**Read the task from the main checkout, not the worktree.** For a roadmap task the body is `tasks/open/<CLAIM_ID>.md` — or wherever `body:` points in `tasks/index.yml`, which is **relative to `tasks/`**, not to the repo root. A body filed by `/add-task` is deliberately left uncommitted, and the feature branch holds only committed history (Step 4d brings it up to the claim commit, which carries `tasks/index.yml` alone), so an untracked body never entered this branch and opening it here returns ENOENT. Resolve it against the main repo root (`git rev-parse --git-common-dir`, then its parent). **If the body cannot be read, stop and report it — do not plan from the index title alone.**
+
+**Body *edits* go in the worktree copy, not the one you just read.** The rule above is about *locating* the body; it is not the write path, and reading it as one is what internal tracker #322 reported. **Nothing commits a body edit made in the main checkout.** Be precise about why, because the obvious reason is wrong: `main` *is* committed to directly here — Step 4d does it — and under `§ Merge policy: pr`, `/review-close` Step 4-pre cuts the integration branch from local `<default branch>`, so local-only `main` **commits** ride onto it. What reaches it is commits. A body edit left uncommitted in the main checkout is not one, no step stages it, and so it reaches no branch and no PR. Meanwhile `/review-close` Step 2d reads the `## Test decision` record **at the branch tip** (that step says so in as many words — *"the executor writes it into the body during implementation, inside the worktree"*), where a main-checkout edit is not. So every plan step that writes to the body must name the copy under `<WORKTREE_PATH>`.
+
+**If the body is untracked in the main checkout** (filed by `/add-task` and never committed — the case the read rule above exists for) there is no worktree copy, and one cannot be created: `git add`ing it on the branch makes `/review-close`'s merge abort with *"The following untracked working tree files would be overwritten by merge"*. Plan the write against the main-checkout copy, and add a plan step to **say so in the executor's final message** — that record will not reach the PR, and the body needs committing before `/review-close` runs.
+
+**Review batches:** there is no per-task body file. Read the `### Batch <N>` section of `review_tasks.md` in full, including its `> **Branch:** / **Scope:** / **Verify:**` metadata, and plan the fix order across the batch's tasks.
+
+### What the plan must contain
+
+1. **Task summary** — one paragraph restating the goal.
+2. **`## Constraints & Risks`** — the **first** content block after the summary, before any implementation steps. Read `.claude/convention_map.md` and `.claude/security_map.md`; for each file or directory the plan will create or modify, list one bullet enumerating the applicable conventions and security checks from **both** maps, plus cross-cutting rules for the file type. One bullet per risk, no prose padding. Close it with a `### Coverage gap` subsection listing any touched file matching no section in either map (write `_(none)_` if every file matches). **Do not skip a file silently** — an empty match means the maps lack coverage for that path and must be logged so `/codebase-review` map-coverage auditing can pick it up.
+3. **External SDK/framework calls.** Any plan step calling an external library, SDK or framework method must either **cite an in-repo precedent** (`file:line` of an existing same-project call site using that method the same way) or be marked **`unverified — no in-repo precedent`**. The bar is *cite a precedent or flag it*, not *verify against live docs*.
+4. **`## Test decision`** — state either **`test <X> proves <Y>`** (the regression test, existing or new, that pins the behaviour this change touches) or **`no test because <Z>`** with a reviewable rationale. Add a plan step to write this section into the task's body file during implementation, **naming the worktree copy** (`<WORKTREE_PATH>/tasks/…`) as the path it writes to, per the write rule above. Make `Z` reviewable, not a hand-wave — the reviewer scrutinises it.
+5. **Map gap steps.** For each file the plan **creates**, **moves/refactors into**, or **deletes**, check both maps: a new or moved path matching no `## ` section needs a plan step to extend the map; a deleted file named explicitly in a section header needs a plan step to clean up the reference.
+6. **`## Implementation Steps`** — numbered, with concrete file paths, line ranges and expected diffs.
+
+### Write the plan to disk
+
+Write the full plan to `<ARTIFACT_DIR>/plan.md`. This file is the orchestrator's input to the reviewer and the durable record that planning happened; a plan that exists only in your final message is lost the moment this agent ends.
+
+`<ARTIFACT_DIR>` is an **absolute path in the main checkout, outside your worktree**. Use it exactly as given — do not re-derive it, do not make it relative to the working directory above, and do not `git add` it. The directory already exists.
+
+### Final message
+
+Emit exactly this as the LAST fenced block of your final message, with no content after the closing backticks:
+
+```yaml
+TASK: <CLAIM_ID>
+PHASE: plan
+STATUS: EXECUTED
+WORKTREE: <absolute path, no trailing slash>
+BRANCH: <branch name>
+ERROR: <error description if you could not produce a plan, else "none">
+```
+
+`TASK:` must be exactly `<CLAIM_ID>` — the `SubagentStop` hook validates it against `^[A-Z][A-Z0-9-]{2,80}$` and writes a diagnostic instead of an envelope if it does not match. `PHASE: plan` is what keeps your envelope from overwriting the reviewer's and the executor's.
+
+**END OF PLANNER PROMPT**
+
+---
+
+**Post-plan integrity check.** The planner is instructed not to commit. Verify before spawning the reviewer. The comparison is **mechanical** — an orchestrator that has to eyeball two SHAs hundreds of tool calls into a run is the attention decay this whole reshape exists to remove:
+
+```bash
+# Substitute every literal, quoted: the worktree path, the two SHAs captured at the top of
+# this step, and the branch. An unsubstituted `<PRE_PLAN_HEAD>` reports VIOLATED, which
+# parks — loud, and in the safe direction.
+python3 - <<'PY' "<WORKTREE_PATH>" "<PRE_PLAN_HEAD>" "<CLAIM_ID>" "<RUN_ID>" "<PRE_PLAN_BASE>" "<BRANCH_NAME>"
+import os, re, sys, subprocess
+from pathlib import Path
+
+worktree, pre, claim_id, run_id = sys.argv[1], sys.argv[2].strip(), sys.argv[3], sys.argv[4]
+base, branch = sys.argv[5].strip(), sys.argv[6]
+if "<" in claim_id or "<" in run_id or "<" in base or "<" in branch:
+    print("ERROR: placeholder not substituted", file=sys.stderr)
+    sys.exit(2)
+
+# An inherited GIT_DIR overrides -C, and would read another checkout's HEAD.
+env = dict((k, v) for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"))
+now = subprocess.run(["git", "-C", worktree, "rev-parse", "HEAD"],
+                     capture_output=True, text=True, check=True, env=env).stdout.strip()
+verdict = "OK" if now == pre else "VIOLATED"
+moved_by = "HEAD unmoved" if verdict == "OK" else "HEAD moved"
+# OK too if HEAD moved only forward, onto commits the default branch already held when
+# planning began. Both SHAs must be full object ids, never names. Any git error keeps
+# VIOLATED. Either OK also needs HEAD still on the task branch (below).
+full_id = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+on_branch = subprocess.run(["git", "-C", worktree, "symbolic-ref", "-q", "HEAD"], capture_output=True,
+                           text=True, env=env).stdout.strip() == "refs/heads/" + branch
+if verdict == "VIOLATED" and full_id.fullmatch(pre) and full_id.fullmatch(base):
+    fwd = subprocess.run(["git", "-C", worktree, "merge-base", "--is-ancestor", pre, now],
+                         capture_output=True, text=True, env=env)
+    own = subprocess.run(["git", "-C", worktree, "rev-list", "--count", now, "--not", pre,
+                          base, "--"], capture_output=True, text=True, env=env)
+    if fwd.returncode == 0 and own.returncode == 0 and own.stdout.strip() == "0":
+        verdict = "OK"
+        moved_by = "HEAD moved only onto commits the default branch held before planning"
+if verdict == "OK" and not on_branch:
+    verdict, moved_by = "VIOLATED", "HEAD left the task branch"
+
+# The verdict is a FILE, not a line of transcript. Held only in context it is lost
+# to a crash between the planner's return and this check -- and then `plan.md` sits
+# on disk with nothing recording that it was never re-gated, so a resume routes it
+# to a reviewer and a clean review launders exactly the plan this check exists to
+# catch. It also carries the pre-plan SHAs it judged against, which 7a's pre-plan
+# record must match on a re-entry.
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True, env=env).stdout.strip()
+out = Path(common).resolve().parent / "sysop" / "runtime" / "claim" / claim_id / run_id / "planner-integrity.md"
+if not out.parent.is_dir():
+    print("ERROR: no such run directory {}".format(out.parent), file=sys.stderr)
+    sys.exit(3)
+out.write_text("# Planner integrity — {} run {}\n\n- pre_plan_head: {}\n- pre_plan_base: {}\n"
+               "- post_plan_head: {}\n- verdict: {}\n- reason: {}\n".format(
+                   claim_id, run_id, pre, base, now, verdict, moved_by), encoding="utf-8")
+print("PRE=" + pre)
+print("NOW=" + now)
+print("planner-integrity: " + verdict + " (" + moved_by + ")")
+PY
+```
+
+On `VIOLATED`, **do not proceed to 7b.** HEAD moved or left the task branch during 7a, which the planner's contract forbids, or, on a held baseline, a fast-forward made after the record moved it (the hold above). Park per Step 7c's park procedure, passing `planner-integrity VIOLATED in 7a: <the check's reason> (<PRE_PLAN_HEAD> -> <NOW>)` as the recorded reason. `planner-integrity.md` now records the violation durably, so Step 7-pre's routing table sends a resume back to 7a rather than handing the un-re-gated plan to a reviewer — and 7a re-baselines on the `pre_plan_head` and `pre_plan_base` in `pre-plan.md`, **not** on the rogue commit.
+
+### Step 7b: Spawn the reviewer
+
+**Always.** Review is never inherited, never skipped, and never merged into another agent's job. A reviewer that did not write the plan is the property the collapsed reviewer-executor shape conceded, and recovering it is most of the point of this reshape.
+
+Same agent parameters as 7a except `model`: `"opus"`, `effort`: `"high"` <!-- sysop:role=plan-review --> (the `effort` is this line's, never 7a's: with none here, pass none), with `description`: `"Adversarial plan review <CLAIM_ID>"`.
+
+`prompt`: the **contents of `<ARTIFACT_DIR>/plan.md` verbatim**, followed by the **Prompt Template** block copied verbatim from `.claude/skills/_shared/adversarial-review.md`, followed by the two paragraphs below. No other wrapper text — the shared template supplies the framing, and duplicating it here would fork it.
+
+> **Why the plan is INLINED here while Step 7e hands the executor the same file by path — a deliberate asymmetry, not an oversight.** Read on its own this looks like a missed optimisation: the reviewer is already given `<ARTIFACT_DIR>` (it must be, to have somewhere to write `review.md`), so it could be told to read `plan.md` itself, and inlining costs tokens proportional to plan size — measured upstream at ~28k tokens round-trip for a 15-task batch plan, i.e. worst exactly where the review matters most. **It is kept anyway, because the two agents fail differently.** This whole reshape exists because a review once did not happen; a reviewer *told to read a file* can skim it, read part of it, or not read it at all, and nothing downstream can tell — the same undetectable-omission shape one level down. Inlining makes exposure to the plan a property of the prompt rather than a step the reviewer must choose to take. The executor at 7e has no such failure mode available: it cannot implement a plan it did not read, so its non-compliance is visible in its output. **Do not "fix" this asymmetry by making 7b read the path** — the saving is real and the property is the point. If it is ever revisited, the thing to change is the *shared* contract in `_shared/adversarial-review.md`, which `/auto-build` also implements, and not this site alone.
+
+---
+
+**START OF REVIEWER PROMPT TAIL** (appended after the plan and the shared Prompt Template)
+
+**Working directory:** `<WORKTREE_PATH>` (cd here first). You did not write this plan and have no context from the session that did. Do not fix it — find what is wrong with it.
+
+Write your full findings to `<ARTIFACT_DIR>/review.md` — an **absolute path in the main checkout, outside your worktree**; use it exactly as given, do not re-derive it, and do not `git add` it. That file is the durable record of what you found. It is **not** the transport, and it does not discharge the sealed block: the block's one required home is your final message, below.
+
+**Your final message must carry two fenced blocks, in this order, with no content after the second.**
+
+**First — the sealed report.** A fenced block whose body begins `REVIEW_REPORT:`. The hook captures the first such block into the envelope's `review_report_raw`, which is how the verdict reaches the orchestrator through a file no agent writes. Leave it out and the orchestrator has nothing but a file you wrote yourself, which is exactly what an invented review would also produce:
+
+```yaml
+REVIEW_REPORT:
+  findings:
+    - id: F1
+      summary: "..."
+      evidence: "file:line"
+  verdict: FINDINGS | CLEAN
+```
+
+**Second — the envelope, as the LAST fenced block of your final message:**
+
+```yaml
+TASK: <CLAIM_ID>
+PHASE: review
+STATUS: EXECUTED
+WORKTREE: <absolute path, no trailing slash>
+BRANCH: <branch name>
+ERROR: <error description if you could not complete the review, else "none">
+```
+
+Report findings only. **Do not classify them** as `fixable` or `blocker` and do not decide whether the work proceeds — that is the orchestrator's job at Step 7c, deliberately kept one layer up. If you find nothing, emit `findings: []` and `verdict: CLEAN` explicitly so the orchestrator can record that the step ran clean rather than that it failed to run.
+
+**END OF REVIEWER PROMPT TAIL**
+
+---
+
+**Post-review transport check.** The sealed block is the *only* channel the reviewer cannot forge, and when it is missing nothing says so: the hook writes `review_report_raw: null` beside `"parsed": true` and exits `0`, so a run whose verdict never arrived is byte-for-byte as healthy-looking as one whose verdict did (internal tracker #329 — the failure shape internal tracker #220 reported, reappearing inside the mechanism built to fix it). The check is **mechanical** for the same reason the post-plan one is: an orchestrator that has to remember to open a JSON file and notice a `null` is the attention decay this reshape exists to remove.
+
+```bash
+# Substitute BOTH literals, quoted. Reads the review envelope the hook wrote and the
+# review.md the reviewer wrote, and records a verdict. Stdlib only — NO PyYAML (a
+# consumer whose bare `python3` lacks it is the PEP-668 default), and the
+# same MAIN-checkout resolution every other block in this step uses.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>"
+import sys, json, subprocess
+from pathlib import Path
+
+claim_id, run_id = sys.argv[1], sys.argv[2]
+if "<" in claim_id or "<" in run_id:
+    print("ERROR: placeholder not substituted", file=sys.stderr)
+    sys.exit(2)
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+run_dir = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id
+if not run_dir.is_dir():
+    print("ERROR: no such run directory {}".format(run_dir), file=sys.stderr)
+    sys.exit(3)
+
+env_path = main_root / "sysop" / "runtime" / "subagent-envelopes" / (claim_id + ".review.json")
+review_md = run_dir / "review.md"
+status, sealed = None, None
+if env_path.is_file():
+    try:
+        payload = json.loads(env_path.read_text(encoding="utf-8"))
+    except ValueError:
+        payload = {}
+    status = payload.get("status")
+    sealed = payload.get("review_report_raw")
+
+# Order matters. An absent `review.md` is the failure table's reviewer row and outranks
+# anything the envelope says: without the durable artifact there is nothing for 7c to fall
+# back to, so routing it as EMPTY_TRANSPORT would send classification at a file that does
+# not exist. An absent envelope FILE is not a reviewer failure at all — Step 8's read-order
+# contract names an unregistered hook and a failed write as supported configurations.
+if not review_md.is_file():
+    verdict = "NO_REVIEW_MD"
+elif not env_path.is_file():
+    verdict = "NO_ENVELOPE"
+elif sealed:
+    verdict = "OK"
+else:
+    verdict = "EMPTY_TRANSPORT"
+
+# A FILE, not a line of transcript: the whole point of the sealed block is that the
+# record survives the context that read it, so a report about the record must too.
+(run_dir / "review-transport.md").write_text(
+    "# Review transport — {} run {}\n\n- envelope: {}\n- envelope_status: {}\n"
+    "- review_md: {}\n- verdict: {}\n".format(
+        claim_id, run_id, env_path, status, review_md.is_file(), verdict),
+    encoding="utf-8")
+print("review_md: {}".format(review_md.is_file()))
+print("envelope_status: {}".format(status))
+print("review-transport: " + verdict)
+PY
+```
+
+Dispositions, one per verdict — these are rules, not judgement, for the same reason the failure table below is:
+
+- **`OK`** — proceed to 7c and classify from the sealed block.
+- **`EMPTY_TRANSPORT`** — the reviewer ran, left `review.md`, and returned an envelope, but the verdict reached you through no unforgeable channel. **Re-spawn 7b once**, unchanged — and **move the stale `<CLAIM_ID>.review.json` into `<ARTIFACT_DIR>/prior-envelopes/` first**, exactly as Step 7-pre does at run start and for the same reason: the mailbox is keyed by claim and phase with **no run component**, so a second reviewer whose envelope fails to write leaves the first one sitting there to be read as its result. If the second return is also `EMPTY_TRANSPORT`, proceed to 7c on `<ARTIFACT_DIR>/review.md` — but say so out loud in your Step 8 report and leave `review-transport.md` recording it. **This does not park**, and the asymmetry with the table below is deliberate: a review that demonstrably ran and left a durable artifact is worth more than a claim discarded over a channel failure, and the receipt is what keeps the degraded case from reading as the healthy one.
+- **`NO_ENVELOPE`** — the hook wrote no envelope file. **This alone is not a failure and must not park.** Step 8's read-order contract names an **unregistered hook or a failed write** as supported configurations and falls back to regex-parsing the agent's return text; do the same here. Read the reviewer's own return text and look for the first fenced block whose body begins `REVIEW_REPORT:`. Found, and that is this run's transport — record `OK (return-text fallback)` in the receipt by hand and proceed. Not found, and the case is `EMPTY_TRANSPORT` above. Check for an `_unparseable_*.json` diagnostic while you are there (Step 8 states how to read one, and how not to attribute a stranger's to this claim).
+- **`NO_REVIEW_MD`** — the reviewer left no durable artifact. **This** is the failure table's reviewer row, and it is the one that parks: re-spawn once, then park per 7c with `reviewer returned no review.md twice` as the recorded reason. Nothing here is recoverable from the envelope, because 7c's fallback input is the file that is missing.
+
+**The receipt is a report, not a freshness proof.** It records what was in the mailbox when it ran, and the mailbox has no run component — Step 7-pre's move-aside is what keeps it fresh for a *fresh* run, and a `--resume` deliberately leaves it alone. So on a resume, treat a bare `OK` as unproven until you have checked that the envelope belongs to this run's reviewer rather than the previous one's.
+
+### Step 7c: Classify the findings — the orchestrator does this itself
+
+Apply the **Classification Rubric** in `.claude/skills/_shared/adversarial-review.md` to each finding the reviewer returned. **This is not delegated to a third sub-agent**: classification is the seam where the human stays the gate, and pushing parse-and-judge one layer down adds no fresh eyes.
+
+- **`fixable`** — absorbed into the plan without human input (mis-cited patterns, convention mis-applications, factual drift, missing tests, N+1 patterns, asymmetric error handling).
+- **`blocker`** — needs human input the agent cannot produce (ambiguous requirements, missing source data the task assumes, conflicting goals). Only after genuinely trying to resolve it by reading more code.
+
+**Decompose before rejecting.** A finding asserting several independent clauses, or citing several sites, is adjudicated clause by clause — refuting one clause does not reject the finding, and a rejection rationale must name every clause and why each fails. This failure mode is directional: partial refutation only ever turns a real finding into an apparent false positive, never the reverse.
+
+**Write the classification to disk.** It is the third artifact, and without it the claim that "the artifacts on disk are the resume state" is false — Step 7e takes the classification as an input, and an orchestrator that dies between 7c and 7d otherwise loses it.
+
+```bash
+# Compose `findings` from your own classification. Values are yours to write as literals —
+# they are not shell variables and nothing carries between blocks (WORKFLOW.md § 8.2a).
+# Stdlib only — NO PyYAML. This artifact must be writable on a consumer whose
+# bare `python3` has no PyYAML (the PEP-668 default): a classification
+# that cannot be written is a pipeline that halts at 7c on an ordinary install.
+# `json.dumps` is used to emit the block because JSON is a subset of YAML 1.2, so
+# the fence below is genuinely YAML and every scalar is escaped by the stdlib
+# rather than by hand.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>"
+import sys, json, subprocess
+from pathlib import Path
+
+claim_id, run_id = sys.argv[1], sys.argv[2]
+# Same reason as Step 7-pre's: this block mkdir -p's its own parent, so an unsubstituted
+# placeholder would write into a literally-named directory instead of failing.
+if "<" in claim_id or "<" in run_id:
+    print("ERROR: placeholder not substituted: {!r} {!r}".format(claim_id, run_id), file=sys.stderr)
+    sys.exit(2)
+
+report = dict(
+    claim_id=claim_id,
+    run_id=run_id,
+    classified_by="orchestrator",
+    findings=[
+        # dict(id="F1", classification="fixable", summary="...", response="incorporated in step 3"),
+    ],
+    verdict="PROCEED",  # or "BLOCKED"
+)
+
+# Same MAIN-checkout resolution as Step 7-pre — the artifact directory is not in the
+# worktree, so `Path(worktree)/…` here would write a second, unreachable copy.
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+
+out = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id / "classification.md"
+# REFUSE to create the run directory. Step 7-pre is the only thing that mints a run, and
+# a `mkdir(parents=True)` here would manufacture one from a mistyped <RUN_ID> -- which
+# Step 1's `--resume` validator would then bless, because its whole test is "does this
+# directory exist". Only 7-pre creates; every later block writes into what it made.
+if not out.parent.is_dir():
+    print("ERROR: no such run directory {} -- Step 7-pre mints runs, this step does not"
+          .format(out.parent), file=sys.stderr)
+    sys.exit(3)
+out.write_text(
+    "# Classification — {} run {}\n\n```yaml\n{}\n```\n".format(
+        claim_id, run_id, json.dumps(report, indent=2, ensure_ascii=False)
+    ),
+    encoding="utf-8",
+)
+print("wrote " + str(out))
+PY
+```
+
+`classified_by: orchestrator` is load-bearing metadata, not decoration: the collapsed shape had the reviewer self-classify, and on disk the two are otherwise indistinguishable.
+
+**If any finding is `blocker` — park. Do not spawn the executor.**
+
+Surface the blocker question to the human if one is present. Then write the park marker. **This is the park procedure the whole skill refers to** — Step 7a's integrity check, the reviewer-failure rule, Step 8's `BLOCKED` arm and Step 8c's all route here, and each supplies its own `<PARK_REASON>`:
+
+```bash
+# Substitute all four literals. <PARK_REASON> is one line of plain prose saying why this
+# claim parked — a `blocker` finding's question, `planner-integrity VIOLATED in 7a`, `reviewer
+# returned no review.md twice`, the executor's BLOCKER_QUESTION — and it is written verbatim.
+#
+# It is SINGLE-quoted, and that is the one asymmetry in this file: every other placeholder
+# here is a shape the tree produced (an id, a SHA, a path), while the park reason is FREE
+# TEXT that came back from a sub-agent. Inside double quotes a `$(…)` in that text is command
+# substitution and runs — verified, not reasoned. Single quotes make it inert. Before
+# substituting, collapse it to one line and replace any `'` with a backtick or `’`; a literal
+# single quote is the one character that would end the quoting.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<BRANCH_NAME>" '<PARK_REASON>'
+import sys, subprocess
+from pathlib import Path
+
+claim_id, run_id, branch, reason = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+# The id and the run key a path this block creates; the branch and the reason are only
+# recorded, so an unsubstituted one of those is visible in the marker rather than silent.
+if "<" in claim_id or "<" in run_id:
+    print("ERROR: placeholder not substituted: {!r} {!r}".format(claim_id, run_id), file=sys.stderr)
+    sys.exit(2)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+art = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id
+# Same refusal as the classification write: only Step 7-pre mints a run.
+if not art.is_dir():
+    print("ERROR: no such run directory {} -- refusing to park against a run that was "
+          "never minted".format(art), file=sys.stderr)
+    sys.exit(3)
+
+# Which artifacts this park is standing on. An absent one is RECORDED, never silently
+# omitted — a missing record and a lost one must not look the same. The rest are listed
+# only when present.
+names = ["plan.md", "planner-integrity.md", "review.md", "classification.md"]
+names += [n for n in ("pre-plan.md", "outcome.md", "questions.md", "answers.md",
+                      "answers-started.md", "answers-outcome.md") if (art / n).is_file()]
+present = {n: (art / n).is_file() for n in names}
+
+marker = main_root / "sysop" / "runtime" / "parked" / "{}__{}.md".format(claim_id, run_id)
+marker.parent.mkdir(parents=True, exist_ok=True)
+marker.write_text(
+    "# Parked — {} run {}\n\n"
+    "- claim_id: {}\n- run_id: {}\n- branch: {}\n- artifacts: {}\n"
+    "- reason: {}\n\n"
+    "## Artifacts at park time\n\n{}\n\n"
+    "Resume with: /claim-task {} --resume {}\n".format(
+        claim_id, run_id, claim_id, run_id, branch, art, reason,
+        "\n".join("- {}: {}".format(n, "present" if ok else "MISSING")
+                  for n, ok in present.items()),
+        claim_id, run_id,
+    ),
+    encoding="utf-8",
+)
+print("parked -> " + str(marker))
+PY
+```
+
+**The marker is a pointer, not a copy.** Under the earlier worktree-side layout the park had to *duplicate* the three artifacts, because `cleanup_worktrees.sh --force` removes every non-main worktree wholesale and would have taken the verdict with it. They now live in the main checkout from the moment they are written, so there is nothing to rescue — and one record beats two that can disagree. What the marker adds is a **reason** (which the artifacts do not carry) and **discoverability**: `sysop/runtime/parked/` is where a human hunting resumable work looks, alongside `/auto-build`'s parks.
+
+`/auto-build` Phase 6d writes its park with the `Write` tool from context-held text, and carries a bold warning that a shell variable there would silently produce a blank file reading as a successful record. The divergence is deliberate: this orchestrator carries `disallowed-tools`, so its writes route through the already-seeded `Bash(python3 -:*)` heredoc instead — and `<PARK_REASON>` is the only context-held value in the block, substituted as a quoted literal where an empty one is visible in the marker rather than hidden.
+
+Worktree and lock stay **intact** on a park. Nothing is deleted mid-lifecycle.
+
+**Who removes the marker.** `/review-close` Step 4c already globs `sysop/runtime/parked/<TASK_ID>__*.md` for each closing roadmap task, so a roadmap park's marker is removed when the task closes — the filename shape above is chosen to match that reader, which the earlier directory-shaped park could never have matched. **A review batch's marker is removed by `close_batch.sh`'s `remove_claim_artifacts()`** (part B leg 3), not by Step 4c — Step 4c's list is built from roadmap ids only (`review-close/SKILL.md`, Step 4c), so no batch id can reach it and the two kinds necessarily have two owners. Before that shipped, `BATCH-<N>__<RUN_ID>.md` markers accumulated forever.
+
+**Re-entering a parked claim.** A park leaves the lock in place, so `claim_task.sh --entry-state <CLAIM_ID>` answers `held` and Step 2 stops — correctly, because from the outside a parked claim and someone else's live claim are the same thing. To resume, the human names the run explicitly: re-invoke with `/claim-task <CLAIM_ID> --resume <RUN_ID>`, which Step 2 honours as the explicit go-ahead its `held` arm requires. **Re-entry lands at Step 7-pre**, which adopts the named run and routes to the stage its artifacts call for — see 7-pre's routing table; the ordinary blocker park re-enters at 7c with the human's answer as the new input. **Do not tell the human to "just re-run `/claim-task <CLAIM_ID>`"** — that hits the `held` stop and reads as a bug.
+
+### Step 7d: The human gate — option A only
+
+Skip this step entirely when Step 6 resolved to **B** or to **C**. On C the pipeline terminates at Step 7f instead; there is nothing to gate, because nothing is going to be implemented on this claim.
+
+Present the plan **as reviewed**: the plan artifact, the reviewer's verdict, and your own classification. Approving a plan that has already survived adversarial review is strictly more useful than approving a raw one, which is what plan mode nominally offered.
+
+Three outcomes:
+
+- **approve** → Step 7e.
+- **revise** → **first re-run Step 7c's classification write for THIS run with `verdict: SUPERSEDED`**, then go back to Step 7-pre and mint a **new** run, and run Step 7a in it (the pre-plan record, then the spawn) with the human's note appended to the Planner Prompt, running 7b and 7c over it — a revised plan has not been reviewed. **Do not re-plan into this run's directory.** A revised `plan.md` sitting beside the previous plan's `review.md` and `classification.md` is exactly the state 7-pre's routing table cannot tell from a reviewed one. The `SUPERSEDED` flip is the other half and is not bookkeeping: without it the rejected run keeps reading `verdict: PROCEED`, and a later `--resume` naming it walks straight to the executor with **a plan a human explicitly rejected**. One run, one plan; the superseded run stays on disk as the record of what was rejected, and 7-pre's first row refuses to resume it.
+- **abandon** → release the claim, **and commit the release** (resolve `<default branch>`
+  first with `bash sysop/scripts/default_branch.sh`, run bare, and substitute it):
+
+  ```bash
+  bash sysop/scripts/claim_task.sh --release <CLAIM_ID>
+  ```
+
+  ```bash
+  python3 sysop/scripts/git_check.py head-is "<default branch>" && git add tasks/index.yml && git commit -m "chore: release <CLAIM_ID>"
+  ```
+
+  A `STOP:` line means `HEAD` is not `<default branch>` (a concurrent actor moved it): nothing was committed; stop.
+
+  **The commit is not optional and the script will not do it for you** — it says so on its own last line. Step 4d *committed* `status: in_progress` onto `main`; `--release` flips the index back and deletes the lock in the **working tree only**. Stop after the script and committed `main` reads `in_progress` **with no lock**, which is `validate_tasks.py` Invariant 9 — a blocking error — plus `/sitrep` index drift, for every person who pulls. Step 2's own table calls that state a defect. Verified by execution.
+
+  **Review batches need no commit here:** `batch_work.sh --release` owns `review_tasks.md` and commits its own reversal, so its working tree comes back clean. The asymmetry is real, not an oversight — the two scripts divide the work differently.
+
+**Review batches:** the abandon outcome is `bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>`, **never** `claim_task.sh --release`. That script matches a `BATCH-*` id and a bare integer and **exits 1**, because it owns `tasks/index.yml` and releasing only the lock would leave the batch reading `In Progress` forever. Getting this wrong is a runtime hard error on the gate's own exit path.
+
+### Step 7e: Spawn the executor
+
+**Not reached on option C.** C stops at Step 7f, which is the terminal step for that option; no executor is spawned and no envelope is produced.
+
+Inputs: the (possibly revised) plan artifact, the review artifact, and your classification.
+
+Same agent parameters as 7a except `model`: `"sonnet"`, `effort`: `"high"` <!-- sysop:role=executor --> (the `effort` is this line's, never 7a's: with none here, pass none), with `description`: `"Execute <CLAIM_ID>"`, and `exec` substituted for `<ENVELOPE_PHASE>`.
+
+---
+
+**START OF EXECUTOR PROMPT**
+
+You are implementing `<CLAIM_ID>`. The orchestrator has already claimed the work (worktree at `<WORKTREE_PATH>`, lock at `sysop/runtime/locks/<CLAIM_ID>.lock`, branch `<BRANCH_NAME>`), produced a plan, run an independent adversarial review of it, and classified every finding as `fixable`. **No `blocker` findings remain — if any had, you would not have been spawned.**
+
+**Working directory:** `<WORKTREE_PATH>` (cd here first; do not run from the project root or any sibling worktree).
+
+**The task body is at `<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>`** — the repo-root-relative path the orchestrator resolved at Step 2, substituted into this prompt like every other placeholder. Sequence item 3 writes it and reads it back, so it is named here rather than left to be inferred from the plan.
+
+Read your three inputs from disk rather than from this prompt: `<ARTIFACT_DIR>/plan.md`, `<ARTIFACT_DIR>/review.md`, `<ARTIFACT_DIR>/classification.md`. `<ARTIFACT_DIR>` is an **absolute path in the main checkout, outside your worktree** — read it as given, and do not include it in your commit.
+
+### Sequence
+
+1. **Absorb the classification.** For each `fixable` finding, apply its recorded `response` to the plan as you implement. Where a finding was rejected, its rationale is in `classification.md` — do not silently re-litigate it.
+2. **Implement** per the plan. Re-open the files it touches; do not rely on its summaries.\
+2b. **When the work surfaces something adjacent, fix it here — that is the default.** Each finding gets one of three outcomes; nothing is parked.
+
+   1. **Fix it in this branch** — whatever module it is in, and past a one-line change, as long as the close can still review the branch. Read the code before you change what it does, and add a test when the fix changes behaviour. **Never, at any size:** migrations, anything that writes to production, and auth or payment logic. Record each fix as one line under an `## Also fixed` heading in the task body — the same write as item 3 — so the close reviews it as *intended* scope rather than as an unexplained hunk, and the test decision covers it.
+   2. **File a task** only when it cannot be fixed now: it needs a design decision or a human action, it is too large to review in this branch, or it is on the never-list. Add it to an existing open task in that module before opening a new entry.
+   3. **Drop it** when nothing is wrong: nothing is broken today, it is a preference or a hypothetical, or it is already handled. A real future condition goes in a comment or a test at the site, not in a ledger.
+
+   **When an answer from the human would make it fixable** — a design choice, which of two readings is intended, permission for a never-list item — do not guess: this run has nobody to ask. File the task in the worktree with the question and both candidate fixes written into its body, and add an entry for it to `<ARTIFACT_DIR>/questions.md` in this shape, one `## ` entry per finding, written as plain markdown and not inside a fence, so Step 8 can put the question in front of the human. When the run has one, Step 8b asks it after you return, and a fix on the answer lands in this branch:
+
+   ```markdown
+   ## <the finding, one line>
+   - filed as: <TASK-ID>
+   - where: <path:line>
+   - question: <what the human has to decide>
+   - recommended: <the answer you would pick>
+   - alternative: <the other candidate fix>
+   ```
+
+   **`tasks/notes.md` is retired — write nothing to it.** A consumer's existing ledger is theirs to clear; leave it alone.
+3. **Persist the `## Test decision`** section into the task's body file, per the plan's step for it. **Write the worktree copy** (`<WORKTREE_PATH>/tasks/…`), never the main checkout's — an edit there is on no branch, so it never reaches the PR, and `/review-close` Step 2d reads this record at the branch tip. **If the plan's step names a main-checkout path, correct it and note the correction** rather than following it. **If item 2b produced any in-branch fixes, write `## Also fixed` in this same write** — one line each, placed after this `## Test decision` section and before any `## Plan` section, per `tasks/schema.md` § *Also fixed*. That order is not cosmetic: the plan section is a fenced block that can quote either heading, so a first-match heading reader must meet the real section first. The one exception is a body that is untracked in the main checkout (`/add-task` filed it and nobody committed it): it is on no branch and cannot be put on one, so write the main-checkout copy and **say so in your final message** — that record will not reach the PR and the body needs committing before `/review-close` runs.
+
+   **Then read it back, before you go on.** This write is skipped more often than any other step in this sequence — measured on one consumer cycle at **three of four branches**, all claimed the same day through this path, two of them shipping substantial tests. So it is a missing *record*, not missing coverage, and nothing downstream catches it in time: the validator's warn-only invariant on this fact was retired (it read the working tree, where the record does not live), leaving `/review-close` Step 2d as the only enforcement — at the merge, after implementation, where the sole dispositions are waive it or hold otherwise-ready work. The record is cheap here and expensive there. Confirm the heading is really in the file you just wrote:
+
+   ```bash
+   body="<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>"
+   case "$body" in *"<"*) echo "ERROR: placeholder not substituted: $body" >&2; exit 2 ;; esac
+   grep -niE -A1 '^#{1,6}[[:space:]]*test[[:space:]]+decision\b' "$body"
+   ```
+
+   **A non-zero exit means the section is not there — go back to step 3 and write it.** The `case` guard is not decoration: without it an unsubstituted `<BODY_PATH_AS_RESOLVED>` makes `grep` exit **2** for a missing *file*, which reads exactly like a missing *record* and sends you into a rewrite loop against a path that does not exist. `-A1` prints the line under the heading, so a section still reading `<recorded at /claim-task plan time …>` is visible here — that is the schema template, not a record, and Step 2d classifies it `missing` too, so replace it. (An earlier version omitted `-A1` while telling you to inspect that text, which its own output could never show.)
+
+   **This check is deliberately shallow, and you should know its limit.** `grep` cannot tell a heading in the body from one inside a fenced block, so on a body carrying a `## Plan` section — whose fence contains its own `## Test decision` line — it can report a hit that is not the record. It is here because it is nearly free and it catches the common miss while the file is still open. **The authority is the orchestrator's Step 8 read-back**, which is fence-aware and reads the branch tip. So a hit here is encouragement, not proof; a *miss* here is conclusive and you must fix it before committing.
+4. **Post-fix convention verification — BOTH maps**. `git diff --name-only <default branch>...HEAD`; for each changed file look up its section in **`.claude/convention_map.md` and `.claude/security_map.md`** (with their `.project.md` overlays where present) and scan the **new/changed lines** — not just the original task locations — against those conventions. **The security map was missing here and the omission had reach:** Step 5 above has the *planner* read both maps into `## Constraints & Risks`, so this step read half of what the plan was written against, and after it nothing else read the security map before `main` — the plan reviewer routes against neither, and `/review-close` Step 2b routed against the convention map alone until its own security twin was added. This step and that twin now close the chain from both ends, and they are not redundant: this one sees **this branch in its own worktree**, that one sees the **assembled** result. Common regressions: `fetch()` without `encodeURIComponent()` on dynamic path segments; `str(e)` exposed to API responses; moved code that dropped `_sanitize_log()` wrappers; `useCallback` with incomplete dependency arrays; SELECT queries on a write-only engine. Fix regressions before committing.
+5. **Run the consumer's pre-merge verification gates.** `<project>/CLAUDE.md § Pre-merge verification` may carry `### Always` (full-tree commands) and `### Ratchet (changed files only)`. Run the commands under each subsection present. If both are absent, skip — `/review-close` will run any project-side verification at merge time (its `4a-post` step, on the merged tree). Note the division of labour: this run verifies **this branch in its own worktree** — so when the consumer ships no `## Pre-merge verification` section and this step skips, *nothing* verifies the branch in isolation; `4a-post` verifies the **assembled** result and cannot substitute for it. **One thing does still run in that case**: `4a-post` runs the Sysop pre-scan itself whether or not the consumer declared it, so the promoted checks reach the merge even for a project with no declared list — on the assembled tree, which is still not this branch alone. Treat a non-zero exit like an implementation finding — fix the cause, do not silence it without a justified inline `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>`.\
+5b. **Check for gitignored files your work reads.** From `<WORKTREE_PATH>`, run `python3 sysop/scripts/ignored_refs.py . <default branch>`. **Exit 0**: go on. **Exit 1**: quote every `IGNORED-REF:` line in your final message, and do not commit the file, edit `.gitignore` or file a task for it. **Any other exit** means the script failed: put its error in your final message and go on.
+6. **Post-fix UI verification.** If the diff touches any `frontend/` files, run `.claude/skills/_shared/ui-verify.md`. Hard-fail on console errors and 5xx responses; warn on console warnings; skip cleanly with an explicit note if the dev server is not running, and surface that note verbatim in your final message.
+7. **Commit** — a SINGLE commit on the worktree branch, conventional message derived from the task title plus `<CLAIM_ID>`, with a `Doc-Work: <CLAIM_ID>` trailer on the final line of the body, separated by one blank line. That trailer is the deterministic marker `/sitrep` consumes to classify the branch as ready for `/review-close`.
+
+   ```
+   <type>: <title> (<CLAIM_ID>)
+
+   <optional body prose>
+
+   Doc-Work: <CLAIM_ID>
+   ```
+
+### Hard constraints
+
+- Do **NOT** invoke the Agent tool — this run is a leaf, and the envelope contract assumes a flat hierarchy.
+- Do **NOT** write to `sysop/runtime/subagent-envelopes/`. That directory is written **only** by the `SubagentStop` hook, and that is the entire reason it is evidence: no agent can cause it to exist. Writing it yourself converts the one unforgeable artifact into a forgeable one.
+- Do **NOT** flip `status:` fields in `tasks/index.yml`. Adding a new follow-up task entry IS allowed — and is required if `/document-work` Step 3b would flag an unfiled follow-up ID — but it is item 2b's **second** outcome, not the default: fix first.
+- Do **NOT** push to origin (`/review-close` owns the push).
+- Do **NOT** invoke `/document-work` (the orchestrator does, at Step 8).
+
+### Required final-message format
+
+Emit exactly this as the LAST fenced block of your final message, with NO content after the closing backticks:
+
+```yaml
+TASK: <CLAIM_ID>
+PHASE: <ENVELOPE_PHASE>
+STATUS: EXECUTED | BLOCKED | FAILED
+BLOCKER_QUESTION: <only if BLOCKED — the question for the human; else "none">
+WORKTREE: <absolute path, no trailing slash>
+BRANCH: <branch name>
+ERROR: <error description if FAILED, else "none">
+```
+
+Print your step outputs as prose ABOVE the envelope so a human can see what happened even if the envelope is malformed.
+
+**END OF EXECUTOR PROMPT**
+
+---
+
+### Failure handling — one rule per spawn point
+
+The tempting recovery from a failed reviewer is *"continue to the executor anyway"*, which is failure mode 1 restored with no plan mode to blame and no `ExitPlanMode` signature to detect it. So these are rules, not judgement:
+
+| Spawn | Failed, malformed, or artifact-less return | Rule |
+|---|---|---|
+| **7a planner** | no `plan.md`, or a `FAILED` envelope | **Do not hand-write the plan.** Re-spawn once, keeping the pre-plan SHAs you already hold (do not re-run 7a's record for it). On a second failure, stop and report with worktree and lock intact. |
+| **7b reviewer** | no `review.md`, or a `FAILED` envelope | **Never proceed to 7e.** This is the single most important rule in the pipeline. Re-spawn once, then park per 7c with `reviewer returned no review.md twice` (or the envelope's `ERROR:`) as the recorded reason. |
+| **7b reviewer** | `review.md` present, envelope parsed, `review_report_raw` null | Disjoint from the row above — that row fires on a **missing `review.md`** or a `FAILED` envelope, and this one requires `review.md` to be there, so the two cannot both apply. It was the shape that shipped a silent failure (internal tracker #329). The **post-review transport check** decides it: re-spawn once, then proceed on `review.md` with `review-transport.md` recording `EMPTY_TRANSPORT`. **Does not park** — see the dispositions in Step 7b for why this one differs. |
+| **7e executor**, **8c answers executor** | `FAILED` or malformed; for 8c also `NO_COMMIT` or `REWRITTEN` | Step 8's handling, and 8c's for its own: surface `ERROR` verbatim, show `git log` / `git status` in the worktree, let the human decide. **No auto-retry.** |
+
+**Orchestrator context exhaustion mid-pipeline** — the artifacts under `<ARTIFACT_DIR>` are the resume state, and nothing is deleted mid-lifecycle, so re-entry is `/claim-task <CLAIM_ID> --resume <RUN_ID>`, which lands at Step 7-pre and routes off those artifacts. Nothing parked, so there is no park marker — but the claim's **own** lock is still in place, so `--entry-state` answers `held`, and `--resume` is exactly the way past it.
+
+### Step 7f: Option C — write the plan back, then release the claim
+
+**Reached only when Step 6 resolved to C** and Step 7c wrote `verdict: PROCEED`. A `blocker` classification parks at 7c exactly as it does on A and B — a plan with an open blocker is not a plan to hand the next claimant — and 7f is not reached. **Roadmap tasks only:** option C is not offered on a batch and `--plan-only` is rejected at Step 1, so no batch claim can arrive here.
+
+**The ordering commits the durable product first, and that is the whole design.** An earlier revision wrote the body, released, then committed — so every failure path left the plan uncommitted **and** the claim held, losing the 5–25 minutes the run existed to produce. `claim_task.sh --release` refuses in at least five ways (dirty worktree without `--force`; invoked from inside the worktree; lock absent; PyYAML unresolvable; a post-removal index-flip crash), and a planner sub-agent that left one scratch file in the worktree triggers the first. So: **write, commit, release, commit** — and if the release refuses, the plan is already safe.
+
+#### 1. Write `## Test decision` and `## Plan` into the main checkout's body file
+
+**The main checkout, not the worktree — this is the one write in this skill that is deliberately not a worktree write, and the reason is derived rather than stylistic.** Step 2 reads `tasks/open/<TASK_ID>.md` from the main checkout *before any worktree exists*, so a `## Plan` committed on the feature branch would be invisible to the very next `/claim-task <TASK_ID>` — which is the entire thing option C exists to enable. `## Test decision`'s usual path is the opposite (the 7e executor writes the worktree copy, and it lands on the feature branch) because that path has an executor and a merge. This one has neither: no executor runs, so the branch never receives a commit and nothing will ever merge it. **Step 3 below deletes it**, which is not decoration — see the stale-branch note there.
+
+```bash
+# Substitute all four literals, quoted. <BODY_PATH> is the `body:` value exactly as
+# tasks/index.yml records it (canonically `open/<TASK_ID>.md`, relative to `tasks/`; the
+# legacy `tasks/open/<TASK_ID>.md` form is also resolved). <TEST_DECISION> is ONE line of
+# free text from the plan — "test <X> proves <Y>" or "no test because <Z>" — and it is
+# SINGLE-quoted for the same reason Step 7c's <PARK_REASON> is: it came back from a
+# sub-agent, and inside double quotes a `$(…)` in it would run. Collapse it to one line and
+# replace any `'` with a backtick or `’` before substituting.
+#
+# Stdlib only — NO PyYAML (a consumer whose bare `python3` lacks it is the PEP-668
+# default) — and the same MAIN-checkout resolution every other block in Step 7
+# uses. The plan is read from the RUN DIRECTORY rather than passed as an argument: it is a
+# multi-kilobyte sub-agent document, and putting it through the shell is how a quoting bug
+# becomes a code-execution bug.
+python3 sysop/scripts/claim_record.py "<CLAIM_ID>" "<RUN_ID>" "<BODY_PATH>" '<TEST_DECISION>'
+```
+
+**Read the `sealed_report:` line and say it out loud in your final message.** `ABSENT` is not a failure and must not stop the write — Step 8's read-order contract names an unregistered hook and a failed write as supported configurations — but a human reading the task body later deserves to know the verdict reached the record through a file the reviewer wrote rather than one it could not.
+
+#### 2. Commit it on the default branch, under `_shared/main-push-guard.md` Rule A
+
+Resolve `<default branch>` first — `bash sysop/scripts/default_branch.sh`, run bare — and substitute what it prints.
+
+```bash
+python3 sysop/scripts/git_check.py head-is "<default branch>" && git add "<BODY_PATH_AS_RESOLVED>" && git commit -m "plan: record reviewed plan for <CLAIM_ID>"
+```
+
+A `STOP:` line means `HEAD` is not `<default branch>` (a concurrent actor moved it): nothing was committed; stop.
+
+**The assert is not boilerplate here.** Under `§ Merge policy: pr`, a concurrent `/review-close` checks out an integration branch **in the shared primary worktree** — the same checkout this block is standing in. Without the assert, an unguarded commit lands this plan on someone else's PR branch, where it is both invisible to the next claim and a surprise in their diff. `<BODY_PATH_AS_RESOLVED>` is the path step 1 printed, not the raw `body:` value.
+
+Then record what has been made durable, before touching the claim:
+
+```bash
+# Substitute all four, quoted. RELEASED is the literal `no` here and `yes` at step 4.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<PLAN_COMMIT_SHA>" "no"
+import sys, subprocess
+from pathlib import Path
+claim_id, run_id, sha, released = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+if "<" in claim_id or "<" in run_id or "<" in sha:
+    print("ERROR: placeholder not substituted", file=sys.stderr)
+    sys.exit(2)
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+run_dir = Path(common).resolve().parent / "sysop" / "runtime" / "claim" / claim_id / run_id
+if not run_dir.is_dir():
+    print("ERROR: no such run directory {}".format(run_dir), file=sys.stderr)
+    sys.exit(3)
+(run_dir / "plan-only.md").write_text(
+    "# Plan-only run — {} run {}\n\n- claim_id: {}\n- run_id: {}\n"
+    "- plan_commit: {}\n- released: {}\n".format(
+        claim_id, run_id, claim_id, run_id, sha, released),
+    encoding="utf-8")
+print("plan-only: released=" + released)
+PY
+```
+
+**This file is what stops a resumed option-C run from being implemented.** Without it, a `--resume` after a refused release reaches 7-pre's routing table, matches `verdict: PROCEED`, and walks to the executor — implementing a task whose human asked only for a plan. 7-pre's `plan-only.md` row exists for exactly that, and it reads `released:` to decide between *stop* and *finish the release*.
+
+#### 3. Release the claim — and delete the branch it never used
+
+**First establish that the branch really is empty**, because the deletion below is a *force*
+delete (`claim_task.sh` runs `git branch -D`) and a force delete of a branch carrying work is
+data loss:
+
+```bash
+git rev-list --count <default branch>..refs/heads/<BRANCH_NAME> --not --glob='refs/sysop/merged-pr-heads/*'
+```
+
+**Expect `0`.** See `REFERENCE.md` § *Steps 7f, 8 and 8c — the commit counts read past the recorded PR heads*. Option C never commits to the branch — the planner is forbidden to, and 7a's
+integrity check parks the claim if it did, so this step is unreachable with planner commits on
+it. A non-zero count therefore means something happened that this path does not model: **release
+without `--delete-branch`, report the count and the branch name, and stop.**
+
+On `0`:
+
+```bash
+bash sysop/scripts/claim_task.sh --release --delete-branch <CLAIM_ID>
+```
+
+**Why the branch must go, stated because an earlier revision asserted it already had.** That
+revision claimed `--release` deletes the branch. **It does not** — `claim_task.sh` defaults
+`DELETE_BRANCH=false` and only deletes when the flag is passed, which this step originally did
+not pass. The consequence is not cosmetic, and the mechanism is worth stating precisely because an
+earlier draft of this paragraph put it in the wrong place: **Step 3 of this skill** generates the
+branch name deterministically from the claim id (`FEAT-X` → `feat/feat-x`) — `claim_task.sh`
+takes `<BRANCH_NAME>` as a required positional and generates nothing. What the script does is
+**reuse** an existing branch of that name if it finds one, so the next claim of the same task
+computes the same name, finds the branch still there, and checks it out **as-is**, forked from
+where `main` was *before* option C's two commits. The 7e
+executor then writes `## Test decision` into a body whose `## Plan` section the branch has never
+seen, and the close hits a real content conflict in `tasks/open/<TASK_ID>.md` — on exactly the
+path Step 7f's own final message recommends. Verified by execution in an independent review, not
+reasoned about.
+
+**Why release rather than hold.** Holding a lock overnight on a task nobody is implementing is the state `/sitrep`'s stale-claim path exists to complain about, and it keeps `/next-task` from handing the task out. Releasing makes tomorrow's claim an ordinary fresh one that finds a `## Plan` and skips 7a — the simpler mechanism, and the one that needs no re-entrancy.
+
+#### 4. Commit the release flip, again under Rule A
+
+Resolve `<default branch>` first — `bash sysop/scripts/default_branch.sh`, run bare — and substitute what it prints.
+
+```bash
+python3 sysop/scripts/git_check.py head-is "<default branch>" && git add tasks/index.yml && git commit -m "chore: release <CLAIM_ID>"
+```
+
+A `STOP:` line means `HEAD` is not `<default branch>` (a concurrent actor moved it): nothing was committed; stop.
+
+**Separate from step 2 on purpose**, for two reasons: `claim_task.sh --release` deliberately never commits (it prints the command on its own last line), and two atomic commits fail better than one straddling a release that can refuse. Then re-run step 2's `plan-only.md` block with `"yes"` as the last argument.
+
+#### Abort rules — one per step, because this path has five refusal modes
+
+| Fails | State | Do |
+|---|---|---|
+| **step 1** (the write) | Nothing changed. | Report and stop. The claim is intact and the run is resumable. |
+| **step 2** (the plan commit) | The body carries an **uncommitted** edit in the main checkout. | Report it, **name the file path**, and stop. **Do not `git checkout` it** — that discards the plan, which is the run's entire product. Tell the human to commit or stash it: an uncommitted `main` collides with the next claim's Step 4a rebase and its Step 4d Rule A assert. |
+| **step 3** (the release) | **The plan is committed and durable.** The claim is still held. | Report the refusal **verbatim** — it names which of the five modes fired — leave the claim intact, and tell the human to resolve it and re-run `claim_task.sh --release --delete-branch <CLAIM_ID>` themselves. **Never retry automatically, and never proceed to step 4.** A step-4 commit without step 3 writes `open` into the index while the lock is still held, which is `validate_tasks.py` Invariant 9, a blocking error. |
+| **step 4** (the release commit) | `--release` flipped the index and deleted the lock **in the working tree only**. | Committed `main` reads `in_progress` with no lock for everyone who pulls — Invariant 9 again, plus `/sitrep` index drift. Report loudly and print the exact two commands. |
+
+#### Final message
+
+Option C does **not** reach Step 8: there is no executor, so there is no envelope to receive and no `/document-work` handoff to make. Terminate here with:
+
+```
+## Plan recorded: <CLAIM_ID>  (option C — plan only)
+
+Plan committed on main:  <PLAN_COMMIT_SHA>
+Sealed review report:    present | ABSENT
+Claim released:          yes
+Run artifacts:           sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/
+
+Nothing was implemented. The task is back to `open` and carries its reviewed plan.
+Next: /claim-task <CLAIM_ID> — it will skip the planner and re-review this plan.
+```
+
+## Step 8: Receive the executor envelope and hand off
+
+Read the envelope in this order — first hit wins; never go past a clean hit:
+
+1. **JSON file** (preferred). `sysop/runtime/subagent-envelopes/<CLAIM_ID>.exec.json`, resolved against the **main repo root** (`git rev-parse --git-common-dir`, then its parent) — the hook resolves its own output that way, so the file lands in the main checkout even when the sub-agent ran in a worktree. Keys: `status`, `worktree`, `branch`, `error`, `blocker_question`, `review_report_raw`. The `SubagentStop` hook runs synchronously before the parent receives the `Agent` return, so absence is never a race.
+
+   Because every spawn prompt emits `PHASE:`, this claim's envelopes are `<CLAIM_ID>.plan.json`, `<CLAIM_ID>.review.json` and `<CLAIM_ID>.exec.json`, and `<CLAIM_ID>.answers.json` when Step 8c spawns. **Read the `exec` one here.** The plan and review envelopes are still live and carry the reviewer's sealed report; do not read them as the executor's result and do not delete them.
+
+   **Before concluding an envelope is absent, look for `_unparseable_*.json`.** A malformed envelope is written as `_unparseable_<session>_<agent>.json` — keyed by session and agent, **not** by claim id or phase — so an orchestrator globbing `<CLAIM_ID>.*.json` sees nothing at all and would otherwise report "the executor never ran" when what actually happened is that it ran and its envelope did not parse.
+
+   **Treat it as a hint to go and look, never as this run's result.** Nothing in the filename ties a diagnostic to a claim, a phase or a run, and these files persist across runs on purpose — Step 7-pre's move-aside deliberately leaves them alone, precisely because they are diagnostics rather than results. They persist for **7 days**, not indefinitely: the hook reclaims older ones whenever it runs. So a diagnostic sitting in the mailbox may belong to another claim entirely, to `/auto-build`, or to a run of this claim within the last week — and **a diagnostic that is absent may simply have aged out, so absence is not evidence the executor never ran.** Open it and read its contents before attributing it to anything; if it does not name this claim's work, say the executor's envelope is missing and report that, rather than reporting a stranger's failure as this claim's.
+
+2. **Regex parse of the executor's return text.** Parse the YAML envelope from the LAST fenced block of its final message. Defense in depth for an unregistered hook or a failed write, not a timing fallback.
+
+**Review batches:** substitute `<CLAIM_ID>` throughout — the hook's shape check accepts `BATCH-<N>`, so a batch claim's envelopes really are `BATCH-116.exec.json`. This step is **not** roadmap-only.
+
+**Do not delete the envelopes here.** Deleting after consumption is why a review that *did* run left no durable trace: the envelope was the one artifact no agent could forge, and it was removed at the moment it became evidence. The whole artifact set — `<ARTIFACT_DIR>` and the envelopes — persists.
+
+**What cleans it up — the close, and only the close.** Both claim kinds are covered, by two different owners because the close path has no single list carrying both. A **roadmap** claim is cleaned by `/review-close` Step 4c, which removes the lock, any park marker, and this whole `sysop/runtime/claim/<CLAIM_ID>/` directory when the task closes. A **batch** claim is cleaned by `close_batch.sh`'s `remove_claim_artifacts()`, which removes the same two things for `BATCH-<N>` — sited there because Step 4c's id list is built from `roadmap_ids` only and no batch id can reach it. Only the batch half waits for the close to land on `main`. Under `pr` policy Step 4c runs on the integration branch before the PR merges, so a roadmap claim's lock, park marker and claim directory are already gone if the merge never lands. `/review-close` Step 6's *Lock-as-real-time-signal invariant* covers the lock and the park marker, not the claim directory. **Nothing removes any of it mid-lifecycle** — that is the property this reshape exists to hold, since the failure it removes is an artifact that vanished, not one that accumulated. Step 7-pre's move-aside touches the *envelope mailbox* only, to keep a previous run's envelopes from being read as this run's.
+
+**What reads it, said as plainly as the cleanup above — and what that does not buy.** All three of part B's legs now ship: close-time cleanup (leg 3), `/review-close` **Step 2e**'s per-branch artifact report (leg 1), and `/sitrep`'s **park + awaiting-approval** classification (leg 2). So the artifact set is created, read and reaped. **Both readers report and neither rejects**, which is the deliberate shape and not a gap to be closed later: an absent artifact set is surfaced where a human is already looking, and nothing is blocked on it. A blocked run is therefore conspicuous rather than impossible — do not describe either reader as a gate, and do not read "part B shipped" as "a skipped review is now prevented."
+
+**Both claim kinds reach `/sitrep`'s park classification.** `run_survey`'s lock loop leaves a review batch's `BATCH-<N>` lock, and an unindexed `TASK-` id, to the batch path, and `_classify_review_batches` runs the same park probe there, keyed `BATCH-<N>`. A `/claim-task` park of a review batch therefore classifies as parked, like a roadmap park, not as ordinary in-progress work.
+
+**On `BLOCKED`, rewrite the classification FIRST — before the outcome record below.** The order is load-bearing and a different-model review of the whole pipeline is what found it: a crash between the two writes must leave the run in the state that routes *back into adjudication*, not the one that reports it as finished. Writing `outcome.md` first and crashing leaves `classification.md` still reading `PROCEED`, and the routing table then matches the outcome row and reports a blocked run as complete. Writing the classification first and crashing leaves `verdict: BLOCKED` with no outcome record, which routes to 7c — correct, and the safe direction.
+
+**Then, whatever the status, record the executor's terminal outcome into this run.** It is what tells a later `--resume` that the executor already ran *here*, without consulting the shared envelope mailbox — which is keyed by claim and phase with no run component, and which a resume deliberately does not clear:
+
+```bash
+# Substitute all three literally. <EXEC_STATUS> is the envelope's STATUS verbatim
+# (EXECUTED | BLOCKED | FAILED | MALFORMED).
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<EXEC_STATUS>"
+import sys, subprocess
+from pathlib import Path
+
+claim_id, run_id, status = sys.argv[1], sys.argv[2], sys.argv[3]
+if "<" in claim_id or "<" in run_id:
+    print("ERROR: placeholder not substituted", file=sys.stderr)
+    sys.exit(2)
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+out = Path(common).resolve().parent / "sysop" / "runtime" / "claim" / claim_id / run_id / "outcome.md"
+if not out.parent.is_dir():
+    print("ERROR: no such run directory {}".format(out.parent), file=sys.stderr)
+    sys.exit(3)
+out.write_text("# Outcome — {} run {}\n\n- executor_status: {}\n".format(claim_id, run_id, status),
+               encoding="utf-8")
+print("wrote " + str(out))
+PY
+```
+
+**On `STATUS: EXECUTED`** — print the sealed `REVIEW_REPORT` (from `review_report_raw` on the review envelope). **If that field is null**, do not print nothing and move on: say `Review transport was empty — the sealed report never reached the orchestrator` and print `review-transport.md`'s verdict alongside `<ARTIFACT_DIR>/review.md`, so the human reading this report sees which channel the findings came through. Then run the stranded-body check:
+
+```bash
+# No placeholders — run it as written. The orchestrator stands in the main checkout, but
+# a CWD that had drifted into the worktree would report the WORKTREE's tree, clean by
+# construction after 7e's commit, so the root is resolved rather than assumed. Scoped to
+# `tasks/` and to TRACKED modifications on purpose: an untracked-inclusive probe fires on
+# every ordinary scratch file (review-close/SKILL.md Step 6 narrows the same way for the
+# same reason), and an untracked body is the one case the executor deliberately writes
+# on main. Stdlib only, and a heredoc rather than a bash one-liner.
+python3 - <<'PY'
+import subprocess
+from pathlib import Path
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+changed = subprocess.run(
+    ["git", "-C", str(main_root), "-c", "core.quotePath=true", "diff", "--name-only", "HEAD", "--", "tasks/"],
+    capture_output=True, text=True, check=True).stdout.split()
+# The pathspec stays exactly `tasks/`. `tasks/notes.md` is partitioned out AFTER the
+# diff, not excluded from it: narrowing what the probe looks at is how it stops
+# seeing a stranded body, and the ledger is not a body file.
+bodies = [p for p in changed if p != "tasks/notes.md"]
+note_only = [p for p in changed if p == "tasks/notes.md"]
+if bodies:
+    print("STRANDED — task-body edits are uncommitted on main:")
+    for p in bodies:
+        print("  " + p)
+elif note_only:
+    print("NOTES PENDING — tasks/notes.md is edited but uncommitted on main.")
+    print("  Not stranded: /add-task promotes a note by deleting its line and never commits.")
+    print("  Commit it with your next commit. Do NOT skip the chain for this.")
+else:
+    print("tasks/ CLEAN — no body edits stranded on main")
+PY
+```
+
+**If that printed `STRANDED`** — the executor wrote body edits into the main checkout instead of the worktree (internal tracker #322). They are on no branch, so they do not reach the PR, and nothing downstream notices: `/review-close` Step 4c `git mv`s the body into `tasks/archive/`, and the edits never having been staged, the rename stages **`HEAD`'s** content, so the body contributes `0 insertions(+), 0 deletions(-)` to the consolidation commit — the rename lands, the documentation does not. (The commit itself is larger; it also carries `tasks/index.yml` and the pending docs.) The only backstop is Step 6's tracked-tree gate, which fires **after `gh pr merge` has landed**, too late to save the PR. So: surface the file list the block just printed, **skip the auto-mode chain**, and tell the human the edits must be moved onto the branch (still checked out at `<WORKTREE_PATH>`, whose work commit is amendable) before `/review-close` runs. **Do not move them yourself** — which copy is authoritative is the human's call.
+
+**`tasks/notes.md` is partitioned out of the verdict, and the pathspec is deliberately NOT narrowed to do it.** The notes ledger is not a body file, and this workflow *prescribes* an uncommitted edit to it in the main checkout: `/add-task` Step 2 promotes a note by filing the task and deleting the note's line, and `/add-task` never commits. Left undistinguished, that promotion reports `STRANDED`, and the disposition below then tells the human three things that are all false of a note — that an executor wrote body edits to the wrong tree, that they must be moved onto the branch, and that internal tracker #322 is the cause — and **skips the auto-mode chain**. Reproduced against the shipped probe, not reasoned. **The first fix for it was the wrong shape** and a guard caught it: adding `:(exclude)tasks/notes.md` to the pathspec narrows what the probe *looks at*, and `test_a_probe_widened_past_tasks_is_caught_by_execution` pins the pathspec as exactly `tasks/` because *anything narrower stops seeing the stranded body*. So the diff still covers all of `tasks/` and the partition happens after it, on a path that can never hold a task body. `NOTES PENDING` is a distinct, non-halting verdict rather than a silence, because a note uncommitted on `main` still needs committing.
+
+**An untracked body is not `STRANDED`, and the probe is scoped so it does not report as one.** `git diff HEAD` ignores untracked files, so an `/add-task` body nobody committed leaves this quiet — correctly, because that body is on no branch and cannot be put on one. The executor reports that case itself, in its own final message.
+
+**Then verify the record the executor was told to write, at the revision that will be graded.** Step 7e's sequence item 3 makes the executor responsible for `## Test decision`, and it now verifies its own write before committing — but the failure this closes *is* an executor skipping a sequence item, so a second reader that is not that agent is the whole point. Read the **branch tip**, because that is the revision `/review-close` Step 2d reads; the working tree and the main checkout can each hold a record the branch does not.
+
+```bash
+# Substitute all three literally and QUOTED. <BODY_PATH_AS_RESOLVED> is the REPO-ROOT-RELATIVE
+# path Step 2 resolved — the same one 7e wrote and Step 2d will read. It is NOT `tasks/` glued
+# onto the raw `body:` value: index.yml records that value canonically as `open/<TASK_ID>.md`
+# relative to `tasks/`, but the legacy `tasks/open/<TASK_ID>.md` spelling is also accepted, and
+# concatenating that one yields `tasks/tasks/open/...`. Pass the resolved path, not a recipe.
+# Stdlib only, heredoc + positional args.
+python3 - <<'PY' "<CLAIM_ID>" "<BRANCH_NAME>" "<BODY_PATH_AS_RESOLVED>"
+import re, subprocess, sys
+from pathlib import Path
+
+claim_id, branch, body_rel = sys.argv[1], sys.argv[2], sys.argv[3]
+if any("<" in a for a in (claim_id, branch, body_rel)):
+    print("ERROR: placeholder not substituted: {!r} {!r} {!r}".format(
+        claim_id, branch, body_rel), file=sys.stderr)
+    sys.exit(2)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+main_root = Path(common).resolve().parent
+
+# `<rev>:<path>` -- the literal colon is what makes this a branch-tip read. Without it,
+# `git show <path>` means `git show HEAD -- <path>` and exits 0 off the WRONG revision:
+# the one failure here that can fabricate a pass (Step 2d documents it at length). The
+# operand is built by .format() so it cannot lose the colon.
+try:
+    r = subprocess.run(["git", "-C", str(main_root), "show", "refs/heads/{}:{}".format(branch, body_rel)],
+                       capture_output=True, text=True)
+except UnicodeDecodeError as e:  # a body that is not UTF-8 takes the UNREADABLE arm below
+    r = subprocess.CompletedProcess([], 1, "", "not UTF-8: {}".format(e))
+if r.returncode != 0:
+    err = (r.stderr or "").strip()
+    # git says "does not exist in '<rev>'" when the path is absent from the worktree too,
+    # and "exists on disk, but not in '<rev>'" when it is present but untracked. The
+    # DOCUMENTED case here -- an /add-task body nobody committed -- always leaves the file
+    # on disk, so it produces the SECOND message. Testing only the first inverted the two
+    # populations: the benign case got a raw fatal and the suspicious one got reassurance.
+    if "does not exist in" in err or "exists on disk, but not in" in err:
+        print("NOT ON BRANCH -- {} is absent at {}.".format(body_rel, branch))
+        print("  Expected ONLY for a body left untracked in the main checkout "
+              "(/add-task filed it, nobody committed it): 7e writes the main-checkout "
+              "copy and says so in its final message. Confirm that is what happened; "
+              "otherwise the body path is wrong, or the branch is not this claim's.")
+    else:
+        print("UNREADABLE -- {}:{}".format(branch, body_rel))
+        print("  " + err)
+    sys.exit(0)
+
+# Headings OUTSIDE fenced blocks. `tasks/schema.md` documents that `## Plan` carries the
+# reviewed plan verbatim in a fence, and that "the fenced plan contains its own
+# '## Test decision' line" -- it orders the real section FIRST so a first-match reader
+# meets it first. A fence-blind reader does not get that guarantee: it matches the plan's
+# copy, so a body with no real record reads as compliant.
+# A leading BOM keeps `^#` from matching and would report a false MISSING, which BLOCKS.
+lines = r.stdout.lstrip("\ufeff").split("\n")
+HEAD = re.compile(r"^(#{1,6})\s*(.*)$")
+WANT = re.compile(r"^\s*test\s+decision\b", re.I)
+
+def fence_mark(line):
+    """`(char, length)` if this line is a fence marker, else None.
+
+    This is Step 7f's `fence_mark`, and it is the same function on purpose -- copy it,
+    never re-derive it. Same for `fence_closes` below. THREE properties are
+    load-bearing, and this block shipped missing a different one each time. A body can
+    be fenced with ``` OR ~~~; a fence is closed only by the SAME character at the SAME
+    length or longer; and a closer carries NO info string. Step 7f's own writer emits a
+    FOUR-backtick outer fence whenever the plan it wraps contains an ordinary ```-block,
+    so a 3-backtick reader treats the plan's first inner fence as the close, reads the
+    rest of the plan as unfenced, and certifies the plan's own copy of `## Test decision`
+    as the record. Measured: a real option-C body with no record at all passed. The
+    info-string half reproduces the same way -- see `fence_closes`."""
+    s = line.lstrip()
+    for ch in ("`", "~"):
+        if s.startswith(ch * 3):
+            n = 0
+            while n < len(s) and s[n] == ch:
+                n += 1
+            return ch, n
+    return None
+
+def fence_closes(line, open_mark):
+    """True only if `line` CLOSES the fence `open_mark` opened.
+
+    Three properties, not two. Same character, at least as long -- and **no info
+    string**, which is the one an opener is allowed to carry and a closer is not.
+    A ```json line nested inside a plain ``` fence satisfies the first two, so a
+    reader without the third believes it has LEFT the fence while still inside it,
+    and then reads the fence's own lines as content. That is the fabricating
+    direction, not the dropping one.
+
+    The closer decision lives here, in one place, precisely because it was split
+    across two loops before and only one of them remembered it."""
+    mark = fence_mark(line)
+    return (bool(mark) and mark[0] == open_mark[0] and mark[1] >= open_mark[1]
+            and not line.strip().strip(mark[0]))
+
+def headings(fence_aware):
+    out, open_mark = [], None
+    for i, ln in enumerate(lines):
+        mark = fence_mark(ln)
+        if mark:
+            if fence_aware:
+                if open_mark is None:
+                    open_mark = mark
+                elif fence_closes(ln, open_mark):
+                    open_mark = None
+            continue
+        if open_mark is not None:
+            continue
+        m = HEAD.match(ln)
+        if m:
+            out.append((i, len(m.group(1)), bool(WANT.match(m.group(2)))))
+    return out, open_mark is not None
+
+heads, unterminated = headings(True)
+if unterminated:
+    # A body whose fence never closes swallowed everything after it. Answering MISSING
+    # there would block a claim over a malformed body, so fall back to a fence-blind
+    # read -- which can only err toward accepting, and Step 2d re-reads this same record
+    # at the merge. Say so either way: the body needs fixing.
+    print("NOTE -- unbalanced ``` fence in {}; read fence-blind.".format(body_rel))
+    heads, _ = headings(False)
+
+wanted = [h for h in heads if h[2]]
+if not wanted:
+    print("MISSING -- no test-decision heading at {}:{}".format(branch, body_rel))
+    sys.exit(1)
+
+# Scope the template test to THAT section, not the whole body: the plan fence can quote
+# the schema, and a whole-body test would refuse a claim whose record is perfectly good.
+start, level, _ = wanted[0]
+end = next((i for i, lv, _ in heads if i > start and lv <= level), len(lines))
+section = "\n".join(lines[start + 1:end])
+if "<recorded at /claim-task plan time" in section:
+    print("TEMPLATE -- the section is still the schema placeholder at {}:{}".format(
+        branch, body_rel))
+    sys.exit(1)
+print("test-decision record present at {}:{}".format(branch, body_rel))
+PY
+```
+
+**If that printed `MISSING` or `TEMPLATE`, stop and say so — do not run `/document-work`.** Nothing else about the branch is wrong: the work is committed and the worktree is still checked out at `<WORKTREE_PATH>`, so the repair is to write the section into the **worktree** copy and **amend** the branch's tip commit (the executor's, or Step 8c's), then re-run the block. Report which of the two fired and what the plan's recorded decision text was, so the record is restored rather than reinvented. **Do not compose it yourself from the diff** — 7a decided it and 7b scrutinised the `Z`; writing a fresh one here substitutes an unreviewed judgment for a reviewed one, which is the substitution Step 2d exists to catch. `NOT ON BRANCH` and `UNREADABLE` are different in kind and do **not** block: neither asserts anything about the record, so both report and exit 0.
+
+**Then print any `IGNORED-REF:` lines the executor quoted (Step 7e item 5b) under the report below.**
+
+**Then report the questions the executor filed.** If `<ARTIFACT_DIR>/questions.md` holds `## ` entries, each is a finding the executor could fix only with an answer from the human, filed on the branch as a task carrying the question (Step 7e item 2b). Print every entry's finding, question, recommendation and `filed as:` id under the report below. Do not answer or fix them yourself; this skill never implements. An absent or empty file means there were none, and Steps 8b and 8c do not run.
+
+**Then ask them: run Step 8b, and 8c after it, before the report below — on option A, or on any `--resume`.** On option A a human is at the gate, and a `--resume` is a human. **On a fresh option-B run, do not ask**, because B runs unattended: the findings stay filed, and the report prints `To answer them in this branch: /claim-task <CLAIM_ID> --resume <RUN_ID>` under the questions.
+
+Then:
+
+```
+## Claim complete: <CLAIM_ID>
+
+| Field     | Value                                    |
+|-----------|------------------------------------------|
+| Task      | <CLAIM_ID>                               |
+| Worktree  | <WORKTREE_PATH>                          |
+| Branch    | <BRANCH_NAME>                            |
+| Artifacts | <ARTIFACT_DIR>                           |
+
+A planner, an independent reviewer, and an executor each ran in their own cold
+context; findings were classified by this session. The work is committed in the
+worktree and NOT pushed. Run `/document-work` next. Do NOT merge to main —
+`/review-close` handles that.
+```
+
+`<ARTIFACT_DIR>` is the absolute path Step 7-pre printed — `<main repo root>/sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/`. Print the absolute form rather than the repo-relative one: the human reading this box may be standing in the worktree, where the relative path resolves to nothing.
+
+**Auto-mode chaining.** Under `auto` mode, invoke `/document-work` directly via the `Skill` tool rather than ending the turn. Skip the chain when the executor returned `BLOCKED` or `FAILED`, **when the stranded-body check printed `STRANDED`**, when Step 8c recorded anything but `EXECUTED` or `NOTHING_TO_FIX`, when a UI-verify note flags pending manual checking, when the harness is not in `auto` mode, or when the user asked to pause. The chain does **not** extend to `/review-close`, which stays user-initiated.
+
+**On `STATUS: BLOCKED`** — print the sealed report and the `BLOCKER_QUESTION:`. **The same null arm applies here** — `review_report_raw` can be null on this path exactly as on the one above, and this is the report a human is about to answer a question from, so an empty sealed report has to be named rather than rendered as a blank. Then, **before parking, re-run Step 7c's classification write with `verdict: BLOCKED`** and a finding recording the executor's blocker question. Only then park per Step 7c, with the `BLOCKER_QUESTION:` text as the recorded reason, and tell the human to resume with `/claim-task <CLAIM_ID> --resume <RUN_ID>`.
+
+**The rewrite is not bookkeeping — without it the resume is a no-op that re-runs the executor.** `classification.md` still reads `verdict: PROCEED` at this point, because it had to for 7e to have been spawned at all. Leaving it there sends 7-pre's routing table to its last row, which re-spawns the executor with byte-identical inputs and gives the human's answer nowhere to land — so the one runtime path that actually produces a blocker question would never reach the row written for it.
+
+**On `STATUS: FAILED`** — print the `ERROR` verbatim, run `git log --oneline <default branch>..HEAD --not --glob='refs/sysop/merged-pr-heads/*'` and `git status --short` in the worktree and surface both. If substantive work landed despite the failure, let the human decide whether to recover or discard. **Do not auto-retry.**
+
+**On a malformed envelope** — print `Executor returned with a malformed envelope — treating as FAILED`, surface its prose body (which likely contains the implementation output), and check for an `_unparseable_*.json` diagnostic. Do not auto-retry.
+
+This is the orchestrator's terminal action. Control returns to the user.
+
+### Step 8b: Ask the executor's questions
+
+Step 8 sends a run here on option A or a `--resume`, after `STATUS: EXECUTED` with neither of its halts; Step 7-pre sends a resume here directly. **List first:** run the block below with only its first two arguments. It prints `ASK=no (<reason>)`, or `ASK=yes` and every entry it parsed from `questions.md`. If it exits non-zero, report its error and do not ask.
+
+- **On `ASK=no`, do not ask.** Print the reason under Step 8's report and go on.
+- **On `ASK=yes`, ask every listed entry** with `AskUserQuestion`, in the listing's order and at most four to a call. Build the menu from the listing, not from reading the file, because the answers are recorded against the entries the block parsed. One question per entry: its `question:`, and these options:
+  - `Fix: <recommended>`, first, marked (Recommended);
+  - `Fix: <alternative>`, when the entry has one;
+  - `Leave it filed`.
+
+  A free-text answer through *Other* is a fix, with that text as the instruction. **A result that says the human may be away** (the question timed out, per `_shared/plan-review-preference.md`) **is not an answer**, even when it names an option: a pre-highlighted `Fix:` is submitted by the timeout. Record nothing, say no human answered, and stop; a resume asks again. **When the listing prints `BLOCKER_QUESTION:`**, show it beside the questions it concerns: the answers executor stopped on it, and an answer that ignores it stops again.
+
+Then run the block again with one pair of arguments per listed entry, in the listing's order: the decision, `fix` or `leave`, and the answer. For a `Fix:` option the answer is that entry's full `recommended:` or `alternative:` text as listed, not the shortened label; for *Other* it is the human's text. **An entry the human skips or declines is `leave`, with the answer `no answer`.** A recorded `leave` is what stops a later resume from asking again. **If the record exits non-zero, print the answers you collected and stop**: nothing was recorded, so a resume asks again.
+
+```bash
+# Substitute <CLAIM_ID> and <RUN_ID>. To list, pass nothing after them. To record, pass one
+# pair per listed entry, in order: "fix" or "leave", then the answer. Two pairs are shown;
+# write as many as the listing has entries. Each answer is human free text, so it is
+# SINGLE-quoted like Step 7c's <PARK_REASON>: collapse it to one line and replace any `'`
+# with a backtick or `’` first.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<DECISION_1>" '<ANSWER_1>' "<DECISION_2>" '<ANSWER_2>'
+import datetime, os, re, subprocess, sys, tempfile
+from pathlib import Path
+
+claim_id, run_id, pairs = sys.argv[1], sys.argv[2], sys.argv[3:]
+if ("<" in claim_id or "<" in run_id
+        or any(re.fullmatch(r"<[A-Z_]+[0-9]*>", a) for a in pairs)):
+    print("ERROR: placeholder not substituted: {!r}".format(sys.argv[1:]), file=sys.stderr)
+    sys.exit(2)
+
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True).stdout.strip()
+art = Path(common).resolve().parent / "sysop" / "runtime" / "claim" / claim_id / run_id
+# Only Step 7-pre mints a run.
+if not art.is_dir():
+    print("ERROR: no such run directory {}".format(art), file=sys.stderr)
+    sys.exit(3)
+
+def read(p):
+    try:
+        return p.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        print("ERROR: {} is not UTF-8: {}".format(p, e), file=sys.stderr)
+        sys.exit(4)
+
+def fence_mark(line):
+    """`(char, length)` if this line is a fence marker, else None. Step 8's function,
+    copied, not re-derived: ``` or ~~~, closed by the same character at the same length
+    or longer, and a closer carries no info string."""
+    s = line.lstrip()
+    for ch in ("`", "~"):
+        if s.startswith(ch * 3):
+            n = 0
+            while n < len(s) and s[n] == ch:
+                n += 1
+            return ch, n
+    return None
+
+def fence_closes(line, open_mark):
+    """True only if `line` CLOSES the fence `open_mark` opened. Step 8's function."""
+    mark = fence_mark(line)
+    return (bool(mark) and mark[0] == open_mark[0] and mark[1] >= open_mark[1]
+            and not line.strip().strip(mark[0]))
+
+q = art / "questions.md"
+lines = (read(q) if q.is_file() else "").lstrip("\ufeff").splitlines()
+FIELD = re.compile(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])\s+\**(filed as|where|question|recommended|alternative)"
+                   r"(?::\**|\**:)\s*(.*)$", re.I)
+
+def parse(block):
+    """Entries in the 7e shape, and the first thing that is not: an entry the parser would
+    have to guess at is refused rather than merged into its neighbour."""
+    entries, cur, key, open_mark, problem = [], None, None, None, None
+    for line in block:
+        if open_mark is not None:
+            if fence_closes(line, open_mark):
+                open_mark = None
+            continue
+        mark = fence_mark(line)
+        if mark:
+            open_mark, key = mark, None
+            continue
+        h = re.match(r"^ {0,3}## (.*)$", line)
+        if h:
+            cur, key = dict(finding=h.group(1).strip()), None
+            entries.append(cur)
+            continue
+        if cur is not None and re.match(r"^ {0,3}(#{1,6}\S|#{3,6}\s|#\s)", line):
+            problem = problem or "entry {} holds a heading that is not `## `: {!r}".format(len(entries), line.strip())
+        m = FIELD.match(line)
+        if cur is not None and m:
+            key = m.group(1).lower()
+            if key in cur:
+                problem = problem or "entry {} repeats `{}:`".format(len(entries), key)
+            cur[key] = m.group(2).strip().strip("*").strip()
+        elif cur is not None and key and line.strip() and line[:1] in (" ", "\t"):
+            cur[key] += " " + line.strip()
+        else:
+            if key and line.strip() and not re.match(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])\s", line):
+                problem = problem or "entry {} continues `{}:` on an unindented line".format(len(entries), key)
+            key = None
+    for n, e in enumerate(entries, 1):
+        if e.get("alternative", "").lower() in ("none", "n/a", "-", ""):
+            e.pop("alternative", None)
+        for k in ("filed as", "question", "recommended"):
+            if not e.get(k):
+                problem = problem or "entry {} has no `{}:`".format(n, k)
+    return entries, problem
+
+entries, problem = parse(lines)
+if not entries and not problem:
+    # Entries written inside one fence, the way 7e's prompt shows the shape. Two fenced
+    # blocks are not guessed between.
+    blocks, open_at, open_mark = [], None, None
+    for i, line in enumerate(lines):
+        if open_mark is None:
+            mark = fence_mark(line)
+            if mark:
+                open_at, open_mark = i, mark
+        elif fence_closes(line, open_mark):
+            info = lines[open_at].strip().strip(open_mark[0]).strip().lower()
+            if info.split(" ")[0] in ("markdown", "md", ""):
+                blocks.append(lines[open_at + 1:i])
+            open_mark = None
+    if len(blocks) == 1:
+        entries, problem = parse(blocks[0])
+    elif len(blocks) > 1:
+        problem = "{} fenced blocks, and the entries are not read from more than one".format(len(blocks))
+if not entries and not problem and any(ln.strip() for ln in lines):
+    problem = "no `## ` entry in the shape Step 7e gives"
+
+ans, outcome = art / "answers.md", art / "answers-outcome.md"
+status = None
+if outcome.exists():
+    m = re.search(r"(?m)^- answers_status:\s*(\S+)", read(outcome))
+    status = m.group(1) if m else "UNREADABLE"
+
+if not pairs:
+    if problem:
+        print("ASK=no (questions.md: {}; the findings stay filed)".format(problem))
+    elif not entries:
+        print("ASK=no (questions.md holds no entry)")
+    elif status is not None and status != "BLOCKED":
+        print("ASK=no (answers-outcome.md records {}; Step 8c's record is final)".format(status))
+    elif status is None and ans.exists():
+        print("ASK=no (answers.md is recorded; Step 7-pre routes this run to 8c)")
+    else:
+        # The current outcome when it is BLOCKED, else the newest archived one.
+        src = outcome if status == "BLOCKED" else max(
+            art.glob("answers-outcome.*.md"),
+            key=lambda p: int(p.name.split(".")[1]) if p.name.split(".")[1].isdigit() else 0,
+            default=None)
+        if src is not None:
+            b = re.search(r"(?m)^- blocker_question:\s*(.*)$", read(src))
+            if b:
+                print("BLOCKER_QUESTION: " + b.group(1).strip())
+        print("ASK=yes ({} entries)".format(len(entries)))
+        for n, e in enumerate(entries, 1):
+            print("ENTRY {}: {}".format(n, e["finding"]))
+            for k in ("filed as", "question", "recommended", "alternative"):
+                if k in e:
+                    print("  {}: {}".format(k, e[k]))
+    sys.exit(0)
+
+if problem or not entries:
+    print("ERROR: questions.md: {} -- nothing is recorded".format(problem or "no entry"), file=sys.stderr)
+    sys.exit(1)
+if len(pairs) != 2 * len(entries):
+    print("ERROR: {} entries need {} arguments after the run id, got {}".format(
+        len(entries), 2 * len(entries), len(pairs)), file=sys.stderr)
+    sys.exit(1)
+decisions = [(pairs[i].strip().lower(), " ".join(pairs[i + 1].split())) for i in range(0, len(pairs), 2)]
+for n, (d, a) in enumerate(decisions, 1):
+    if d not in ("fix", "leave"):
+        print("ERROR: decision {} is {!r}; it must be fix or leave".format(n, d), file=sys.stderr)
+        sys.exit(1)
+    if d == "fix" and not a:
+        print("ERROR: decision {} is fix with no answer to carry out".format(n), file=sys.stderr)
+        sys.exit(1)
+
+if outcome.exists():
+    if status != "BLOCKED":
+        print("ERROR: {} records {}, not BLOCKED; Step 7-pre routes this run".format(
+            outcome, status), file=sys.stderr)
+        sys.exit(3)
+    # The outcome is archived last, so an interrupted archive still reads BLOCKED. The start
+    # record goes too: left behind, it would make 8c read the BLOCKED cycle's envelope again.
+    n = 1
+    while (art / "answers-outcome.{}.md".format(n)).exists():
+        n += 1
+    started = art / "answers-started.md"
+    if ans.exists():
+        ans.rename(art / "answers.{}.md".format(n))
+    if started.exists():
+        started.rename(art / "answers-started.{}.md".format(n))
+    outcome.rename(art / "answers-outcome.{}.md".format(n))
+    print("archived the BLOCKED answers as #{}".format(n))
+elif ans.exists():
+    print("ERROR: {} is already recorded and has no outcome; Step 7-pre routes this run to "
+          "8c".format(ans), file=sys.stderr)
+    sys.exit(3)
+
+lines = ["# Answers — {} run {}".format(claim_id, run_id), "",
+         "- asked: {}".format(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"))]
+for e, (d, a) in zip(entries, decisions):
+    lines += ["", "## " + e["finding"]]
+    lines += ["- {}: {}".format(k, e[k]) for k in
+              ("filed as", "where", "question", "recommended", "alternative") if k in e]
+    lines += ["- decision: {}".format(d), "- answer: {}".format(a or "no answer")]
+fd, tmp = tempfile.mkstemp(dir=str(art), prefix=".answers.", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    os.replace(tmp, str(ans))
+except BaseException:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+    raise
+print("ANSWERS_TO_FIX={}".format(sum(1 for d, _ in decisions if d == "fix")))
+print("wrote " + str(ans))
+PY
+```
+
+After a record, run Step 8c, whatever the count. After `ASK=no`, do not: a run with recorded answers and no outcome reaches 8c through Step 7-pre.
+
+### Step 8c: Spawn the answers executor
+
+Prepare the spawn first. This block records `NOTHING_TO_FIX` when no answer is a fix. Otherwise it moves any earlier `<CLAIM_ID>.answers.json` out of the mailbox, records the spawn in `answers-started.md`, and prints the branch tip the spawn starts from. On a run whose spawn is already recorded, it prints that record instead:
+
+```bash
+# Substitute all three literals, quoted.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<BRANCH_NAME>"
+import os, re, subprocess, sys
+from pathlib import Path
+
+claim_id, run_id, branch = sys.argv[1], sys.argv[2], sys.argv[3]
+if any("<" in a for a in (claim_id, run_id, branch)):
+    print("ERROR: placeholder not substituted: {!r}".format(sys.argv[1:]), file=sys.stderr)
+    sys.exit(2)
+# An inherited GIT_DIR overrides -C.
+env = dict((k, v) for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"))
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True, env=env).stdout.strip()
+main_root = Path(common).resolve().parent
+run_dir = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id
+ans, outcome = run_dir / "answers.md", run_dir / "answers-outcome.md"
+spawn = run_dir / "answers-started.md"
+if not ans.is_file():
+    print("ERROR: no {} -- Step 8b records the answers first".format(ans), file=sys.stderr)
+    sys.exit(3)
+if outcome.exists():
+    print("ERROR: {} is already recorded; Step 7-pre routes this run".format(outcome), file=sys.stderr)
+    sys.exit(3)
+
+def read(p):
+    try:
+        return p.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        print("ERROR: {} is not UTF-8: {}".format(p, e), file=sys.stderr)
+        sys.exit(4)
+
+if spawn.exists():
+    m = re.search(r"(?m)^- tip_before:\s*([0-9a-f]{40}|[0-9a-f]{64})\s*$", read(spawn))
+    if not m:
+        print("ERROR: {} records no tip_before".format(spawn), file=sys.stderr)
+        sys.exit(4)
+    print("SPAWNED_BEFORE (an earlier session spawned the answers executor for this run)")
+    print("TIP_BEFORE=" + m.group(1))
+    sys.exit(0)
+fixes = len(re.findall(r"(?m)^- decision:\s*fix\s*$", read(ans)))
+if fixes == 0:
+    outcome.write_text("# Answers outcome — {} run {}\n\n- answers_status: NOTHING_TO_FIX\n".format(
+        claim_id, run_id), encoding="utf-8")
+    print("SPAWN=no (every answer is leave; recorded NOTHING_TO_FIX)")
+    sys.exit(0)
+
+# Moved into this run, never deleted.
+box = main_root / "sysop" / "runtime" / "subagent-envelopes" / "{}.answers.json".format(claim_id)
+if box.exists():
+    prior = run_dir / "prior-envelopes"
+    prior.mkdir(exist_ok=True)
+    n = 1
+    while (prior / "{}.answers.{}.json".format(claim_id, n)).exists():
+        n += 1
+    box.rename(prior / "{}.answers.{}.json".format(claim_id, n))
+    print("moved an earlier {} aside".format(box.name))
+tip = subprocess.run(["git", "-C", str(main_root), "rev-parse", "--verify", "--quiet",
+                      "refs/heads/{}^{{commit}}".format(branch)],
+                     capture_output=True, text=True, env=env).stdout.strip()
+if not tip:
+    print("ERROR: branch {!r} does not resolve to a commit".format(branch), file=sys.stderr)
+    sys.exit(3)
+spawn.write_text("# Answers started — {} run {}\n\n- tip_before: {}\n".format(claim_id, run_id, tip),
+                 encoding="utf-8")
+print("SPAWN=yes ({} to fix)".format(fixes))
+print("TIP_BEFORE=" + tip)
+PY
+```
+
+- **`SPAWN=no`**: go back to Step 8's report.
+- **`SPAWNED_BEFORE`**: **do not spawn again.** Hold `TIP_BEFORE`, read the envelope below, and record it. If there is no envelope, record `MALFORMED`.
+- **`SPAWN=yes`**: hold `TIP_BEFORE` in context, and spawn one executor with the Step 7e executor prompt, **verbatim from START to END**, every placeholder substituted as 7e substitutes it except `answers` for `<ENVELOPE_PHASE>`, and the addendum below inserted after the prompt's first paragraph, its placeholders substituted too. Same agent parameters as 7a except `model`: `"sonnet"`, `effort`: `"high"` <!-- sysop:role=executor --> (the `effort` is this line's, never 7a's: with none here, pass none), with `description`: `"Answers <CLAIM_ID>"`.
+
+**START OF ANSWERS ADDENDUM**
+
+**This is the answers run, and it changes the sequence below in four places.** The plan is already implemented and committed on `<BRANCH_NAME>`. Do not implement it again.
+
+1. **Your work is `<ARTIFACT_DIR>/answers.md`.** For each entry with `decision: fix`, make the fix its `answer:` names, in this branch. Sequence items 1 and 2 apply to those fixes and not to the plan. Item 2b applies to anything they surface, except that this run is not asked again: file a finding only an answer can unblock as a task with its question in the body, **write nothing to `questions.md`**, and name the task in your final message. Leave every `decision: leave` entry as it is.
+2. **Undo the filing each fix replaces.** The entry's `filed as:` names the task the first executor filed. Find it in `git diff <default branch>...HEAD`. If this branch added the task, remove its `tasks/index.yml` entry and delete its body file. If this branch appended the finding to an existing open task, remove only the text it appended. Removing an entry this branch added is not a status flip; it is allowed here and nowhere else.
+3. **Record each fix under `## Also fixed`** in item 3's write, its line ending `(approved: ASKED, "QUESTION", answers: sysop/runtime/claim/<CLAIM_ID>/<RUN_ID>/answers.md)`, where ASKED is the file's `asked:` date and QUESTION is the entry's `question:` text.
+4. **Make a new commit** in item 7. Do not amend or rewrite the executor's commit: the orchestrator checks that the branch only moved forward.
+
+**END OF ANSWERS ADDENDUM**
+
+When it returns, read `sysop/runtime/subagent-envelopes/<CLAIM_ID>.answers.json` in the main checkout, never `exec.json`, which is the first executor's. Use Step 8's read order and its `_unparseable_*` rule; the text fallback parses the last fenced block of this spawn's own return. Then record the outcome:
+
+```bash
+# Substitute all five literals, quoted, and the blocker question: the envelope's STATUS
+# verbatim (EXECUTED | BLOCKED | FAILED | MALFORMED), the TIP_BEFORE the prepare block
+# printed, and BLOCKER_QUESTION, or "none". The question is sub-agent free text, so it is
+# SINGLE-quoted like Step 7c's <PARK_REASON>, with any `'` replaced first.
+python3 - <<'PY' "<CLAIM_ID>" "<RUN_ID>" "<BRANCH_NAME>" "<ANSWERS_STATUS>" "<TIP_BEFORE>" '<BLOCKER_QUESTION>'
+import os, re, subprocess, sys
+from pathlib import Path
+
+if len(sys.argv) != 7:
+    print("ERROR: expected six arguments, got {}".format(len(sys.argv) - 1), file=sys.stderr)
+    sys.exit(2)
+claim_id, run_id, branch, status, before, question = sys.argv[1:7]
+if (any("<" in a for a in (claim_id, run_id, branch, status, before))
+        or re.fullmatch(r"<[A-Z_]+>", question)):
+    print("ERROR: placeholder not substituted: {!r}".format(sys.argv[1:]), file=sys.stderr)
+    sys.exit(2)
+if status not in ("EXECUTED", "BLOCKED", "FAILED", "MALFORMED"):
+    print("ERROR: status {!r} is not one the envelope carries".format(status), file=sys.stderr)
+    sys.exit(2)
+if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", before):
+    print("ERROR: TIP_BEFORE {!r} is not a full object id".format(before), file=sys.stderr)
+    sys.exit(2)
+env = dict((k, v) for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"))
+common = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                        capture_output=True, text=True, check=True, env=env).stdout.strip()
+main_root = Path(common).resolve().parent
+run_dir = main_root / "sysop" / "runtime" / "claim" / claim_id / run_id
+out = run_dir / "answers-outcome.md"
+if not (run_dir / "answers.md").is_file():
+    print("ERROR: no answers.md in {}".format(run_dir), file=sys.stderr)
+    sys.exit(3)
+if out.exists():
+    print("ERROR: {} is already recorded".format(out), file=sys.stderr)
+    sys.exit(3)
+after = subprocess.run(["git", "-C", str(main_root), "rev-parse", "--verify", "--quiet",
+                        "refs/heads/{}^{{commit}}".format(branch)],
+                       capture_output=True, text=True, env=env).stdout.strip()
+# An EXECUTED the branch contradicts is recorded as what the branch shows.
+if status == "EXECUTED":
+    if not after or after == before:
+        status = "NO_COMMIT"
+    elif subprocess.run(["git", "-C", str(main_root), "merge-base", "--is-ancestor", before, after],
+                        capture_output=True, env=env).returncode != 0:
+        status = "REWRITTEN"
+body = "# Answers outcome — {} run {}\n\n- answers_status: {}\n- tip_before: {}\n- tip_after: {}\n".format(
+    claim_id, run_id, status, before, after or "unresolved")
+if status == "BLOCKED":
+    body += "- blocker_question: {}\n".format(" ".join(question.split()) or "none")
+out.write_text(body, encoding="utf-8")
+print("answers_status: " + status)
+sys.exit(1 if status in ("NO_COMMIT", "REWRITTEN") else 0)
+PY
+```
+
+- **`EXECUTED`**: re-run Step 8's stranded-body check and its test-decision read-back against the new tip, with their halts. Then print, under Step 8's report, each answered entry's decision and any task the answers run filed with a question. **If `/document-work` already ran on this branch**, say to re-run it: its pending doc's `branch_tip:` predates this commit, and `/review-close` Step 3b refuses a stale doc.
+- **`NO_COMMIT` or `REWRITTEN`** (the block exits 1): the executor reported success and the branch says otherwise. Handle it as `FAILED`.
+- **`BLOCKED`**: park per Step 7c with the `BLOCKER_QUESTION:` as the reason, and tell the human to resume with `/claim-task <CLAIM_ID> --resume <RUN_ID>`; Step 7-pre routes that resume to 8b. **Do not rewrite `classification.md`.** A `BLOCKED` there would send the resume to 7c and re-run the first executor over committed work.
+- **`FAILED` or `MALFORMED`**: as Step 8, surface the `ERROR`, then `git log --oneline <default branch>..HEAD --not --glob='refs/sysop/merged-pr-heads/*'` and `git status --short` in the worktree. **No auto-retry.** The filings stay wherever the executor left them, and the human decides. A retry is theirs to start: moving `answers-outcome.md` and `answers-started.md` aside and resuming routes the run to 8c, which spawns from the current tip.
+
+Every arm but `BLOCKED` then returns to Step 8's report.

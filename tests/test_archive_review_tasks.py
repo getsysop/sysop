@@ -1,0 +1,1490 @@
+"""Tests for ``core/companion/scripts/archive_review_tasks.py``.
+
+Sysop-original. No gdp counterpart; all tests in this file are Phase 48
+originals.
+
+Surface covered:
+
+- ``_atomic_write_text`` — tmp + replace round-trip.
+- ``parse_archivable_batches`` — round/batch boundaries, mixed-status
+  rounds, ``all_merged`` flag, task counting, ``---`` separator handling,
+  trailing-batch close.
+- ``build_archive_block`` — `<details>` summary, separator placement
+  between multiple rounds, trailing blank-line stripping.
+- ``build_grand_total_row`` — batch-range derivation.
+- ``update_archive_total`` — total math; missing row → ``(None, None)``.
+- ``find_archive_insertion_point`` — header lookup.
+- ``update_review_tasks`` — full-round vs partial-round removal, archive
+  reference update, grand-total preservation of deferred TASK suffix.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import stat
+import sys
+from pathlib import Path
+
+import pytest
+
+import archive_review_tasks as art
+
+
+# === _atomic_write_text ====================================================
+
+
+def test_atomic_write_text_writes_and_cleans_up_tmp(tmp_path):
+    target = tmp_path / "out.txt"
+    art._atomic_write_text(str(target), "hello\n")
+    assert target.read_text(encoding="utf-8") == "hello\n"
+    assert not (tmp_path / "out.txt.tmp").exists()
+
+
+def test_atomic_write_text_overwrites_existing(tmp_path):
+    target = tmp_path / "out.txt"
+    target.write_text("old", encoding="utf-8")
+    art._atomic_write_text(str(target), "new")
+    assert target.read_text(encoding="utf-8") == "new"
+
+
+# === parse_archivable_batches ==============================================
+
+
+def _split(text: str) -> list[str]:
+    return text.splitlines()
+
+
+def test_parse_archivable_batches_collects_merged_batch():
+    text = (
+        "## Round 5 — 2026-05-01\n"
+        "\n"
+        "### Batch 100 — Helper rename `Merged`\n"
+        "> **Branch:** `review/100`\n"
+        "\n"
+        "- [x] **TASK-001**: done\n"
+        "- [x] **TASK-002**: done\n"
+    )
+    rounds = art.parse_archivable_batches(_split(text))
+    assert len(rounds) == 1
+    r = rounds[0]
+    assert r["header"] == "## Round 5 — 2026-05-01"
+    assert r["all_merged"] is True
+    assert len(r["batches"]) == 1
+    assert r["batches"][0]["task_count"] == 2
+
+
+def test_parse_archivable_batches_handles_complete_status():
+    """``Complete`` is treated equivalently to ``Merged``."""
+    text = (
+        "## Round 6\n"
+        "\n"
+        "### Batch 101 — Docs `Complete`\n"
+        "\n"
+        "- [x] **TASK-010**: done\n"
+    )
+    rounds = art.parse_archivable_batches(_split(text))
+    assert len(rounds) == 1
+    assert rounds[0]["batches"][0]["task_count"] == 1
+
+
+def test_parse_archivable_batches_skips_pending_batches():
+    """Mixed-status round: only merged batches collected; all_merged is False."""
+    text = (
+        "## Round 7\n"
+        "\n"
+        "### Batch 200 — Done `Merged`\n"
+        "- [x] **TASK-100**: ok\n"
+        "\n"
+        "### Batch 201 — Pending `Pending`\n"
+        "- [ ] **TASK-101**: nope\n"
+    )
+    rounds = art.parse_archivable_batches(_split(text))
+    assert len(rounds) == 1
+    r = rounds[0]
+    assert r["all_merged"] is False
+    assert len(r["batches"]) == 1
+    assert "Batch 200" in r["batches"][0]["lines"][0]
+
+
+def test_parse_archivable_batches_treats_dashed_separator_as_batch_close():
+    text = (
+        "## Round 8\n"
+        "\n"
+        "### Batch 300 — A `Merged`\n"
+        "- [x] **TASK-200**: ok\n"
+        "\n"
+        "---\n"
+        "\n"
+        "### Batch 301 — B `Merged`\n"
+        "- [x] **TASK-201**: ok\n"
+    )
+    rounds = art.parse_archivable_batches(_split(text))
+    assert len(rounds) == 1
+    assert len(rounds[0]["batches"]) == 2
+    # The `---` row must not show up inside batch contents
+    for b in rounds[0]["batches"]:
+        assert all(line.strip() != "---" for line in b["lines"])
+
+
+def test_parse_archivable_batches_closes_trailing_round_without_statistics():
+    """A file that ends in a batch (no ``## Statistics``) must still close."""
+    text = (
+        "## Round 9\n"
+        "### Batch 400 — Trailing `Merged`\n"
+        "- [x] **TASK-400**: done\n"
+    )
+    rounds = art.parse_archivable_batches(_split(text))
+    assert len(rounds) == 1
+    assert rounds[0]["batches"][0]["task_count"] == 1
+
+
+def test_parse_archivable_batches_closes_round_on_statistics_header():
+    """A `## Statistics` header ends the current round; non-batch line is
+    not treated as another round."""
+    text = (
+        "## Round 10\n"
+        "### Batch 500 — One `Merged`\n"
+        "- [x] **TASK-500**: ok\n"
+        "## Statistics\n"
+        "etc\n"
+    )
+    rounds = art.parse_archivable_batches(_split(text))
+    assert len(rounds) == 1
+    assert rounds[0]["end_line"] is not None
+    # `## Statistics` itself must not appear inside the batch
+    for b in rounds[0]["batches"]:
+        assert all("Statistics" not in line for line in b["lines"])
+
+
+def test_parse_archivable_batches_returns_empty_when_no_merged():
+    text = (
+        "## Round 11\n"
+        "### Batch 600 — Still in flight `Pending`\n"
+        "- [ ] **TASK-600**: nope\n"
+    )
+    assert art.parse_archivable_batches(_split(text)) == []
+
+
+# === build_archive_block ===================================================
+
+
+def test_build_archive_block_emits_details_summary_per_round():
+    rounds = [{
+        "header": "## Round 12 — 2026-05-02",
+        "batches": [{
+            "lines": ["### Batch 700 — X `Merged`", "- [x] **TASK-700**: a", ""],
+            "task_count": 1,
+        }],
+    }]
+    block = art.build_archive_block(rounds)
+    assert "## Round 12 — 2026-05-02" in block
+    assert "<details>" in block
+    assert "</details>" in block
+    assert "<summary>1/1 tasks completed</summary>" in block
+
+
+def test_build_archive_block_summary_is_done_over_total_not_total_over_total():
+    # `{total}/{total}` was tautological — it could not report anything but
+    # completeness, so a round carrying a `> Failed:` task archived as
+    # "3/3 tasks completed" over a block visibly containing an open box.
+    rounds = [{
+        "header": "## Round 12 — 2026-05-02",
+        "batches": [{
+            "lines": [
+                "### Batch 700 — X `Merged`",
+                "- [x] **TASK-700**: a",
+                "- [x] **TASK-701**: b",
+                "- [x] **TASK-702**: c",
+                "- [ ] **TASK-703**: failed thing",
+                "  > Failed: out of scope for this batch",
+                "",
+            ],
+            "task_count": 3,
+        }],
+    }]
+    block = art.build_archive_block(rounds)
+    assert "<summary>3/4 tasks completed</summary>" in block, block
+    # And the open task's text still travels with it.
+    assert "- [ ] **TASK-703**: failed thing" in block
+    assert "  > Failed: out of scope for this batch" in block
+
+
+def test_build_archive_block_inserts_separator_between_multiple_rounds():
+    rounds = [
+        {
+            "header": "## Round A",
+            "batches": [{
+                "lines": ["### Batch 1 — A `Merged`", "- [x] **TASK-1**: ok"],
+                "task_count": 1,
+            }],
+        },
+        {
+            "header": "## Round B",
+            "batches": [{
+                "lines": ["### Batch 2 — B `Merged`", "- [x] **TASK-2**: ok"],
+                "task_count": 1,
+            }],
+        },
+    ]
+    block = art.build_archive_block(rounds)
+    # Find the `---` separator between the two rounds
+    a_idx = block.index("## Round A")
+    b_idx = block.index("## Round B")
+    assert a_idx < b_idx
+    # Between A and B there must be exactly one `---` separator
+    sep_indices = [i for i in range(a_idx, b_idx) if block[i] == "---"]
+    assert sep_indices == [b_idx - 2]  # separator immediately precedes blank + B
+
+
+def test_build_archive_block_strips_trailing_blank_lines_per_batch():
+    rounds = [{
+        "header": "## Round 13",
+        "batches": [{
+            "lines": [
+                "### Batch 800 — X `Merged`",
+                "- [x] **TASK-800**: ok",
+                "",
+                "",
+                "",
+            ],
+            "task_count": 1,
+        }],
+    }]
+    block = art.build_archive_block(rounds)
+    # Find the batch start, ensure no run of >=2 blank lines inside
+    start = block.index("### Batch 800 — X `Merged`")
+    # The two lines following the batch should be: the task, then a single ""
+    assert block[start + 1] == "- [x] **TASK-800**: ok"
+    assert block[start + 2] == ""
+    # The next line should be `</details>`, not another blank
+    assert block[start + 3] == "</details>"
+
+
+# === build_grand_total_row =================================================
+
+
+def test_build_grand_total_row_renders_batch_range():
+    # The fixture carries REAL task lines. It used to declare `task_count: 3`
+    # over a `lines` list holding no tasks at all, which is why this test stayed
+    # green through the whole life of the tautology it was pinning: the row was
+    # `| {total} | {total} | 0 | Complete |`, so it reported completeness by
+    # construction and no fixture could make it say otherwise.
+    rounds = [{
+        "header": "## Round 14 — 2026-05-03",
+        "batches": [
+            {
+                "lines": [
+                    "### Batch 50 — A `Merged`",
+                    "- [x] **TASK-1**: a",
+                    "- [x] **TASK-2**: b",
+                    "- [x] **TASK-3**: c",
+                ],
+                "task_count": 3,
+            },
+            {
+                "lines": ["### Batch 52 — B `Merged`", "- [x] **TASK-4**: d"],
+                "task_count": 1,
+            },
+        ],
+    }]
+    rows = art.build_grand_total_row(rounds)
+    assert len(rows) == 1
+    assert "Round 14 (Batches 50-52)" in rows[0]
+    assert "| 4 | 4 | 0 | Complete |" in rows[0]
+
+
+def test_build_grand_total_row_reports_partial_when_a_task_is_open():
+    # The defect: close_batch.sh deliberately leaves a `> Failed:` task unflipped,
+    # so a `Merged` batch can legitimately hold an open task — and this row
+    # counted only `[x]` lines, which did not miscount the open task so much as
+    # remove it from the denominator. A 4-task batch archived as `4 | 4 | Complete`.
+    rounds = [{
+        "header": "## Round 14 — 2026-05-03",
+        "batches": [{
+            "lines": [
+                "### Batch 50 — A `Merged`",
+                "- [x] **TASK-1**: a",
+                "- [x] **TASK-2**: b",
+                "- [x] **TASK-3**: c",
+                "- [ ] **TASK-4**: failed thing",
+                "  > Failed: needs a cross-module signature change",
+            ],
+            "task_count": 3,
+        }],
+    }]
+    rows = art.build_grand_total_row(rounds)
+    assert "| 4 | 3 | 0 | Partial |" in rows[0], rows[0]
+
+
+def test_build_grand_total_row_counts_an_in_progress_task_as_open():
+    # `/auto-judge` says "leave the checkbox exactly as you found it", so `[/]`
+    # is a first-class FAIL state and belongs in the denominator too.
+    rounds = [{
+        "header": "## Round 14",
+        "batches": [{
+            "lines": [
+                "### Batch 50 — A `Merged`",
+                "- [x] **TASK-1**: a",
+                "- [/] **TASK-2**: claimed then failed",
+            ],
+            "task_count": 1,
+        }],
+    }]
+    rows = art.build_grand_total_row(rounds)
+    assert "| 2 | 1 | 0 | Partial |" in rows[0], rows[0]
+
+
+def test_the_ratio_uses_one_definition_of_a_task_line():
+    # Both halves come from the same pattern. Taking the numerator from TASK_RE
+    # (which requires `**TASK-N**`) and the denominator from COUNTED_TASK_RE
+    # (which does not) reported a finished round as `0/1 ... Partial`.
+    # `- [x] task one` is a shape close_batch.sh treats as a real task.
+    rounds = [{
+        "header": "## Round 14",
+        "batches": [{
+            "lines": ["### Batch 50 — A `Merged`", "- [x] task one"],
+            "task_count": 0,
+        }],
+    }]
+    assert art.count_round_tasks(rounds[0]) == (1, 1)
+    assert "| 1 | 1 | 0 | Complete |" in art.build_grand_total_row(rounds)[0]
+
+
+def test_an_indented_sub_bullet_is_not_counted_as_a_task():
+    # An `- [ ] **Acceptance**:` criterion inside a task body is indented, and
+    # is not a task to close_batch.sh either. Counting it would inflate the
+    # denominator and mark finished rounds `Partial` forever.
+    rounds = [{
+        "header": "## Round 14",
+        "batches": [{
+            "lines": [
+                "### Batch 50 — A `Merged`",
+                "- [x] **TASK-1**: a",
+                "  - [ ] **Acceptance**: the criterion under it",
+            ],
+            "task_count": 1,
+        }],
+    }]
+    assert art.count_round_tasks(rounds[0]) == (1, 1)
+    assert "| 1 | 1 | 0 | Complete |" in art.build_grand_total_row(rounds)[0]
+
+
+def test_build_grand_total_row_falls_back_when_no_batch_numbers():
+    rounds = [{
+        "header": "## Round 15",
+        "batches": [{"lines": ["No batch number here"], "task_count": 0}],
+    }]
+    rows = art.build_grand_total_row(rounds)
+    assert rows[0].startswith("| Round 15 |")
+
+
+# === update_archive_total ==================================================
+
+
+def test_update_archive_total_bumps_totals():
+    lines = [
+        "| Some row    | 5    | 5    | 0   |     |",
+        "| **Archive Total** | **100** | **95** | **5** |  |",
+        "Other content",
+    ]
+    old, new = art.update_archive_total(lines, 10)
+    assert old == 100
+    assert new == 110
+    assert "**110**" in lines[1]
+    assert "**105**" in lines[1]
+    # Deferred preserved
+    assert "**5**" in lines[1]
+
+
+def test_update_archive_total_takes_different_deltas_for_total_and_completed():
+    # The two columns are different quantities. Applying ONE delta to both is
+    # how the running total inherited the same tautology the per-round rows had:
+    # archiving a round with an open task raised Completed as if it were done.
+    lines = [
+        "| **Archive Total** | **100** | **95** | **5** |  |",
+    ]
+    old, new = art.update_archive_total(lines, 10, 9)
+    assert (old, new) == (100, 110)
+    assert "**110**" in lines[0]
+    assert "**104**" in lines[0], lines[0]
+    assert "**5**" in lines[0]
+
+
+def test_update_archive_total_defaults_completed_to_total():
+    # The fully-complete run is the common case and must not need the argument.
+    lines = ["| **Archive Total** | **100** | **95** | **5** |  |"]
+    art.update_archive_total(lines, 10)
+    assert "**110**" in lines[0]
+    assert "**105**" in lines[0]
+
+
+def test_update_archive_total_returns_none_when_row_absent():
+    lines = ["No archive total here"]
+    assert art.update_archive_total(lines, 10) == (None, None)
+
+
+# === find_archive_insertion_point ==========================================
+
+
+def test_find_archive_insertion_point_returns_header_index():
+    lines = ["intro", "", "## Grand Total (Archived)", "rest"]
+    assert art.find_archive_insertion_point(lines) == 2
+
+
+def test_find_archive_insertion_point_returns_none_when_missing():
+    lines = ["nothing here", "or here"]
+    assert art.find_archive_insertion_point(lines) is None
+
+
+# === update_review_tasks ===================================================
+
+
+def test_update_review_tasks_removes_full_round_lines():
+    """`all_merged: True` → entire round range removed."""
+    review = (
+        "header\n"
+        "## Round 99 — TO REMOVE\n"
+        "### Batch 1 — gone `Merged`\n"
+        "- [x] **TASK-1**: ok\n"
+        "tail\n"
+    )
+    lines = review.splitlines()
+    rounds = [{
+        "header": "## Round 99 — TO REMOVE",
+        "batches": [{
+            "lines": ["### Batch 1 — gone `Merged`", "- [x] **TASK-1**: ok"],
+            "task_count": 1,
+            "start_line": 2,
+            "end_line": 4,
+        }],
+        "start_line": 1,
+        "end_line": 4,
+        "all_merged": True,
+    }]
+    updated = art.update_review_tasks(lines, rounds, 100, 1, [1])
+    joined = "\n".join(updated)
+    assert "Round 99" not in joined
+    assert "Batch 1" not in joined
+    assert "header" in joined
+    assert "tail" in joined
+
+
+def test_update_review_tasks_removes_only_merged_batch_in_partial_round():
+    """`all_merged: False` → only individual batch ranges removed."""
+    review_lines = [
+        "## Round 100",                        # 0
+        "### Batch 2 — done `Merged`",         # 1
+        "- [x] **TASK-2**: ok",                # 2
+        "### Batch 3 — open `Pending`",        # 3
+        "- [ ] **TASK-3**: nope",              # 4
+    ]
+    rounds = [{
+        "header": "## Round 100",
+        "batches": [{
+            "lines": review_lines[1:3],
+            "task_count": 1,
+            "start_line": 1,
+            "end_line": 3,
+        }],
+        "start_line": 0,
+        "end_line": 5,
+        "all_merged": False,
+    }]
+    updated = art.update_review_tasks(list(review_lines), rounds, 50, 1, [2])
+    joined = "\n".join(updated)
+    assert "Round 100" in joined         # round header preserved
+    assert "Batch 2" not in joined        # merged batch gone
+    assert "Batch 3" in joined            # pending batch preserved
+
+
+def test_update_review_tasks_rewrites_archive_reference():
+    review = (
+        "> **Archive:** Rounds 1–5 (Batches 1–10) (50 tasks) are in "
+        "[review_tasks_archive.md](review_tasks_archive.md).\n"
+        "## Round 6 — TO REMOVE\n"
+        "### Batch 11 — done `Merged`\n"
+        "- [x] **TASK-X**: ok\n"
+    )
+    lines = review.splitlines()
+    rounds = [{
+        "header": "## Round 6 — TO REMOVE",
+        "batches": [{
+            "lines": ["### Batch 11 — done `Merged`", "- [x] **TASK-X**: ok"],
+            "task_count": 1,
+            "start_line": 2,
+            "end_line": 4,
+        }],
+        "start_line": 1,
+        "end_line": 4,
+        "all_merged": True,
+    }]
+    updated = art.update_review_tasks(lines, rounds, 51, 1, [1, 11])
+    archive_line = next(line for line in updated if "**Archive:**" in line)
+    assert "Rounds 1–6" in archive_line
+    assert "Batches 1–11" in archive_line
+    assert "(51 tasks)" in archive_line
+
+
+def test_update_review_tasks_preserves_deferred_task_suffix_on_grand_total():
+    """Grand-total rewrite must preserve a trailing ``(TASK-184)`` suffix."""
+    review = (
+        "> **Grand Total (all rounds):** 100 tasks — 90 done, 8 open, "
+        "2 deferred (TASK-184, TASK-200).\n"
+        "tail\n"
+    )
+    lines = review.splitlines()
+    updated = art.update_review_tasks(lines, [], 90, 0, [])
+    gt = next(line for line in updated if "Grand Total" in line)
+    assert "100 tasks" in gt
+    assert "(TASK-184, TASK-200)" in gt
+
+
+# === Convention fire ledger — archival integration (Phase 67, Tier 2) ========
+
+
+_LEDGER_FIXTURE = (
+    "# Code Review Tasks\n"
+    "\n"
+    "> **Archive:** Rounds 1–4 (Batches 1–20) (200 tasks) are in "
+    "[review_tasks_archive.md](review_tasks_archive.md).\n"
+    "\n"
+    "> **Grand Total (all rounds):** 210 tasks — 205 done, 5 open, 0 deferred.\n"
+    "\n"
+    "## Round 5 (2026-06-26) — Code Quality Review\n"
+    "\n"
+    "### Batch 21 — Helper rename `Merged`\n"
+    "> **Branch:** `review/21`\n"
+    "\n"
+    "- [x] **TASK-201**: done\n"
+    "- [x] **TASK-202**: done\n"
+    "\n"
+    "## Statistics\n"
+    "\n"
+    "| Round | Tasks |\n"
+    "|-------|-------|\n"
+    "| 5 | 2 |\n"
+    "\n"
+    "## Convention fire ledger\n"
+    "\n"
+    "> Per-rule stale-verdicts from review-round triage (Step 2b).\n"
+    "\n"
+    "| Round | Rule ID | Mechanism | Verdict | Why (the change event) |\n"
+    "|-------|---------|-----------|---------|------------------------|\n"
+    "| 5 | `sql-fstring` | checks.yml | stale | param'd-query migration mooted it |\n"
+)
+
+
+def test_archive_leaves_convention_fire_ledger_in_place():
+    """Phase 67 (Tier 2): the ``## Convention fire ledger`` section sits
+    *outside* every ``## Round`` block, so a fully-merged round archiving away
+    must neither move nor drop it. Locks the Step 5e / Step 9b placement
+    contract — the ledger is the demotion gate's durable record, and silently
+    archiving it away (``build_archive_block`` only copies header + batches)
+    or deleting it with the round range would be data loss.
+
+    Uses the realistic bottom-of-file layout: ``## Round`` → ``## Statistics``
+    → ``## Convention fire ledger``, so the round range stops at the first
+    following ``## `` section and both trailing sections survive.
+    """
+    lines = _LEDGER_FIXTURE.splitlines()
+    rounds = art.parse_archivable_batches(lines)
+
+    # The merged round is archivable, and its range stops AT the first ``## ``
+    # section after it (``## Statistics``) — so neither Statistics nor the
+    # ledger below it is ever inside the removed range.
+    assert len(rounds) == 1
+    r = rounds[0]
+    assert r["all_merged"] is True
+    assert r["end_line"] == lines.index("## Statistics")
+
+    # Neither trailing section is carried into the archive block (build copies
+    # only the round header + batch line-ranges), while the batch content IS.
+    archive_block = "\n".join(art.build_archive_block(rounds))
+    assert "Convention fire ledger" not in archive_block
+    assert "## Statistics" not in archive_block
+    assert "TASK-201" in archive_block
+
+    # After the rewrite, the ledger header AND its rows (and the Statistics
+    # section) survive in review_tasks.md, and the archived round is gone.
+    updated = "\n".join(art.update_review_tasks(lines, rounds, 202, 2, [21]))
+    assert "## Convention fire ledger" in updated
+    assert "`sql-fstring`" in updated
+    assert "## Statistics" in updated
+    assert "## Round 5" not in updated
+    assert "TASK-201" not in updated
+
+
+# === _atomic_write_pair (Phase 108) ========================================
+
+
+def test_atomic_write_pair_writes_both_and_cleans_up_tmp(tmp_path):
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    art._atomic_write_pair(str(a), "alpha\n", str(b), "beta\n")
+    assert a.read_text(encoding="utf-8") == "alpha\n"
+    assert b.read_text(encoding="utf-8") == "beta\n"
+    # Both tmp files were renamed away, not left behind.
+    assert not (tmp_path / "a.txt.tmp").exists()
+    assert not (tmp_path / "b.txt.tmp").exists()
+
+
+def test_atomic_write_pair_overwrites_existing(tmp_path):
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+    art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert a.read_text(encoding="utf-8") == "new-a"
+    assert b.read_text(encoding="utf-8") == "new-b"
+
+
+def test_atomic_write_pair_cleans_up_tmp_on_replace_failure(tmp_path, monkeypatch):
+    """If os.replace fails, both originals stay intact AND no `.tmp` is
+    orphaned — an untracked `review_tasks*.md.tmp` at the repo root would
+    otherwise trip /review-close Step 1a dirty-classification."""
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+
+    def _boom(*_args, **_kw):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(art.os, "replace", _boom)
+    with pytest.raises(OSError):
+        art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+
+    # Neither replace succeeded, so both originals are untouched...
+    assert a.read_text(encoding="utf-8") == "old-a"
+    assert b.read_text(encoding="utf-8") == "old-b"
+    # ...and both minted temps were cleaned up, not orphaned. Asserted over the
+    # whole directory, not two fixed names: since Phase 272 (`Q-448`) the names
+    # are minted, and a fixed-name check would pass vacuously over a leak.
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["a.txt", "b.txt"]
+
+
+# === Q-448 (Phase 272): the mkstemp shape, asserted as PROPERTIES ==========
+# Presence of `mkstemp(` is not the property (Phase 271's round bypassed every
+# presence check). Each element is driven: where the temp is minted and what it
+# is called, what mode the result carries, what a symlinked target gets, and
+# what a failure — including a non-OSError one — leaves behind.
+
+
+def test_atomic_write_text_mints_its_temp_beside_the_target_in_the_md_tmp_class(
+        tmp_path, monkeypatch):
+    """`dir=` the target's own directory (a temp in the system temp dir makes
+    `os.replace` raise EXDEV), never the fixed name, and inside the
+    `review_tasks*.md.tmp` orphan shape that `batch_work.sh` and `close_batch.sh`
+    keep for the same reason."""
+    target = tmp_path / "review_tasks.md"
+    target.write_text("old", encoding="utf-8")
+    seen = {}
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen["src"], seen["dst"] = str(src), str(dst)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(art.os, "replace", spy)
+    art._atomic_write_text(str(target), "new")
+    assert target.read_text(encoding="utf-8") == "new"
+    assert os.path.dirname(seen["src"]) == str(tmp_path)
+    assert seen["src"] != str(target) + ".tmp", "the fixed name is back"
+    name = os.path.basename(seen["src"])
+    assert name.startswith("review_tasks.") and name.endswith(".md.tmp"), name
+    assert name != "review_tasks.md.tmp"
+
+
+def test_atomic_write_text_carries_the_targets_mode_not_mkstemps_0600(tmp_path):
+    for mode in (0o644, 0o600, 0o444):
+        target = tmp_path / f"t{mode:o}.md"
+        target.write_text("old", encoding="utf-8")
+        os.chmod(target, mode)
+        art._atomic_write_text(str(target), "new")
+        assert stat.S_IMODE(target.stat().st_mode) == mode, oct(mode)
+        assert target.read_text(encoding="utf-8") == "new"
+
+
+def test_a_fresh_target_gets_the_mode_open_would_have_given(tmp_path):
+    """No target to carry a mode from: the result must be what the fixed-name
+    `open(tmp, "w")` produced — 0666 under the umask — not a hard-coded 0644
+    (which WIDENS for a 077 umask) and not mkstemp's 0600."""
+    for umask, want in ((0o022, 0o644), (0o077, 0o600)):
+        target = tmp_path / f"fresh-{umask:o}.md"
+        old = os.umask(umask)
+        try:
+            art._atomic_write_text(str(target), "new")
+        finally:
+            os.umask(old)
+        assert stat.S_IMODE(target.stat().st_mode) == want, oct(umask)
+
+
+def test_atomic_write_text_writes_through_a_symlink(tmp_path):
+    real = tmp_path / "real.md"
+    real.write_text("old", encoding="utf-8")
+    link = tmp_path / "review_tasks.md"
+    link.symlink_to(real)
+    art._atomic_write_text(str(link), "new")
+    assert link.is_symlink(), "the symlink itself was replaced"
+    assert real.read_text(encoding="utf-8") == "new"
+
+
+def test_atomic_write_text_cleans_up_on_a_non_oserror_failure(tmp_path, monkeypatch):
+    """Under the fixed name a leaked temp was overwritten by the next run; a
+    minted name never is, so the arm must reach past `OSError` — and must still
+    re-raise, so the failure is not swallowed."""
+    target = tmp_path / "review_tasks.md"
+    target.write_text("old", encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("not an OSError")
+
+    monkeypatch.setattr(art, "_write_durably", boom)
+    with pytest.raises(RuntimeError):
+        art._atomic_write_text(str(target), "new")
+    assert target.read_text(encoding="utf-8") == "old"
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["review_tasks.md"]
+
+
+def test_atomic_write_pair_cleans_up_the_first_temp_when_the_second_mint_fails(
+        tmp_path, monkeypatch):
+    """The pair mints two temps in sequence. A failure between them must clean
+    up the one that exists and not trip over the one that does not."""
+    a = tmp_path / "a.txt"
+    b = tmp_path / "b.txt"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+    real_mint = art.tempfile.mkstemp
+    calls = []
+
+    def mint(*a, **k):
+        calls.append(k.get("dir"))
+        if len(calls) == 2:
+            raise OSError("second mint refused")
+        return real_mint(*a, **k)
+
+    # The stdlib call, not the private helper: a round's control renamed
+    # `_mkstemp_beside` and this test reddened on the rename alone (`C14`).
+    monkeypatch.setattr(art.tempfile, "mkstemp", mint)
+    with pytest.raises(OSError):
+        art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert a.read_text(encoding="utf-8") == "old-a"
+    assert b.read_text(encoding="utf-8") == "old-b"
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["a.txt", "b.txt"]
+
+
+def test_atomic_write_pair_writes_through_symlinks(tmp_path):
+    """The single-file writer's symlink test did not cover the pair, and a
+    round dropped both `realpath` calls there unseen (`A12`/`A20`)."""
+    real_a = tmp_path / "real_a.md"
+    real_b = tmp_path / "real_b.md"
+    real_a.write_text("old-a", encoding="utf-8")
+    real_b.write_text("old-b", encoding="utf-8")
+    a = tmp_path / "review_tasks.md"
+    b = tmp_path / "review_tasks_archive.md"
+    a.symlink_to(real_a)
+    b.symlink_to(real_b)
+    art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert a.is_symlink() and b.is_symlink(), "a link itself was replaced"
+    assert real_a.read_text(encoding="utf-8") == "new-a"
+    assert real_b.read_text(encoding="utf-8") == "new-b"
+
+
+def test_atomic_write_pair_cleans_up_on_a_non_oserror_failure(tmp_path, monkeypatch):
+    """The pair's arm narrowed to `OSError` leaked a minted temp (`A14`)."""
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("not an OSError")
+
+    monkeypatch.setattr(art.os, "chmod", boom)
+    with pytest.raises(RuntimeError):
+        art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert a.read_text(encoding="utf-8") == "old-a"
+    assert b.read_text(encoding="utf-8") == "old-b"
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["a.md", "b.md"]
+
+
+def test_atomic_write_pair_cleans_up_when_the_first_write_fails(tmp_path, monkeypatch):
+    """`tmps` must record a temp the moment it is minted, not after it is
+    written: an `ENOSPC` during the FIRST write leaked it when the append
+    came later (`A15`)."""
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+    real_write = art._write_durably
+    calls = []
+
+    def write(fd, content):
+        calls.append(content)
+        if len(calls) == 1:
+            os.close(fd)
+            raise OSError("disk full")
+        return real_write(fd, content)
+
+    monkeypatch.setattr(art, "_write_durably", write)
+    with pytest.raises(OSError):
+        art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["a.md", "b.md"]
+
+
+def test_the_writers_still_fsync_before_replacing(tmp_path, monkeypatch):
+    """The fsync moved into `_write_durably` and nothing pinned it there (`A17`).
+    Durability is the reason the tmp + replace shape exists at all."""
+    synced = []
+    real_fsync = os.fsync
+
+    def spy(fd):
+        synced.append(fd)
+        return real_fsync(fd)
+
+    monkeypatch.setattr(art.os, "fsync", spy)
+    target = tmp_path / "review_tasks.md"
+    target.write_text("old", encoding="utf-8")
+    art._atomic_write_text(str(target), "new")
+    assert len(synced) == 1, "the single writer did not fsync its temp"
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+    art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert len(synced) == 3, "the pair did not fsync both temps"
+
+
+def test_the_temp_is_minted_beside_the_real_file_not_beside_the_link(tmp_path, monkeypatch):
+    """Every earlier symlink test put link and target in ONE directory, so
+    `dir=dirname(path)` and `dir=dirname(real)` were indistinguishable and a
+    round swapped them unseen (`A19`). Same-filesystem is a property of the
+    REAL file's directory."""
+    sub = tmp_path / "elsewhere"
+    sub.mkdir()
+    real = sub / "real.md"
+    real.write_text("old", encoding="utf-8")
+    link = tmp_path / "review_tasks.md"
+    link.symlink_to(real)
+    seen = {}
+    real_replace = os.replace
+
+    def spy(src, dst):
+        seen["src"] = str(src)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(art.os, "replace", spy)
+    art._atomic_write_text(str(link), "new")
+    assert os.path.dirname(seen["src"]) == str(sub), seen
+    assert real.read_text(encoding="utf-8") == "new" and link.is_symlink()
+
+
+def test_atomic_write_pair_carries_each_targets_own_mode(tmp_path):
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_text("old-a", encoding="utf-8")
+    b.write_text("old-b", encoding="utf-8")
+    os.chmod(a, 0o600)
+    os.chmod(b, 0o644)
+    art._atomic_write_pair(str(a), "new-a", str(b), "new-b")
+    assert stat.S_IMODE(a.stat().st_mode) == 0o600
+    assert stat.S_IMODE(b.stat().st_mode) == 0o644
+    assert a.read_text(encoding="utf-8") == "new-a"
+    assert b.read_text(encoding="utf-8") == "new-b"
+
+
+# === repo-root path resolution (Phase 108) =================================
+
+
+def test_review_and_archive_files_resolve_to_repo_root_not_cwd():
+    """Paths anchor to <repo-root>/ (the great-grandparent of the script, i.e.
+    parent of sysop/ in a consumer install), never the caller's CWD — a bare
+    relative path would open against whatever dir the invoker happened to be in
+    (a worktree subdir, etc.). Phase 128: scripts moved to sysop/scripts/, so the
+    anchor is parents[2] (was parent.parent)."""
+    root = Path(str(art.__file__)).resolve().parents[2]
+    assert os.path.isabs(art.REVIEW_FILE)
+    assert os.path.isabs(art.ARCHIVE_FILE)
+    assert art.REVIEW_FILE == str(root / "review_tasks.md")
+    assert art.ARCHIVE_FILE == str(root / "review_tasks_archive.md")
+
+
+# === update_archive_total — defensive parsing (Phase 108) ==================
+
+
+def test_update_archive_total_skips_row_with_too_few_cells(capsys):
+    """A hand-edited row with <5 pipe-delimited cells must not IndexError on
+    parts[4]; it returns (None, None) with a warning and leaves the row.
+
+    Row has 4 split-parts ('', ' **Archive Total** ', ' 100 ', ' 95') — the
+    deferred cell (parts[4]) is missing, which the un-guarded code would
+    index into.
+    """
+    lines = ["| **Archive Total** | 100 | 95"]
+    assert art.update_archive_total(lines, 10) == (None, None)
+    assert lines[0] == "| **Archive Total** | 100 | 95"  # untouched
+    assert "expected >=5" in capsys.readouterr().err
+
+
+def test_update_archive_total_skips_row_with_nonnumeric_cells(capsys):
+    """A row with enough cells but a non-numeric total must not AttributeError
+    on re.search(...).group(); it returns (None, None) with a warning."""
+    lines = ["| **Archive Total** | **N/A** | **95** | **5** | |"]
+    assert art.update_archive_total(lines, 10) == (None, None)
+    assert "**N/A**" in lines[0]  # untouched
+    assert "missing numeric cells" in capsys.readouterr().err
+
+
+# === main() — end-to-end archive via _atomic_write_pair (Phase 108) ========
+
+
+def _archive_scratch(tmp_path, monkeypatch, rebuild=lambda: None):
+    """Set up a scratch review/archive pair + wire main()'s globals, argv,
+    input(), and the shadow-index rebuild. Returns (review_path, archive_path).
+    """
+    review = tmp_path / "review_tasks.md"
+    archive = tmp_path / "review_tasks_archive.md"
+    review.write_text(
+        "# Code Review Tasks\n"
+        "\n"
+        "> **Archive:** Rounds 1–4 (Batches 1–20) (200 tasks) are in "
+        "[review_tasks_archive.md](review_tasks_archive.md).\n"
+        "\n"
+        "> **Grand Total (all rounds):** 202 tasks — 202 done, 0 open, "
+        "0 deferred.\n"
+        "\n"
+        "## Round 5 (2026-07-15) — Code Quality Review\n"
+        "\n"
+        "### Batch 21 — Helper rename `Merged`\n"
+        "> **Branch:** `review/21`\n"
+        "\n"
+        "- [x] **TASK-201**: done\n"
+        "- [x] **TASK-202**: done\n"
+        "\n"
+        "## Statistics\n"
+        "\n"
+        "text\n",
+        encoding="utf-8",
+    )
+    archive.write_text(
+        "# Review Tasks Archive\n"
+        "\n"
+        "## Grand Total (Archived)\n"
+        "\n"
+        "| Round | Total | Done | Deferred | Status |\n"
+        "|-------|-------|------|----------|--------|\n"
+        "| **Archive Total** | **200** | **200** | **0** | |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(art, "REVIEW_FILE", str(review))
+    monkeypatch.setattr(art, "ARCHIVE_FILE", str(archive))
+    monkeypatch.setattr(sys, "argv", ["archive_review_tasks.py"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    import review_index
+    monkeypatch.setattr(review_index, "rebuild_index", rebuild)
+    return review, archive
+
+
+def test_main_archives_round_via_atomic_pair(tmp_path, monkeypatch):
+    """A fully-merged round moves out of review_tasks.md into
+    review_tasks_archive.md via _atomic_write_pair, leaving no .tmp files.
+    Locks the Phase-108 main() reorder + pair write."""
+    review, archive = _archive_scratch(tmp_path, monkeypatch)
+
+    art.main()
+
+    review_after = review.read_text(encoding="utf-8")
+    archive_after = archive.read_text(encoding="utf-8")
+    # Round moved OUT of review...
+    assert "## Round 5" not in review_after
+    assert "TASK-201" not in review_after
+    assert "## Statistics" in review_after       # trailing section preserved
+    # ...and INTO the archive, with the Archive Total bumped by 2 tasks.
+    assert "TASK-201" in archive_after
+    assert "Batch 21" in archive_after
+    assert "**202**" in archive_after
+    # No leftover temp from the atomic pair — any name, since Phase 272 mints them.
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_main_rebuild_failure_is_non_fatal(tmp_path, monkeypatch, capsys):
+    """A rebuild_index() failure runs AFTER the durable writes, so it must
+    degrade to a printed note — never a traceback that makes a successful
+    archive look failed. (Regression guard: a narrowed `except ImportError`
+    would let a review_index FileNotFoundError crash the run.)"""
+    def _boom():
+        raise FileNotFoundError("review_tasks.md not where review_index looked")
+
+    review, archive = _archive_scratch(tmp_path, monkeypatch, rebuild=_boom)
+
+    art.main()  # must NOT raise
+
+    # The atomic writes still landed despite the post-write rebuild blowing up.
+    assert "TASK-201" in archive.read_text(encoding="utf-8")
+    assert "## Round 5" not in review.read_text(encoding="utf-8")
+    # And the failure is reported (not silent), not raised.
+    assert "Non-fatal: index rebuild failed" in capsys.readouterr().out
+
+
+def test_main_malformed_archive_total_degrades_without_none_in_file(
+    tmp_path, monkeypatch, capsys
+):
+    """A malformed Archive Total row must not crash main() (the defensive
+    guard) AND must not write a literal '(None tasks)' into review_tasks.md —
+    the prior count is preserved while the rounds/batches range still advances."""
+    review = tmp_path / "review_tasks.md"
+    archive = tmp_path / "review_tasks_archive.md"
+    review.write_text(
+        "# Code Review Tasks\n\n"
+        "> **Archive:** Rounds 1–4 (Batches 1–20) (200 tasks) are in "
+        "[review_tasks_archive.md](review_tasks_archive.md).\n\n"
+        "## Round 5 (2026-07-15) — Code Quality Review\n\n"
+        "### Batch 21 — Helper rename `Merged`\n\n"
+        "- [x] **TASK-201**: done\n\n"
+        "## Statistics\n\ntext\n",
+        encoding="utf-8",
+    )
+    # Archive Total row has enough cells but a non-numeric total → the
+    # update_archive_total numeric guard returns (None, None) without crashing.
+    archive.write_text(
+        "# Review Tasks Archive\n\n## Grand Total (Archived)\n\n"
+        "| Round | Total | Done | Deferred | Status |\n"
+        "|-------|-------|------|----------|--------|\n"
+        "| **Archive Total** | **N/A** | **oops** | **?** | |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(art, "REVIEW_FILE", str(review))
+    monkeypatch.setattr(art, "ARCHIVE_FILE", str(archive))
+    monkeypatch.setattr(sys, "argv", ["archive_review_tasks.py"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    import review_index
+    monkeypatch.setattr(review_index, "rebuild_index", lambda: None)
+
+    art.main()  # must NOT raise despite the malformed total row
+
+    review_after = review.read_text(encoding="utf-8")
+    # The round is still archived (a malformed TOTAL doesn't block archival)...
+    assert "TASK-201" in archive.read_text(encoding="utf-8")
+    assert "## Round 5" not in review_after
+    # ...and the archive-reference line preserves the prior count, never "None".
+    ref = next(ln for ln in review_after.splitlines() if "**Archive:**" in ln)
+    assert "None" not in ref
+    assert "(200 tasks)" in ref
+    # The malformed row was reported on stderr.
+    assert "missing numeric cells" in capsys.readouterr().err
+
+
+# === Phase 157: archiving must not silently swallow an unfinished task ======
+#
+# `parse_archivable_batches` keys on the batch HEADER (`Merged`/`Complete`), and
+# `TASK_RE` counts only `[x]` lines. After Phase 157 a batch can legitimately
+# reach `Merged` still holding an open task — `close_batch.sh` leaves a task
+# annotated `> Failed:` unflipped, because a FAIL verdict means the work was
+# attempted and not finished. Archiving then moves it out of `review_tasks.md`,
+# the file every open-task reader consults, which would restore one lifecycle
+# step later exactly the invisibility Phase 157 removed. So the run names it
+# before the human answers the confirmation prompt.
+#
+# Warn, never block: archiving is the pressure valve for the 125KB read limit,
+# and the task is not lost — it moves with its annotation intact.
+
+_ARCHIVABLE_WITH_FAILURE = """\
+# Review Tasks
+
+> **Archive:** Rounds 1 are in [review_tasks_archive.md](review_tasks_archive.md).
+
+## Round 2 (2026-07-27) — Code Quality Review
+
+### Batch 1 — Mixed verdicts `Merged`
+
+- [x] **TASK-1**: fixed thing
+- [ ] **TASK-3**: failed thing
+  > Failed: needs a cross-module signature change
+"""
+
+
+def _installed_script(tmp_path):
+    """Lay the script out the way install.sh does: <root>/sysop/scripts/.
+
+    The script resolves REVIEW_FILE from its own location (`parents[2]`), not
+    CWD, so a copy is the only honest way to point it at a scratch tree.
+    """
+    scripts = tmp_path / "sysop" / "scripts"
+    scripts.mkdir(parents=True)
+    src = Path(__file__).resolve().parents[1] / "core/companion/scripts"
+    for name in ("archive_review_tasks.py", "_log.py"):
+        (scripts / name).write_bytes((src / name).read_bytes())
+    return scripts / "archive_review_tasks.py"
+
+
+def test_dry_run_warns_about_still_open_tasks(tmp_path):
+    import subprocess
+
+    script = _installed_script(tmp_path)
+    (tmp_path / "review_tasks.md").write_text(_ARCHIVABLE_WITH_FAILURE, encoding="utf-8")
+
+    r = subprocess.run([sys.executable, str(script), "--dry-run"],
+                       capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert "1 task(s) in these batches are still open" in r.stdout, r.stdout
+    # Scope the id assertions to the warning block itself — the dry-run also
+    # prints an archive-block preview containing every task line verbatim, so a
+    # whole-stdout search would pass no matter what the warning listed.
+    warn_block = r.stdout.split("are still open")[1].split("Finish them")[0]
+    # It must name the task, not just count it — an unnamed count is not
+    # actionable, and the point is that the human can go finish or re-file it.
+    assert "TASK-3" in warn_block, warn_block
+    # ...and must not name the task that is genuinely done.
+    assert "TASK-1" not in warn_block, warn_block
+
+
+def test_dry_run_is_silent_when_every_archivable_task_is_done(tmp_path):
+    import subprocess
+
+    script = _installed_script(tmp_path)
+    clean = _ARCHIVABLE_WITH_FAILURE.replace(
+        "- [ ] **TASK-3**: failed thing\n  > Failed: needs a cross-module signature change\n",
+        "- [x] **TASK-3**: finished thing\n",
+    )
+    (tmp_path / "review_tasks.md").write_text(clean, encoding="utf-8")
+
+    r = subprocess.run([sys.executable, str(script), "--dry-run"],
+                       capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert "still open" not in r.stdout, r.stdout
+
+
+def test_warning_fires_on_the_real_run_not_only_dry_run(tmp_path):
+    """The warning's whole purpose is to inform the confirmation prompt.
+
+    Phase 157's round mutated the guard to `if unfinished and args.dry_run:` and
+    it SURVIVED, because both of the original tests passed `--dry-run`. That left
+    the branch that actually removes the task from the live queue — the one right
+    before `input("Archive N tasks? [y/N] ")` — completely untested.
+
+    Answering `n` aborts after the warning has printed, so this exercises the
+    real path without mutating the fixture.
+    """
+    import subprocess
+
+    script = _installed_script(tmp_path)
+    (tmp_path / "review_tasks.md").write_text(_ARCHIVABLE_WITH_FAILURE, encoding="utf-8")
+
+    r = subprocess.run([sys.executable, str(script)], input="n\n",
+                       capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert "1 task(s) in these batches are still open" in r.stdout, r.stdout
+    assert "TASK-3" in r.stdout
+    # The warning must precede the prompt, or it cannot inform the answer.
+    assert r.stdout.index("still open") < r.stdout.index("Archive"), r.stdout
+    assert "Aborted." in r.stdout
+    # Aborting changed nothing.
+    assert (tmp_path / "review_tasks.md").read_text(encoding="utf-8") == _ARCHIVABLE_WITH_FAILURE
+
+
+def test_unbolded_open_task_is_detected(tmp_path):
+    """`close_batch.sh` holds `- [ ] task one` open; the archive must see it too.
+
+    The round found `UNFINISHED_TASK_RE` requiring a `**bold**` id while
+    `close_batch.sh`'s `is_open_task` requires only `^- [ ]` — so this shape (the
+    one `tests/test_close_batch_sh.py`'s own `BASE_TASKS` fixture uses) was
+    protected by one script and swept out silently by the other.
+    """
+    import subprocess
+
+    script = _installed_script(tmp_path)
+    tasks = _ARCHIVABLE_WITH_FAILURE.replace(
+        "- [ ] **TASK-3**: failed thing", "- [ ] plain unbolded failed thing"
+    )
+    assert "plain unbolded" in tasks, "fixture anchor drifted"
+    (tmp_path / "review_tasks.md").write_text(tasks, encoding="utf-8")
+
+    r = subprocess.run([sys.executable, str(script), "--dry-run"],
+                       capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert "1 task(s) in these batches are still open" in r.stdout, r.stdout
+    assert "plain unbolded failed thing" in r.stdout, r.stdout
+
+
+# === Phase 198: the archive's own arithmetic ===============================
+#
+# The warning above was correct and the document it introduced was not. The
+# `<summary>N/M</summary>` line and the Grand Total row both used `total_tasks`
+# on BOTH sides, so they asserted completeness by construction — a 4-task batch
+# holding one `> Failed:` task archived as `3/3 tasks completed` and `Complete`.
+# The open task was not miscounted; it was removed from the denominator.
+#
+# This is the end-to-end check: not the builders in isolation, but the artifact
+# a consumer actually opens after a real run.
+
+
+def test_the_written_archive_reports_the_open_task_in_its_arithmetic(
+    tmp_path, monkeypatch
+):
+    review = tmp_path / "review_tasks.md"
+    archive = tmp_path / "review_tasks_archive.md"
+    review.write_text(
+        "# Review Tasks\n\n"
+        "> **Archive:** Rounds 1-4 (200 tasks) are in "
+        "[review_tasks_archive.md](review_tasks_archive.md).\n\n"
+        "## Round 6 (2026-08-13) — Code Quality Review\n\n"
+        "### Batch 30 — Mixed verdicts `Merged`\n\n"
+        "- [x] **TASK-301**: fixed thing\n"
+        "- [x] **TASK-302**: another fixed thing\n"
+        "- [ ] **TASK-303**: failed thing\n"
+        "  > Failed: needs a cross-module signature change\n\n"
+        "## Statistics\n\ntext\n",
+        encoding="utf-8",
+    )
+    archive.write_text(
+        "# Review Tasks Archive\n\n## Grand Total (Archived)\n\n"
+        "| Round | Total | Done | Deferred | Status |\n"
+        "|-------|-------|------|----------|--------|\n"
+        "| **Archive Total** | **200** | **200** | **0** | |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(art, "REVIEW_FILE", str(review))
+    monkeypatch.setattr(art, "ARCHIVE_FILE", str(archive))
+    monkeypatch.setattr(sys, "argv", ["archive_review_tasks.py"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    import review_index
+    monkeypatch.setattr(review_index, "rebuild_index", lambda: None)
+
+    art.main()
+
+    written = archive.read_text(encoding="utf-8")
+    # The fold's own summary tells the truth about the block beneath it.
+    assert "<summary>2/3 tasks completed</summary>" in written, written
+    # The Statistics row says so too, and does not claim `Complete`.
+    assert "| 3 | 2 | 0 | Partial |" in written, written
+    assert "| 3 | 3 | 0 | Complete |" not in written
+    # The open task travelled with its annotation.
+    assert "- [ ] **TASK-303**: failed thing" in written
+    assert "> Failed: needs a cross-module signature change" in written
+    # And the running total moved by different amounts on the two columns:
+    # +3 total, +2 completed. One delta applied to both is the same tautology
+    # one level up.
+    assert "| **Archive Total** | **203** | **202** | **0** |" in written, written
+
+
+def test_a_fully_complete_round_still_writes_complete(tmp_path, monkeypatch):
+    """The negative control. If `Partial` fires on a clean round, the status
+    column has stopped carrying information — the failure direction that would
+    make an operator ignore it."""
+    review = tmp_path / "review_tasks.md"
+    archive = tmp_path / "review_tasks_archive.md"
+    review.write_text(
+        "# Review Tasks\n\n"
+        "> **Archive:** Rounds 1-4 (200 tasks) are in "
+        "[review_tasks_archive.md](review_tasks_archive.md).\n\n"
+        "## Round 6 (2026-08-13) — Code Quality Review\n\n"
+        "### Batch 30 — All done `Merged`\n\n"
+        "- [x] **TASK-301**: fixed thing\n"
+        "- [x] **TASK-302**: another fixed thing\n\n"
+        "## Statistics\n\ntext\n",
+        encoding="utf-8",
+    )
+    archive.write_text(
+        "# Review Tasks Archive\n\n## Grand Total (Archived)\n\n"
+        "| Round | Total | Done | Deferred | Status |\n"
+        "|-------|-------|------|----------|--------|\n"
+        "| **Archive Total** | **200** | **200** | **0** | |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(art, "REVIEW_FILE", str(review))
+    monkeypatch.setattr(art, "ARCHIVE_FILE", str(archive))
+    monkeypatch.setattr(sys, "argv", ["archive_review_tasks.py"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+    import review_index
+    monkeypatch.setattr(review_index, "rebuild_index", lambda: None)
+
+    art.main()
+
+    written = archive.read_text(encoding="utf-8")
+    assert "<summary>2/2 tasks completed</summary>" in written, written
+    assert "| 2 | 2 | 0 | Complete |" in written, written
+    assert "Partial" not in written, written
+    assert "| **Archive Total** | **202** | **202** | **0** |" in written, written
+
+
+def test_the_per_batch_breakdown_sums_to_the_total_it_is_printed_with(
+    tmp_path, monkeypatch, capsys
+):
+    """The round's operator-facing finding, and a regression this phase caused.
+
+    The per-batch lines kept reading `task_count` (TASK_RE, `[x]`-only) while the
+    total moved to `count_round_tasks`, so a batch whose only task was OPEN
+    printed `0 tasks` and still counted 1 toward the `Archive N tasks?` prompt
+    directly beneath it. Two numbers about the same set, disagreeing, immediately
+    before the decision they inform — this phase's own subject one layer up.
+    """
+    review = tmp_path / "review_tasks.md"
+    review.write_text(
+        "# Review Tasks\n\n"
+        "> **Archive:** Rounds 1 are in "
+        "[review_tasks_archive.md](review_tasks_archive.md).\n\n"
+        "## Round 2 (2026-08-13) — Mixed\n\n"
+        "### Batch 1 — All done `Merged`\n\n"
+        "- [x] **TASK-1**: a\n"
+        "- [x] **TASK-2**: b\n\n"
+        "### Batch 2 — One open `Merged`\n\n"
+        "- [ ] **TASK-3**: failed thing\n"
+        "  > Failed: reason\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(art, "REVIEW_FILE", str(review))
+    monkeypatch.setattr(art, "ARCHIVE_FILE", str(tmp_path / "review_tasks_archive.md"))
+    monkeypatch.setattr(sys, "argv", ["archive_review_tasks.py", "--dry-run"])
+
+    art.main()
+
+    out = capsys.readouterr().out
+    per_batch = [
+        int(m.group(1))
+        for m in re.finditer(r"^    .*?: (\d+) tasks", out, re.MULTILINE)
+    ]
+    total_m = re.search(r"^Total: (\d+) tasks", out, re.MULTILINE)
+    assert total_m, out
+    assert per_batch, out
+    assert sum(per_batch) == int(total_m.group(1)), (
+        f"per-batch lines sum to {sum(per_batch)} but the total says "
+        f"{total_m.group(1)}:\n{out}"
+    )
+    # And the open one is named as open, not silently folded into the count.
+    assert "(1 open)" in out, out
+
+
+# === Phase 368: the advisory near-miss warning tags what each line does ====
+#
+# The warning said these lines "bound nothing" and so "relocate nothing". Both
+# were false for some shapes: `## Batch 4` ends the open batch like any `## `
+# heading, and `#### Batch 4` ends nothing, so the batch above it runs on over
+# it and its tasks are archived as that batch's. The tag is checked against what
+# a real run does, not against a wording.
+
+_ADVISORY_SHAPES = {
+    "h2": "## Batch 2 — Two `Pending`",
+    "h4": "#### Batch 2 — Two `Pending`",
+    "no-space": "###Batch 2 — Two `Pending`",
+    "upper-case": "### BATCH 2 — Two `Pending`",
+    # The round's lens 2 (`Q03`): a level-3 marker followed by a TAB is a heading to
+    # `H3_HEADER_RE`, which a `startswith("### ")` reading would miss.
+    "tab-upper": "###\tBATCH 2 — Two `Pending`",
+}
+
+
+_ARCHIVE_SEED = (
+    "# Review Tasks Archive\n\n## Grand Total (Archived)\n\n"
+    "| Round | Total | Done | Deferred | Status |\n"
+    "|-------|-------|------|----------|--------|\n"
+    "| **Archive Total** | **200** | **200** | **0** | |\n")
+
+
+def _run_archiver(tmp_path, tracker, *args):
+    import subprocess
+
+    script = _installed_script(tmp_path)
+    (tmp_path / "review_tasks.md").write_text(tracker, encoding="utf-8")
+    (tmp_path / "review_tasks_archive.md").write_text(_ARCHIVE_SEED, encoding="utf-8")
+    return subprocess.run([sys.executable, str(script), *args], input="y\n",
+                          capture_output=True, text=True,
+                          env={**os.environ, "SYSOP_TRACKER_LOCK_WAIT": "1"})
+
+
+def _absorbing_tracker(header, first_status="Merged"):
+    return ("# Review Tasks\n\n## Round 2 (2026-07-27) — r\n\n"
+            f"### Batch 1 — One `{first_status}`\n\n- [x] **TASK-1**: done\n\n"
+            f"{header}\n\n- [ ] **TASK-2**: pending work\n\n## Statistics\n\ntext\n")
+
+
+@pytest.mark.parametrize("shape", sorted(_ADVISORY_SHAPES))
+def test_the_advisory_tag_matches_the_parse_and_an_absorbing_line_refuses(shape, tmp_path):
+    """The tag is checked against the parse, not a wording: a line tagged "ends
+    nothing" is one whose task `parse_archivable_batches` puts in batch 1's span.
+    And since `Q-656` (Phase 368, Wade's ruling) the run refuses on that line
+    rather than archiving TASK-2 as batch 1's, writing nothing."""
+    header = _ADVISORY_SHAPES[shape]
+    tracker = _absorbing_tracker(header)
+    rounds = art.parse_archivable_batches(tracker.splitlines(keepends=True))
+    absorbed_by_parse = any("TASK-2" in "".join(b["lines"])
+                            for r in rounds for b in r["batches"])
+
+    r = _run_archiver(tmp_path, tracker)
+    assert "refusing to archive — review_tasks.md has" not in r.stderr, (
+        "an advisory shape became the whole-run header blocker:\n" + r.stderr)
+    tagged = [ln for ln in r.stderr.splitlines() if header in ln and "   [" in ln]
+    assert len(tagged) == 1, r.stderr
+    archive = (tmp_path / "review_tasks_archive.md").read_text()
+    if absorbed_by_parse:
+        # The full tag, not a prefix: its tail said "archived with the batch above
+        # it" after `Q-656` made that never true (the round's lenses 2 and 3).
+        assert "[ends nothing: read as part of the batch above it]" in tagged[0], tagged[0]
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "sit inside a batch this run would archive" in r.stderr, r.stderr
+        assert archive == _ARCHIVE_SEED and \
+            (tmp_path / "review_tasks.md").read_text() == tracker, "a refusal wrote"
+    else:
+        assert "[ends the batch above it]" in tagged[0], tagged[0]
+        # The exit code is not this test's: a bounding line can orphan TASK-2 and
+        # trip the separate orphan refusal. What it pins is that `Q-656`'s refusal
+        # stays out of the way and TASK-2 is not archived as batch 1's.
+        assert "sit inside a batch this run would archive" not in r.stderr, r.stderr
+        assert "TASK-2" not in archive
+        assert "TASK-2" in (tmp_path / "review_tasks.md").read_text()
+
+
+def test_an_absorbing_line_under_a_batch_this_run_keeps_does_not_refuse(tmp_path):
+    """Scoped to an ARCHIVABLE batch's span (Phase 256's round measured a
+    whole-run refusal on a heading as the false refusal to avoid): under a
+    Pending batch the line costs nothing, and the Merged batch beside it archives."""
+    tracker = ("# Review Tasks\n\n## Round 2 (2026-07-27) — r\n\n"
+               "### Batch 1 — One `Merged`\n\n- [x] **TASK-1**: done\n\n"
+               "### Batch 2 — Two `Pending`\n\n- [ ] **TASK-2**: open\n\n"
+               "#### Batch 3 notes\n\n- [ ] **TASK-3**: open\n\n## Statistics\n\ntext\n")
+    r = _run_archiver(tmp_path, tracker)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "sit inside a batch this run would archive" not in r.stderr
+    archive = (tmp_path / "review_tasks_archive.md").read_text()
+    assert "TASK-1" in archive and "TASK-3" not in archive
+
+
+def test_an_absorbing_line_just_before_an_archivable_batch_is_not_inside_it(tmp_path):
+    """The span edges, both ways (the round's lens 2, `Q02`: an off-by-one in
+    the line-to-index step survived). A `####` line closing a Pending batch sits
+    one line above a Merged one; it is not in that batch's span and must not
+    refuse. And one that is the LAST line of a Merged batch's span must."""
+    before = ("# Review Tasks\n\n## Round 2 (2026-07-27) — r\n\n"
+              "### Batch 1 — One `Pending`\n\n- [ ] **TASK-1**: open\n"
+              "#### Batch 2 notes\n"
+              "### Batch 3 — Three `Merged`\n\n- [x] **TASK-3**: done\n\n## Statistics\n\ntext\n")
+    r = _run_archiver(tmp_path, before)
+    assert r.returncode == 0 and "sit inside a batch this run would archive" not in r.stderr, r.stderr
+    last = ("# Review Tasks\n\n## Round 2 (2026-07-27) — r\n\n"
+            "### Batch 1 — One `Merged`\n\n- [x] **TASK-1**: done\n"
+            "#### Batch 2 notes\n"
+            "### Batch 3 — Three `Pending`\n\n- [ ] **TASK-3**: open\n\n## Statistics\n\ntext\n")
+    sub = tmp_path / "last"
+    sub.mkdir()
+    r = _run_archiver(sub, last)
+    assert r.returncode == 1 and "sit inside a batch this run would archive" in r.stderr, r.stderr
+
+
+def test_an_absorbing_line_refuses_the_dry_run_too(tmp_path):
+    """Before the preview, like the header and fence refusals: a preview whose
+    counts include an absorbed task is the report an operator would act on."""
+    tracker = _absorbing_tracker(_ADVISORY_SHAPES["h4"])
+    r = _run_archiver(tmp_path, tracker, "--dry-run")
+    assert r.returncode == 1 and "sit inside a batch this run would archive" in r.stderr
+
+
+def test_the_advisory_tags_are_not_all_one_kind(tmp_path):
+    """Non-vacuity for the test above: both outcomes really occur."""
+    near = art.near_miss_batch_headers(list(_ADVISORY_SHAPES.values()))
+    absorbing = [t for _, t in near
+                 if not (t.startswith("## ") or art.H3_HEADER_RE.match(t))]
+    assert absorbing and len(absorbing) < len(near), near

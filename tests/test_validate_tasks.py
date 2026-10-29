@@ -1,0 +1,1104 @@
+"""Tests for ``core/companion/scripts/validate_tasks.py``.
+
+Two sections:
+
+1. Ports gdp's ``tests/test_validate_tasks.py`` (8 functions, all
+   ``_locks_dir``-focused) to Sysop's ``_resolve_canonical_locks_dir``
+   (renamed during the Phase 32 absorption of BeanRider ISSUE-0028 et al).
+   gdp baseline confirmed passing 2026-05-27 — all 8 tests are green
+   candidates.
+
+2. Sysop-original tests covering schema/invariant behavior gdp's
+   8-function suite cannot exercise — blast_radius (Phase 19), in-progress
+   lock invariant (Phase 32), status-vs-directory drift (Phase 18).
+"""
+
+import os
+import re
+import subprocess
+from pathlib import Path
+from unittest import mock
+
+import validate_tasks as vt
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+# === Section 1: gdp-ported _resolve_canonical_locks_dir tests =============
+
+
+_VALID_INDEX = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-LOCKED
+    title: "Task currently in progress"
+    phase: 1
+    status: in_progress
+    effort: Medium
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-LOCKED.md
+"""
+
+_VALID_BODY = """\
+# FEAT-LOCKED
+
+## Context
+Locked.
+"""
+
+
+def _make_tasks_tree(root: Path) -> Path:
+    """Build a minimal tasks/ tree under *root* with one in_progress task."""
+    tasks_dir = root / "tasks"
+    open_dir = tasks_dir / "open"
+    open_dir.mkdir(parents=True, exist_ok=True)
+    (tasks_dir / "index.yml").write_text(_VALID_INDEX, encoding="utf-8")
+    (open_dir / "FEAT-LOCKED.md").write_text(_VALID_BODY, encoding="utf-8")
+    return tasks_dir
+
+
+def test_locks_dir_falls_back_when_not_a_git_repo(tmp_path):
+    """`tmp_path` has no `.git/`; helper must return `<root>/sysop/runtime/locks`."""
+    resolved = vt._resolve_canonical_locks_dir(tmp_path)
+    assert resolved == tmp_path / "sysop/runtime/locks"
+
+
+def test_locks_dir_falls_back_when_git_binary_missing(tmp_path):
+    """If `git` is not on PATH, helper must still return the safe default."""
+    with mock.patch.object(vt.subprocess, "run", side_effect=FileNotFoundError("git not found")):
+        resolved = vt._resolve_canonical_locks_dir(tmp_path)
+    assert resolved == tmp_path / "sysop/runtime/locks"
+
+
+def test_locks_dir_falls_back_on_timeout(tmp_path):
+    """A hung git invocation must not block validation indefinitely."""
+    with mock.patch.object(
+        vt.subprocess,
+        "run",
+        side_effect=subprocess.TimeoutExpired(cmd="git", timeout=5),
+    ):
+        resolved = vt._resolve_canonical_locks_dir(tmp_path)
+    assert resolved == tmp_path / "sysop/runtime/locks"
+
+
+def test_locks_dir_falls_back_on_os_error(tmp_path):
+    """Any unexpected OSError (permission denied, etc.) must fall back.
+
+    Diverged from gdp in Phase 32: Sysop's helper catches
+    `(FileNotFoundError, subprocess.SubprocessError)` rather than a bare
+    `OSError`. An OSError that is NOT a SubprocessError will propagate
+    instead of falling back. We assert the practical behavior: such an
+    error escapes, which lets the validator surface the real problem
+    (permission misconfig) instead of masking it with a default path.
+    """
+    with mock.patch.object(vt.subprocess, "run", side_effect=PermissionError("EACCES")):
+        with mock.patch.object(Path, "is_absolute", return_value=True):
+            try:
+                vt._resolve_canonical_locks_dir(tmp_path)
+                raised = False
+            except PermissionError:
+                raised = True
+    assert raised, "PermissionError must propagate so misconfig is visible"
+
+
+def test_locks_dir_resolves_from_real_git_repo(tmp_path):
+    """Initialize a real git repo and confirm helper returns `<repo>/sysop/runtime/locks`."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=str(repo_root),
+        check=True,
+        capture_output=True,
+    )
+    resolved = vt._resolve_canonical_locks_dir(repo_root)
+    assert resolved == (repo_root / "sysop/runtime/locks").resolve()
+
+
+def test_locks_dir_resolves_main_locks_from_worktree(tmp_path):
+    """End-to-end: validator invoked from a linked worktree finds main's sysop/runtime/locks/."""
+    main_root = tmp_path / "main"
+    main_root.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet", "--initial-branch=main"],
+        cwd=str(main_root),
+        check=True,
+        capture_output=True,
+    )
+    (main_root / "README.md").write_text("seed\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "README.md"],
+        cwd=str(main_root),
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed"],
+        cwd=str(main_root),
+        check=True,
+        capture_output=True,
+    )
+
+    _make_tasks_tree(main_root)
+    main_locks = main_root / "sysop/runtime/locks"
+    main_locks.mkdir(parents=True, exist_ok=True)
+    (main_locks / "FEAT-LOCKED.lock").write_text("lock\n", encoding="utf-8")
+
+    worktree_root = tmp_path / "worktree"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "feat", str(worktree_root)],
+        cwd=str(main_root),
+        check=True,
+        capture_output=True,
+    )
+
+    assert not (worktree_root / "sysop/runtime/locks").exists()
+
+    resolved = vt._resolve_canonical_locks_dir(worktree_root)
+    assert resolved == main_locks.resolve()
+
+    _make_tasks_tree(worktree_root)
+    report = vt.validate(worktree_root / "tasks", project_root=worktree_root)
+    assert report.ok, [f.format() for f in report.errors]
+
+
+def test_locks_dir_treats_empty_git_output_as_failure(tmp_path):
+    """If git somehow returns empty stdout, fall back rather than building
+    an empty/garbage path."""
+    completed = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
+    with mock.patch.object(vt.subprocess, "run", return_value=completed):
+        resolved = vt._resolve_canonical_locks_dir(tmp_path)
+    assert resolved == tmp_path / "sysop/runtime/locks"
+
+
+def test_locks_dir_resolves_inside_repo_for_staging_path(tmp_path):
+    """Staging dir under a real repo resolves to the same `sysop/runtime/locks/` as the repo root."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=str(repo_root),
+        check=True,
+        capture_output=True,
+    )
+    staging = repo_root / "tasks.staging"
+    staging.mkdir()
+
+    resolved_root = vt._resolve_canonical_locks_dir(repo_root)
+    resolved_staging = vt._resolve_canonical_locks_dir(staging)
+    assert resolved_root == (repo_root / "sysop/runtime/locks").resolve()
+    assert resolved_staging == (repo_root / "sysop/runtime/locks").resolve()
+
+
+# === Section 2: Sysop-original tests ==================================
+
+
+_V2_INDEX_TEMPLATE = """\
+schema_version: 2
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-LOCKED
+    title: "Task in progress"
+    phase: 1
+    status: in_progress
+    effort: Medium
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-LOCKED.md
+{extra}
+"""
+
+
+def _seed_repo_with_lock(tmp_path: Path, index_yaml: str = _VALID_INDEX) -> Path:
+    """Init a git repo, write a tasks tree, and drop a lock for FEAT-LOCKED."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+    )
+    tasks_dir = repo / "tasks"
+    (tasks_dir / "open").mkdir(parents=True)
+    (tasks_dir / "index.yml").write_text(index_yaml, encoding="utf-8")
+    (tasks_dir / "open" / "FEAT-LOCKED.md").write_text(_VALID_BODY, encoding="utf-8")
+    locks = repo / "sysop/runtime/locks"
+    locks.mkdir(parents=True)
+    (locks / "FEAT-LOCKED.lock").write_text("lock\n", encoding="utf-8")
+    return repo
+
+
+# ── Phase 19 — blast_radius schema field ─────────────────────────────────
+
+
+def test_blast_radius_required_on_in_progress_at_schema_v2(tmp_path):
+    """schema_version=2 + status=in_progress without blast_radius → error."""
+    repo = _seed_repo_with_lock(
+        tmp_path,
+        _V2_INDEX_TEMPLATE.format(extra=""),
+    )
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("blast_radius" in m for m in messages), messages
+
+
+def test_blast_radius_accepted_when_valid_value_at_v2(tmp_path):
+    """schema_version=2 + valid blast_radius → no blast_radius error."""
+    repo = _seed_repo_with_lock(
+        tmp_path,
+        _V2_INDEX_TEMPLATE.format(extra="    blast_radius: single-module"),
+    )
+    report = vt.validate(repo / "tasks", project_root=repo)
+    blast_errors = [f for f in report.errors if "blast_radius" in f.format()]
+    assert blast_errors == [], [e.format() for e in blast_errors]
+
+
+def test_blast_radius_rejects_invalid_enum_value(tmp_path):
+    """Any blast_radius value not in the enum → error, regardless of schema_version."""
+    index = _VALID_INDEX.replace(
+        "    body: tasks/open/FEAT-LOCKED.md\n",
+        "    body: tasks/open/FEAT-LOCKED.md\n    blast_radius: enormous\n",
+    )
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("blast_radius" in m and "enormous" in m for m in messages), messages
+
+
+def test_blast_radius_optional_at_schema_v1_for_legacy_tasks(tmp_path):
+    """schema_version=1 + in_progress without blast_radius → no error (legacy)."""
+    repo = _seed_repo_with_lock(tmp_path)  # _VALID_INDEX is v1
+    report = vt.validate(repo / "tasks", project_root=repo)
+    blast_errors = [f for f in report.errors if "blast_radius" in f.format()]
+    assert blast_errors == [], [e.format() for e in blast_errors]
+
+
+# ── Phase 32 — in-progress lock invariant ────────────────────────────────
+
+
+def test_in_progress_without_lock_file_errors(tmp_path):
+    """status=in_progress + missing lock file under canonical sysop/runtime/locks/ → error."""
+    repo = _seed_repo_with_lock(tmp_path)
+    (repo / "sysop/runtime/locks" / "FEAT-LOCKED.lock").unlink()
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("lock file missing" in m for m in messages), messages
+
+
+def test_in_progress_with_lock_file_passes(tmp_path):
+    """status=in_progress + lock file present at canonical sysop/runtime/locks/ → no lock error."""
+    repo = _seed_repo_with_lock(tmp_path)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    lock_errors = [f for f in report.errors if "lock file missing" in f.format()]
+    assert lock_errors == [], [e.format() for e in lock_errors]
+
+
+# ── Phase 18 (ISSUE-0009) — status-vs-directory drift ────────────────────
+
+
+def test_done_task_with_body_under_open_dir_errors(tmp_path):
+    """status=done with body path containing 'open/' segment → error.
+
+    This is the half-migrated state /review-close Step 4c can produce when
+    the status flip succeeds but the corresponding `git mv` is skipped.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+    )
+    tasks_dir = repo / "tasks"
+    open_dir = tasks_dir / "open"
+    open_dir.mkdir(parents=True)
+    (open_dir / "FEAT-DONE.md").write_text("# FEAT-DONE\n", encoding="utf-8")
+    (tasks_dir / "index.yml").write_text(
+        "schema_version: 1\n"
+        "\n"
+        "phases:\n"
+        "  - number: 1\n"
+        '    title: "Done phase"\n'
+        "    status: done\n"
+        "    current_focus: false\n"
+        "\n"
+        "tasks:\n"
+        "  - id: FEAT-DONE\n"
+        '    title: "Drifted-status task"\n'
+        "    phase: 1\n"
+        "    status: done\n"
+        "    completed_date: 2026-01-01\n"
+        "    effort: Medium\n"
+        "    user_action: false\n"
+        "    depends_on: []\n"
+        "    surfaced_by: []\n"
+        "    body: tasks/open/FEAT-DONE.md\n",
+        encoding="utf-8",
+    )
+    report = vt.validate(tasks_dir, project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("status=done but body path contains 'open/'" in m for m in messages), messages
+
+
+def test_done_task_with_body_under_archive_dir_passes(tmp_path):
+    """status=done with body under archive/ → no status-vs-directory error."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+    )
+    tasks_dir = repo / "tasks"
+    archive_dir = tasks_dir / "archive"
+    archive_dir.mkdir(parents=True)
+    (archive_dir / "FEAT-DONE.md").write_text("# FEAT-DONE\n", encoding="utf-8")
+    (tasks_dir / "index.yml").write_text(
+        "schema_version: 1\n"
+        "\n"
+        "phases:\n"
+        "  - number: 1\n"
+        '    title: "Done phase"\n'
+        "    status: done\n"
+        "    current_focus: false\n"
+        "\n"
+        "tasks:\n"
+        "  - id: FEAT-DONE\n"
+        '    title: "Archived done task"\n'
+        "    phase: 1\n"
+        "    status: done\n"
+        "    completed_date: 2026-01-01\n"
+        "    effort: Medium\n"
+        "    user_action: false\n"
+        "    depends_on: []\n"
+        "    surfaced_by: []\n"
+        "    body: tasks/archive/FEAT-DONE.md\n",
+        encoding="utf-8",
+    )
+    report = vt.validate(tasks_dir, project_root=repo)
+    drift_errors = [
+        f for f in report.errors if "status=done but body path contains" in f.format()
+    ]
+    assert drift_errors == [], [e.format() for e in drift_errors]
+
+
+# ── Phase 58b — test-decision recording (warn-only, in_progress only) ─────
+
+
+_TD_OPEN_INDEX = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-OPEN
+    title: "Open backlog task, not yet claimed"
+    phase: 1
+    status: open
+    effort: Low
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-OPEN.md
+"""
+
+
+def _td_warnings(report):
+    return [f for f in report.warnings if "test decision" in f.format().lower()]
+
+
+def test_retired_invariant_13_is_silent_on_the_case_it_used_to_warn_on(tmp_path):
+    """Phase 234 (Q-022): the exact fixture that used to warn must now be quiet.
+
+    `_VALID_BODY` records no test decision and `_VALID_INDEX` claims FEAT-LOCKED
+    `in_progress`, which is precisely the state Invariant 13 fired on — and it
+    fired on it for every claimed task on every run from `main`, because the
+    record it looked for is committed inside the worktree and is not on the
+    filesystem this reads. The enforcement moved to /review-close Step 2d, which
+    reads the branch tip. Pinned as a *behaviour*, not as an absent function:
+    re-adding the check under any other name reddens this.
+    """
+    repo = _seed_repo_with_lock(tmp_path)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    assert report.ok, [e.format() for e in report.errors]
+    assert _td_warnings(report) == [], [w.format() for w in report.warnings]
+
+
+def test_the_warn_channel_still_works(tmp_path):
+    """Negative control for the test above — without it, "no test-decision
+    warning" is also what a validator that reports nothing at all would produce.
+
+    Invariant 12 (manual_smoke) is the surviving warn-only sibling and rides the
+    same `report.warn` path the retired check used, so a fixture that trips it
+    proves the channel is live rather than merely empty."""
+    repo = _seed_repo_with_lock(
+        tmp_path,
+        _VALID_INDEX.replace("    user_action: false\n", "    user_action: false\n    manual_smoke: true\n"),
+    )
+    assert "manual_smoke: true" in _VALID_INDEX.replace(
+        "    user_action: false\n", "    user_action: false\n    manual_smoke: true\n"
+    ), "fixture edit did not apply — the control would be vacuous"
+    report = vt.validate(repo / "tasks", project_root=repo)
+    smoke = [w for w in report.warnings if "manual smoke" in w.format().lower()]
+    assert smoke, [w.format() for w in report.warnings]
+    assert _td_warnings(report) == [], "test-decision warnings are retired"
+
+
+def test_the_record_agrees_that_there_are_twelve(tmp_path):
+    """Phase 204's lesson: a retired check whose roster still lists it reads as
+    coverage. The three shipped surfaces that named Invariant 13 must not claim
+    a live 13th, and WORKFLOW.md's count must match the numbered list."""
+    schema = (REPO_ROOT / "core/companion/tasks/schema.md").read_text(encoding="utf-8")
+    body = schema.split("## Invariants (validator-enforced)", 1)[1].split("\n## ", 1)[0]
+    numbered = re.findall(r"^(\d+)\. \*\*", body, re.MULTILINE)
+    n = int(numbered[-1])
+    assert n == 12, f"schema.md's invariant list ends at {n}"
+
+    # DERIVED from the list, and swept over the whole shipped tree rather than
+    # asserted against one sentence. The first cut of this guard checked only
+    # `"enforces 13 invariants" not in workflow` — and the round found a SECOND
+    # count site (`WORKFLOW.md`'s § 8.4 row, "13 invariants; 12 and 13 are
+    # warn-only") that the literal string could not see, so the guard passed while
+    # the retired invariant was still advertised. A guard keyed to one phrasing is
+    # a guard keyed to the author's memory of where the fact lives.
+    shipped = sorted(
+        list((REPO_ROOT / "core").rglob("*.md"))
+        + list((REPO_ROOT / "docs").rglob("*.md"))
+    )
+    assert len(shipped) > 30, f"the sweep found only {len(shipped)} files"
+    stale = []
+    for f in shipped:
+        text = f.read_text(encoding="utf-8", errors="replace")
+        for m in re.finditer(r"\b(\d+) invariants\b", text):
+            if int(m.group(1)) != n:
+                line = text[: m.start()].count("\n") + 1
+                stale.append(f"{f.relative_to(REPO_ROOT)}:{line} says {m.group(1)}")
+    assert not stale, "invariant counts disagree with schema.md's list of %d:\n  %s" % (
+        n, "\n  ".join(stale))
+    assert any("%d invariants" % n in f.read_text(encoding="utf-8", errors="replace")
+               for f in shipped), "no shipped file states the count at all"
+
+
+# ── Phase 88 — surfaced_by 'imported' provenance sentinel (/onboard) ─────
+
+
+_P88_INDEX_TEMPLATE = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-LOCKED
+    title: "Task currently in progress"
+    phase: 1
+    status: in_progress
+    effort: Medium
+    user_action: false
+    depends_on: {depends_on}
+    surfaced_by: {surfaced_by}
+    body: tasks/open/FEAT-LOCKED.md
+"""
+
+
+def _p88_repo(tmp_path: Path, depends_on: str, surfaced_by: str) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"], cwd=str(repo), check=True, capture_output=True
+    )
+    tasks_dir = repo / "tasks"
+    (tasks_dir / "open").mkdir(parents=True)
+    (tasks_dir / "index.yml").write_text(
+        _P88_INDEX_TEMPLATE.format(depends_on=depends_on, surfaced_by=surfaced_by),
+        encoding="utf-8",
+    )
+    (tasks_dir / "open" / "FEAT-LOCKED.md").write_text(_VALID_BODY, encoding="utf-8")
+    locks = repo / "sysop/runtime/locks"
+    locks.mkdir(parents=True)
+    (locks / "FEAT-LOCKED.lock").write_text("lock\n", encoding="utf-8")
+    return repo
+
+
+def _reference_errors(report) -> list:
+    return [
+        e.format()
+        for e in report.errors
+        if "references unknown task id" in e.format()
+    ]
+
+
+def test_surfaced_by_accepts_imported_sentinel(tmp_path):
+    """surfaced_by: [imported] (the /onboard provenance marker) → no reference error."""
+    repo = _p88_repo(tmp_path, depends_on="[]", surfaced_by="[imported]")
+    report = vt.validate(repo / "tasks", project_root=repo)
+    assert _reference_errors(report) == [], [e.format() for e in report.errors]
+
+
+def test_surfaced_by_still_rejects_unknown_task_id(tmp_path):
+    """A surfaced_by ref that is neither a known ID nor the sentinel → error."""
+    repo = _p88_repo(tmp_path, depends_on="[]", surfaced_by="[FEAT-GHOST]")
+    report = vt.validate(repo / "tasks", project_root=repo)
+    errs = _reference_errors(report)
+    assert len(errs) == 1, [e.format() for e in report.errors]
+    assert "FEAT-GHOST" in errs[0]
+    assert "'imported' provenance sentinel" in errs[0]
+
+
+def test_depends_on_rejects_imported_sentinel(tmp_path):
+    """The sentinel is surfaced_by-only: depends_on: [imported] → error."""
+    repo = _p88_repo(tmp_path, depends_on="[imported]", surfaced_by="[]")
+    report = vt.validate(repo / "tasks", project_root=repo)
+    errs = _reference_errors(report)
+    assert len(errs) == 1, [e.format() for e in report.errors]
+    assert "depends_on" in errs[0]
+
+
+# ── Invariant 3 — body / archive_summary path-traversal containment ──────────
+#
+# Both guards realpath-resolve the declared path and reject anything that lands
+# outside the tasks/ base. The realpath step is load-bearing: a body string can
+# read as a legitimate `tasks/open/<id>.md` while pointing (via `..` or a
+# symlink) at a file elsewhere on disk. A regression here would let a malicious
+# or fat-fingered index.yml pull an arbitrary file in as a "body," or let
+# /review-close's Step 4c archive move follow a path out of the queue tree.
+
+
+def _git_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet"], cwd=str(repo), check=True, capture_output=True
+    )
+    (repo / "tasks").mkdir()
+    return repo
+
+
+_ESCAPE_INDEX_TEMPLATE = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-ESCAPE
+    title: "Task with an escaping path"
+    phase: 1
+    status: open
+    effort: Low
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: {body}
+{extra}
+"""
+
+
+def test_body_path_with_dotdot_traversal_errors(tmp_path):
+    """body: tasks/../escape.md resolves outside tasks/ → 'body path escapes' error."""
+    repo = _git_repo(tmp_path)
+    (repo / "tasks" / "index.yml").write_text(
+        _ESCAPE_INDEX_TEMPLATE.format(body="tasks/../escape.md", extra=""),
+        encoding="utf-8",
+    )
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("body path escapes tasks/ base" in m for m in messages), messages
+
+
+def test_body_symlink_escaping_tasks_errors(tmp_path):
+    """A body path that is a symlink pointing outside tasks/ → escape error.
+
+    This is the case only the realpath resolution catches: the declared string
+    ``tasks/open/FEAT-ESCAPE.md`` is legitimately under tasks/, but the symlink
+    target is not. A purely lexical (string-prefix) check would pass it.
+    """
+    repo = _git_repo(tmp_path)
+    (repo / "tasks" / "open").mkdir()
+    # A real file living OUTSIDE the tasks/ tree (but inside the repo).
+    outside = repo / "outside_secret.md"
+    outside.write_text("# not a task body\n", encoding="utf-8")
+    os.symlink(outside, repo / "tasks" / "open" / "FEAT-ESCAPE.md")
+    (repo / "tasks" / "index.yml").write_text(
+        _ESCAPE_INDEX_TEMPLATE.format(body="tasks/open/FEAT-ESCAPE.md", extra=""),
+        encoding="utf-8",
+    )
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("body path escapes tasks/ base" in m for m in messages), messages
+
+
+def test_archive_summary_path_traversal_errors(tmp_path):
+    """archive_summary: tasks/../escape.md → 'archive_summary path escapes' error."""
+    repo = _git_repo(tmp_path)
+    (repo / "tasks" / "index.yml").write_text(
+        _ESCAPE_INDEX_TEMPLATE.format(
+            body="tasks/open/FEAT-ESCAPE.md",
+            extra="    archive_summary: tasks/../escape.md",
+        ),
+        encoding="utf-8",
+    )
+    # A valid body so the archive_summary guard is what fires, not a body error.
+    (repo / "tasks" / "open").mkdir()
+    (repo / "tasks" / "open" / "FEAT-ESCAPE.md").write_text(
+        "# FEAT-ESCAPE\n", encoding="utf-8"
+    )
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("archive_summary path escapes tasks/ base" in m for m in messages), messages
+
+
+def test_legitimate_body_path_produces_no_escape_error(tmp_path):
+    """A normal in-tree body path must NOT trip the containment guard (no over-firing)."""
+    repo = _seed_repo_with_lock(tmp_path)  # body: tasks/open/FEAT-LOCKED.md
+    report = vt.validate(repo / "tasks", project_root=repo)
+    escape_errors = [f for f in report.errors if "escapes tasks/ base" in f.format()]
+    assert escape_errors == [], [e.format() for e in escape_errors]
+
+
+# ── Invariant 11 — secret-pattern scan of tasks/**/*.md (warn-only) ──────────
+#
+# The scanner is a defense-in-depth backstop: task bodies are prose, but an
+# author pasting an error log or config snippet can leak a live credential into
+# a committed .md. Warn-only (never blocks a commit); these pin that each of the
+# three patterns fires and that a clean body stays quiet.
+
+
+def _secret_warnings(report):
+    keys = ("AWS access key", "sk- prefixed token", "long hex string")
+    return [f for f in report.warnings if any(k in f.format() for k in keys)]
+
+
+def _repo_with_body(tmp_path: Path, body_text: str) -> Path:
+    repo = _seed_repo_with_lock(tmp_path)
+    (repo / "tasks" / "open" / "FEAT-LOCKED.md").write_text(body_text, encoding="utf-8")
+    return repo
+
+
+def test_secret_scan_flags_aws_access_key(tmp_path):
+    """An AKIA-prefixed access key in a body → AWS-key warning (never an error)."""
+    repo = _repo_with_body(
+        tmp_path, "# FEAT-LOCKED\n\naws_key = AKIAIOSFODNN7EXAMPLE\n"
+    )
+    report = vt.validate(repo / "tasks", project_root=repo)
+    assert report.ok, [e.format() for e in report.errors]  # warn-only, never blocks
+    warns = _secret_warnings(report)
+    assert any("AWS access key" in w.format() for w in warns), [w.format() for w in report.warnings]
+
+
+def test_secret_scan_flags_sk_prefixed_token(tmp_path):
+    """An sk-prefixed token (API-key shape) in a body → sk- token warning."""
+    repo = _repo_with_body(
+        tmp_path, "# FEAT-LOCKED\n\ntoken = sk-abcdefghijklmnopqrstuvwxyz0123\n"
+    )
+    report = vt.validate(repo / "tasks", project_root=repo)
+    warns = _secret_warnings(report)
+    assert any("sk- prefixed token" in w.format() for w in warns), [w.format() for w in report.warnings]
+
+
+def test_secret_scan_flags_long_hex_string(tmp_path):
+    """A 32+ char hex run (digest / token shape) in a body → long-hex warning."""
+    repo = _repo_with_body(
+        tmp_path, "# FEAT-LOCKED\n\ndigest = a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6\n"
+    )
+    report = vt.validate(repo / "tasks", project_root=repo)
+    warns = _secret_warnings(report)
+    assert any("long hex string" in w.format() for w in warns), [w.format() for w in report.warnings]
+
+
+def test_secret_scan_clean_body_emits_no_secret_warning(tmp_path):
+    """A body with no credential-shaped strings → zero secret warnings (no false positives)."""
+    repo = _repo_with_body(
+        tmp_path, "# FEAT-LOCKED\n\n## Context\nA plain prose body, nothing sensitive.\n"
+    )
+    report = vt.validate(repo / "tasks", project_root=repo)
+    assert _secret_warnings(report) == [], [w.format() for w in report.warnings]
+
+
+# ── Phase 105: Invariant-10 required fields (effort / user_action) ──────────
+#
+# _VALID_INDEX's FEAT-LOCKED is in_progress with both fields, so removing one
+# leaves that field's error as the only new one. These lock the open/in_progress
+# requirement — mutating the guard to `if False:` reddens each.
+
+
+def test_effort_required_on_in_progress_task(tmp_path):
+    index = _VALID_INDEX.replace("    effort: Medium\n", "")
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("requires 'effort'" in m for m in messages), messages
+
+
+def test_user_action_required_on_in_progress_task(tmp_path):
+    index = _VALID_INDEX.replace("    user_action: false\n", "")
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("requires 'user_action'" in m for m in messages), messages
+
+
+def test_effort_and_user_action_present_produce_no_invariant10_error(tmp_path):
+    """Positive control: the valid fixture (both fields) emits neither error —
+    guards against the opposite mutation (`if True:` → always-error)."""
+    repo = _seed_repo_with_lock(tmp_path)
+    messages = [f.format() for f in vt.validate(repo / "tasks", project_root=repo).errors]
+    assert not any("requires 'effort'" in m for m in messages), messages
+    assert not any("requires 'user_action'" in m for m in messages), messages
+
+
+# ── Phase 105: _check_manual_smoke type guard + _validate_orphans (Inv. 4) ──
+#
+# Both functions run in the real validate() path but their specific branches
+# (non-bool manual_smoke; an unreferenced body file) were reached only by the
+# never-run embedded --self-test, so pytest never actually exercised them.
+
+
+def test_manual_smoke_non_bool_is_hard_error(tmp_path):
+    # Quoted "yes" parses as a str (YAML 1.1 would make bare `yes` a bool).
+    index = _VALID_INDEX.replace(
+        "    body: tasks/open/FEAT-LOCKED.md\n",
+        "    body: tasks/open/FEAT-LOCKED.md\n    manual_smoke: \"yes\"\n",
+    )
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    assert not report.ok
+    messages = [f.format() for f in report.errors]
+    assert any("'manual_smoke' must be bool" in m for m in messages), messages
+
+
+def test_manual_smoke_true_bool_is_not_a_type_error(tmp_path):
+    # A real bool never trips the type guard (it may warn about a missing
+    # heading, but that is not an error).
+    index = _VALID_INDEX.replace(
+        "    body: tasks/open/FEAT-LOCKED.md\n",
+        "    body: tasks/open/FEAT-LOCKED.md\n    manual_smoke: true\n",
+    )
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert not any("'manual_smoke' must be bool" in m for m in messages), messages
+
+
+# ── Phase 235 (Q-235 leg #436): _check_solo type guard ──
+#
+# `solo` is type-guarded and nothing more: its meaning is a claim about runtime
+# state no static check can confirm, and its one reader (/auto-build Step 2
+# invariant `d.`) fails safe on absence. The type guard is the part that matters
+# — `"yes"` is truthy in Python, so an unguarded string would silently solo every
+# batch the task landed in, which is a throughput bug with no error message.
+
+
+def test_solo_non_bool_is_hard_error(tmp_path):
+    index = _VALID_INDEX.replace(
+        "    body: tasks/open/FEAT-LOCKED.md\n",
+        "    body: tasks/open/FEAT-LOCKED.md\n    solo: \"yes\"\n",
+    )
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    assert not report.ok
+    messages = [f.format() for f in report.errors]
+    assert any("'solo' must be bool" in m for m in messages), messages
+
+
+def _solo_errors(tmp_path, value: str) -> list[str]:
+    index = _VALID_INDEX.replace(
+        "    body: tasks/open/FEAT-LOCKED.md\n",
+        f"    body: tasks/open/FEAT-LOCKED.md\n    solo: {value}\n",
+    )
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    return [f.format() for f in report.errors]
+
+
+def test_solo_true_is_accepted(tmp_path):
+    messages = _solo_errors(tmp_path, "true")
+    assert not any("'solo'" in m for m in messages), messages
+
+
+def test_solo_false_is_accepted(tmp_path):
+    messages = _solo_errors(tmp_path, "false")
+    assert not any("'solo'" in m for m in messages), messages
+
+
+def test_solo_absent_fires_no_check(tmp_path):
+    """Absence is the overwhelmingly common case and must stay silent — the field
+    is optional and every task predating Phase 235 lacks it."""
+    repo = _seed_repo_with_lock(tmp_path, _VALID_INDEX)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors] + [f.format() for f in report.warnings]
+    assert not any("'solo'" in m for m in messages), messages
+
+
+def test_solo_is_not_confused_with_manual_smoke(tmp_path):
+    """Both are optional bools checked in the same pass; a copy-paste that wired
+    `solo` to `manual_smoke`'s checker would report the wrong field name."""
+    index = _VALID_INDEX.replace(
+        "    body: tasks/open/FEAT-LOCKED.md\n",
+        "    body: tasks/open/FEAT-LOCKED.md\n    solo: 3\n",
+    )
+    repo = _seed_repo_with_lock(tmp_path, index)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("'solo' must be bool, got int" in m for m in messages), messages
+    assert not any("manual_smoke" in m for m in messages), messages
+
+
+def test_orphan_body_file_under_open_errors(tmp_path):
+    # An unreferenced .md under tasks/open/ (plain name, not a _phase_N summary,
+    # which takes a different message) → Invariant-4 orphan error.
+    repo = _seed_repo_with_lock(tmp_path)
+    (repo / "tasks" / "open" / "ORPHAN.md").write_text("# stray\n", encoding="utf-8")
+    report = vt.validate(repo / "tasks", project_root=repo)
+    messages = [f.format() for f in report.errors]
+    assert any("orphan body file" in m for m in messages), messages
+
+
+# === Q-548: a non-UTF-8 byte must not take the whole validation down =========
+#
+# `UnicodeDecodeError` is a **ValueError**, not an `OSError`. Three readers in
+# this module opened text with a strict `utf-8` decode while catching `OSError`
+# only, so one stray byte propagated out of `validate()` and killed the entire
+# run — every invariant that would have come after it included — with a
+# traceback instead of one bad-file error.
+#
+# THE FILING NAMED ONE SITE AND THERE WERE THREE. `Q-548` said the crash was in
+# `_check_body_first_heading` and that "every sibling reader in the same file
+# uses errors='replace'". Measured at `75d1bc9`: of the four text readers in the
+# module, exactly ONE used `errors="replace"` (`_scan_secrets`). Strict was the
+# convention, not the outlier, and the two unnamed siblings crash identically —
+# including the `index.yml` read, which is the FIRST read of the run and so
+# takes down the validator before any invariant executes.
+#
+# Each case is driven through the real `validate()` rather than by calling the
+# private reader, because the defect is not "the reader raises" — it is "the
+# raise escapes the run". A test on the reader alone would pass with the bug
+# still live at the only level that matters.
+
+_NOT_UTF8 = b"\xff\xfe"
+
+
+def test_a_non_utf8_body_does_not_kill_the_whole_validation(tmp_path):
+    """Site 3 — `_check_body_first_heading`, the one site `Q-548` named."""
+    tasks_dir = _make_tasks_tree(tmp_path)
+    body = tasks_dir / "open" / "FEAT-LOCKED.md"
+    body.write_bytes(b"# FEAT-LOCKED\n\n" + _NOT_UTF8 + b" not utf-8\n")
+
+    report = vt.validate(tasks_dir)  # must RETURN, not raise
+
+    assert report is not None, "validate() returned nothing for a non-UTF-8 body"
+    # A BODY IS REPAIRED, NOT REFUSED — the opposite of the tracker above, and
+    # the asymmetry is the point. The heading is still read past the bad byte,
+    # so no heading complaint is raised about a file whose heading is correct.
+    messages = " ".join(f.message for f in report.errors)
+    assert "first non-empty line must be" not in messages, (
+        "the body was not decoded past its bad byte, so a correct '# FEAT-LOCKED' "
+        f"heading was reported as malformed:\n{messages[:400]}"
+    )
+    # AND the read must not have been ABANDONED either. Without this, dropping
+    # errors="replace" survives: the read raises, the (OSError, ValueError) arm
+    # catches it, and the run reports "cannot read body file" instead — which
+    # satisfies the assertion above while the heading was never checked at all.
+    # The round's point was that the two halves of this fix must be caught
+    # independently; this is the half that was not.
+    assert "cannot read body file" not in messages, (
+        "the body read was abandoned rather than repaired, so the heading check "
+        f"never ran:\n{messages[:400]}"
+    )
+
+
+def test_a_non_utf8_index_does_not_kill_the_whole_validation(tmp_path):
+    """Site 1 — the `index.yml` read, unnamed by the filing and the worst of the three.
+
+    It is the first read of the run, so before the fix a single stray byte here
+    meant NO invariant ran at all — the caller saw a traceback, not a report.
+    """
+    tasks_dir = _make_tasks_tree(tmp_path)
+    index = tasks_dir / "index.yml"
+    index.write_bytes(index.read_bytes().replace(b"Active phase", _NOT_UTF8 + b" phase"))
+
+    report = vt.validate(tasks_dir)
+
+    assert report is not None, "validate() returned nothing for a non-UTF-8 index.yml"
+    # AND IT MUST SAY SO. Returning a report is not enough: the first cut used
+    # errors="replace" here, which made the corrupt file PARSE — the run then
+    # reported five unrelated schema errors and nothing about the corruption,
+    # sending a maintainer after phantom problems. The round disqualified that.
+    # The tracker is refused with a reason; only the bodies are repaired.
+    messages = " ".join(f.message for f in report.errors)
+    assert "not valid UTF-8" in messages, (
+        "a corrupt index.yml was normalised instead of refused — the run gives "
+        f"no sign the file is the problem:\n{messages[:400]}"
+    )
+    assert len(report.errors) == 1, (
+        "refusing the tracker must be the ONLY error; anything else is a schema "
+        f"complaint derived from repaired bytes:\n{messages[:400]}"
+    )
+
+
+def test_a_yaml_value_error_is_not_reported_as_a_read_failure(tmp_path):
+    """`ValueError` is broader than `UnicodeDecodeError`, and the first cut conflated them.
+
+    `yaml.safe_load` raises a bare `ValueError` for an out-of-range date, so
+    folding `ValueError` into the `OSError` arm reported `completed: 2026-02-31`
+    as *"Cannot read:"* on a file that read perfectly — and routed past the
+    dedicated YAML branch three lines above it. Found by this phase's round.
+    """
+    tasks_dir = _make_tasks_tree(tmp_path)
+    index = tasks_dir / "index.yml"
+    text = index.read_text(encoding="utf-8")
+    anchor = "  - id: FEAT-LOCKED\n"
+    assert text.count(anchor) == 1, f"fixture anchor moved:\n{text}"
+    index.write_text(text.replace(anchor, anchor + "    completed: 2026-02-31\n", 1),
+                     encoding="utf-8")
+
+    report = vt.validate(tasks_dir)
+
+    messages = " ".join(f.message for f in report.errors)
+    assert "Cannot read" not in messages, (
+        f"a YAML content error is being reported as a read failure:\n{messages[:400]}"
+    )
+    assert "YAML value error" in messages, messages[:400]
+
+
+def test_a_non_utf8_body_does_not_kill_the_manual_smoke_check(tmp_path):
+    """Site 2 — `_check_manual_smoke`, also unnamed by the filing.
+
+    It is reached only when a task sets `manual_smoke: true`, and it runs AFTER
+    the heading check, so with the other two sites live it can never be observed
+    — the first crash masks it. Driven here with the heading check stubbed out,
+    which is the only way to show it is independently broken rather than merely
+    downstream of a site already fixed.
+    """
+    tasks_dir = _make_tasks_tree(tmp_path)
+    index = tasks_dir / "index.yml"
+    # ANCHORED ON THE TASK, AND ASSERTED TO HAVE TAKEN. The first draft of this
+    # test anchored on `status: in_progress` with count=1 — which is the PHASE
+    # block's status, several lines above the task's. `manual_smoke` landed on
+    # the phase, `_check_manual_smoke` returned early, and this test passed
+    # against the unfixed module. A no-op substitution is the same failure as a
+    # no-op guard, so the assertion below is the point of these four lines.
+    text = index.read_text(encoding="utf-8")
+    anchor = "  - id: FEAT-LOCKED\n"
+    assert text.count(anchor) == 1, f"fixture anchor moved:\n{text}"
+    index.write_text(text.replace(anchor, anchor + "    manual_smoke: true\n", 1),
+                     encoding="utf-8")
+    assert "manual_smoke: true" in index.read_text(encoding="utf-8")
+    body = tasks_dir / "open" / "FEAT-LOCKED.md"
+    body.write_bytes(b"# FEAT-LOCKED\n\n" + _NOT_UTF8 + b" not utf-8\n")
+
+    with mock.patch.object(vt, "_check_body_first_heading", lambda *a, **k: None):
+        report = vt.validate(tasks_dir)
+
+    assert report is not None, "validate() returned nothing for a non-UTF-8 smoke body"
+
+
+# ── Q-059 — `--path` does not exempt a tree from the lock check ──────────
+#
+# `main()`'s comment used to say that under `--path` "the sysop/runtime/locks/
+# check would not apply". It always applied: `--path` sets only `base_dir`, and
+# the locks dir is resolved from `base_dir.parent` — through git-common-dir to
+# the MAIN repo's locks inside any checkout, beside the tree outside one. These
+# pin that, through the CLI a consumer would actually reach for.
+
+import sys as _sys  # noqa: E402
+
+_VALIDATOR = REPO_ROOT / "core" / "companion" / "scripts" / "validate_tasks.py"
+_GIT_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
+
+
+def _clean_env():
+    return {k: v for k, v in os.environ.items() if k not in _GIT_VARS}
+
+
+def _cli_path(tasks_dir: Path):
+    return subprocess.run([_sys.executable, str(_VALIDATOR), "--path", str(tasks_dir)],
+                          capture_output=True, text=True, env=_clean_env(), timeout=60)
+
+
+def _lock_at(root: Path):
+    locks = root / "sysop/runtime/locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    (locks / "FEAT-LOCKED.lock").write_text("lock\n", encoding="utf-8")
+
+
+def _git_init(root: Path):
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True,
+                   capture_output=True, env=_clean_env())
+
+
+def test_path_inside_a_repo_still_runs_the_lock_check_against_the_main_repo(tmp_path):
+    """A staged tree kept inside the repo, with a lock BESIDE it but none in the
+    main repo: still fails, because the lookup went through git, not beside
+    `--path`. The exemption the comment claimed would have passed it."""
+    repo = tmp_path / "repo"
+    _git_init(repo)
+    staging = repo / "staging"
+    _make_tasks_tree(staging)
+    _lock_at(staging)  # a decoy where an exemption-by-proximity would look
+    r = _cli_path(staging / "tasks")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "lock file missing" in r.stdout
+    assert str((repo / "sysop/runtime/locks").resolve()) in r.stdout
+
+
+def test_path_inside_a_repo_passes_on_the_main_repos_real_lock(tmp_path):
+    repo = tmp_path / "repo"
+    _git_init(repo)
+    _lock_at(repo)
+    staging = repo / "staging"
+    _make_tasks_tree(staging)
+    r = _cli_path(staging / "tasks")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_path_outside_any_repo_checks_beside_the_tree(tmp_path):
+    """Outside a repo the lookup falls back beside the tree — it does not skip.
+    That is why the pre-commit example copies the real locks into its export."""
+    bare = tmp_path / "export"
+    _make_tasks_tree(bare)
+    r = _cli_path(bare / "tasks")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "lock file missing" in r.stdout
+    _lock_at(bare)
+    r = _cli_path(bare / "tasks")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_comment_no_longer_claims_the_exemption():
+    """The defect was a sentence; pin that it does not come back verbatim."""
+    src = _VALIDATOR.read_text(encoding="utf-8")
+    assert "check would not apply" not in src
+    assert "migration script" not in src, (
+        "no task-migration script ships with Sysop; the --path caller is the "
+        "pre-commit example's staged-tree export")

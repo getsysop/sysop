@@ -1,0 +1,19 @@
+rules:
+  - id: error-display-jsx
+    message: >
+      err.message / error.message rendered directly in JSX. Use the
+      project's display-error helper (e.g., getDisplayError($ERR)) instead.
+      Raw error messages may expose internal details or stack traces to
+      users.
+    severity: WARNING
+    languages: [typescript]
+    # Matches err.message/error.message inside JSX expression containers
+    # ({...}). Regex version fires on every occurrence including
+    # console.error(), throw, and variable assignments.
+    patterns:
+      - pattern: <$TAG>{$ERR.message}</$TAG>
+      - metavariable-regex:
+          metavariable: $ERR
+          regex: "^(err|error)$"
+    # paths: intentionally omitted. Path scoping is declared in the pack's
+    # checks.yml.fragment stub entry (see core/companion/semgrep/README.md).

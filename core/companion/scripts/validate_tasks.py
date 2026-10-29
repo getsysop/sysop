@@ -1,0 +1,1854 @@
+#!/usr/bin/env python3
+"""Validate tasks/index.yml and per-task body files against the schema.
+
+Enforces every invariant documented in tasks/schema.md. Designed to run in
+pre-commit, and via --path against a tasks/ tree other than the repo's own —
+`git-hooks/examples/pre-commit-tasks-validate.example` points it at an export of
+the STAGED tree. --path changes which tree is validated, not which invariants
+apply: the in-progress lock check (Invariant 9) still runs (see main()).
+
+Usage:
+    python sysop/scripts/validate_tasks.py
+    python sysop/scripts/validate_tasks.py --path tasks/
+    python sysop/scripts/validate_tasks.py --quiet            # pre-commit mode
+    python sysop/scripts/validate_tasks.py --self-test       # internal consistency check
+
+Exits 0 on success, non-zero on any ERROR finding. Warnings (e.g., suspected
+secrets) never affect exit code.
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    # PyYAML lives only in the project venv on PEP-668 hosts (BeanRider
+    # ISSUE-0049; internal tracker #321), so resolve it onto sys.path before giving up
+    # — that keeps a bare `python3 sysop/scripts/…` working, which is what the
+    # skills prescribe and settings.json allow-rules are written against.
+    # It PROBES rather than assuming: a candidate is committed to sys.path only
+    # once `import yaml` actually succeeds from it, and is rolled back
+    # otherwise. The first draft stopped at the first venv-SHAPED directory, so
+    # one empty `.venv` disabled the whole search — including the main-checkout
+    # arm below, which is the entire point of it — and a `.venv` shadowed a
+    # sibling `venv` that did have PyYAML. That was the shell helper's design
+    # (`claim_task.sh:resolve_yaml_python`) stated in this phase's own log and
+    # not honoured here; the round caught it by running it.
+    #
+    # Order is script-anchored FIRST — this file's ancestors, then the MAIN
+    # checkout via git-common-dir (a linked worktree carries the scripts but
+    # never a `.venv`, and worktrees are where /claim-task builds) — and only
+    # then the CWD. CWD-first let an unrelated project's venv win whenever a
+    # script was invoked by path from elsewhere. Both `.venv/` and `venv/`
+    # layouts, at every root.
+    #
+    # The git probe strips git's discovery vars for the reason
+    # `tests/test_git_env_hermeticity.py` exists (BeanRider ISSUE-0048): git
+    # exports `GIT_DIR` into every hook, and these scripts run from pre-commit. Inline by necessity rather than by accident: it must run before
+    # any import can be trusted, and validate_tasks.py + next_task.py are
+    # deliberately standalone for pre-commit (see _log.py's header).
+    # tests/test_venv_pyyaml_bootstrap.py pins the five copies identical.
+    _roots = []
+    # `list(...)` before the slice: slicing `PurePath.parents` is 3.10+
+    # (bpo-35498), and on 3.9 it raises TypeError from inside this very
+    # `except ImportError` — the interpreter the block exists to rescue.
+    for _cand in list(Path(__file__).resolve().parents)[:3]:
+        if _cand not in _roots:
+            _roots.append(_cand)
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=str(Path(__file__).resolve().parent),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={_k: _v for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR",
+                               "GIT_INDEX_FILE")},
+        )
+        if _r.returncode == 0 and _r.stdout.strip():
+            _main = (Path(__file__).resolve().parent / _r.stdout.strip()).resolve().parent
+            if _main not in _roots:
+                _roots.append(_main)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if Path.cwd() not in _roots:
+        _roots.append(Path.cwd())
+    _hit = False
+    for _root in _roots:
+        for _layout in (".venv", "venv"):
+            for _site in glob.glob(str(_root / _layout / "lib/python*/site-packages")):
+                sys.path.insert(0, _site)
+                try:
+                    import yaml
+                except ImportError:
+                    sys.path.remove(_site)
+                    continue
+                _hit = True
+                break
+            if _hit:
+                break
+        if _hit:
+            break
+    try:
+        import yaml
+    except ImportError:
+        print(
+            "ERROR: validate_tasks.py requires PyYAML. fix: python3 -m venv .venv && "
+            ".venv/bin/pip install pyyaml   (PEP-668-safe), or activate the venv.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
+# Local _sanitize_log — strips ANSI/control chars before logging untrusted
+# strings (filesystem paths, YAML content, exception messages). Mirrors the
+# project-side _sanitize_log helper that python-pack consumers ship under
+# their <utility modules>/; redefined here so this script stays standalone
+# and importable from a pre-commit hook before the project's venv activates.
+# ---------------------------------------------------------------------------
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_CONTROL_RE = re.compile(r"[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize_log(value: object, max_len: int = 500) -> str:
+    """Strip ANSI/control chars and truncate.
+
+    Use this on every exception message and any value derived from external
+    input (filesystem paths, YAML content) before printing.
+    """
+    text = str(value)
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    text = _CONTROL_RE.sub("", text)
+    text = text.replace("\n", " ").replace("\r", " ").replace("\0", " ")
+    if len(text) > max_len:
+        text = text[:max_len] + "..."
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Schema constants
+# ---------------------------------------------------------------------------
+# Decision 2 (Phase 16 handoff § 0): forward-compatible versioning. The
+# validator accepts schema_version >= MIN_SCHEMA_VERSION; a consumer pinned
+# to an older Sysop that adopts a newer tasks/index.yml from upstream is
+# NOT rejected as "unknown version" for purely-additive schema changes. A
+# breaking schema change bumps MIN_SCHEMA_VERSION AND requires a per-version
+# code path in the validator (each supported major version must be explicitly
+# understood). See core/companion/tasks/schema.md § Versioning.
+MIN_SCHEMA_VERSION = 1
+TASK_STATUSES = {"open", "in_progress", "done", "deferred"}
+PHASE_STATUSES = {"done", "in_progress", "planned"}
+EFFORT_VALUES = {"Low", "Medium", "High"}
+# Phase 19: blast_radius captures task surface area (independent of effort).
+# v1: optional; if present, enum is enforced. v2: required on open/in_progress
+# (mirrors effort:'s required-status set). See tasks/schema.md § Blast radius
+# + § Versioning.
+BLAST_RADIUS_VALUES = {"single-file", "single-module", "cross-module", "architectural"}
+BLAST_RADIUS_REQUIRED_FROM_VERSION = 2
+BLAST_RADIUS_REQUIRED_STATUSES = {"open", "in_progress"}
+WHITELIST_EXTERNAL_PREFIXES = ("BATCH-",)
+
+# Module-scope regex compilation (per scripts convention)
+_TASK_ID_RE = re.compile(r"^[A-Z][A-Z0-9-]{2,80}$")
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_BATCH_EXTERNAL_RE = re.compile(r"^BATCH-\d+$")
+# Provenance sentinel allowed in surfaced_by (only): marks a task imported
+# from a pre-Sysop backlog (roadmap file / issue tracker) by /onboard, whose
+# effort/blast_radius are archaeological estimates rather than design-time
+# signal. Lowercase, so it can never collide with a real task ID (_TASK_ID_RE
+# requires a leading uppercase letter).
+_IMPORTED_SENTINEL = "imported"
+_PHASE_SUMMARY_RE = re.compile(r"^_phase_\d+\.md$")
+_BODY_FIRST_HEADING_RE = re.compile(r"^#\s+([^\s#].*?)\s*$")
+
+# The `plan_summary:` value both lock writers seed (claim_task.sh and
+# batch_work.sh). Byte-identical to what they emit, after YAML parsing —
+# tests/test_lock_placeholder_expiry.py derives it by RUNNING both writers, so a
+# reworded seed reddens that test instead of silently disabling the check below.
+LOCK_PLAN_SUMMARY_PLACEHOLDER = "(update with a one-line description of the work)"
+_BATCH_LOCK_NAME_RE = re.compile(r"^BATCH-\d+\.lock$")
+
+# Secret-scan patterns (warn-only). All module-scope.
+_LONG_HEX_RE = re.compile(r"\b[0-9a-fA-F]{32,}\b")
+_SK_PREFIX_RE = re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")
+_AWS_ACCESS_KEY_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
+
+# Phase 35: manual_smoke heading-presence check (warn-only). Mirrors the
+# regex /review-close Step 3c uses for signal detection, so an author who
+# satisfies the validator's check also satisfies the skill's gate detection.
+# Phase 218 widened BOTH in lockstep, after a consumer report: the
+# original two phrases were an allowlist over free prose, so a procedure headed
+# `OPERATOR ACTION REQUIRED BEFORE MERGE` satisfied neither and the close
+# proceeded without ever asking. `user ops` is deliberately excluded — the
+# class is large and routine (see schema.md § "User ops"), so prompting on all of
+# it would train the operator to waive wholesale. That reason is
+# timing-independent; an earlier form of this comment also claimed POST-merge
+# timing, which nothing in the tree supports.
+# Keep this pattern BEHAVIOURALLY identical to the skill's — that is what
+# tests/test_review_close_smoke_gate.py asserts, over a corpus, in both directions.
+# It is deliberately not byte-identical and never was: the skill's copy wraps the
+# alternation in a capturing group, because it uses `m.group(1)` to measure heading
+# depth, and this one has no such consumer. Change the phrase list in both, together.
+_MANUAL_SMOKE_HEADING_RE = re.compile(
+    r"^ {0,3}#{1,6}[ \t]+.*("
+    r"manual\s+smoke"
+    r"|smoke\s+(?:required|test)"
+    r"|manual\s+(?:verification|verify|test|check|step)"
+    r"|operator\s+action"
+    r"|human\s+action"
+    r"|requires?\s+a\s+human"
+    r"|before\s+merg(?:e|ing)"
+    r"|prior\s+to\s+merg(?:e|ing)"
+    r")",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# ---------------------------------------------------------------------------
+# Findings
+# ---------------------------------------------------------------------------
+@dataclass
+class Finding:
+    severity: str  # "ERROR" or "WARNING"
+    location: str  # "<file>:<line>" or "<file>: <field>"
+    message: str
+
+    def format(self) -> str:
+        return f"[{self.severity}] {self.location}: {self.message}"
+
+
+def _git_discovery_env() -> dict[str, str]:
+    """`os.environ` minus git's discovery vars (BeanRider ISSUE-0048).
+
+    `GIT_DIR`/`GIT_WORK_TREE`/`GIT_COMMON_DIR`/`GIT_INDEX_FILE` take precedence
+    over `git -C`, and git exports them into every hook — stripping them makes
+    `-C` authoritative so a probe against a tmpdir resolves there, not the
+    invoking repo. Duplicated verbatim in next_task.py and scope_overlap.py, and
+    in archive_review_tasks.py since Phase 368
+    (same zero-dependency-duplicate rationale as _resolve_canonical_locks_dir).
+    """
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")
+    }
+
+
+def _resolve_canonical_locks_dir(project_root: Path) -> Path:
+    """Resolve the canonical sysop/runtime/locks/ directory.
+
+    Phase 32 (2026-05-22): locks always live under the main repo's `sysop/runtime/locks/`,
+    discoverable via `git rev-parse --git-common-dir`. When invoked inside a
+    worktree, this still returns the MAIN repo's `sysop/runtime/locks/` so callers from any
+    working tree agree on one location (closes BeanRider ISSUE-0032).
+
+    Falls back to `project_root / "sysop/runtime/locks"` when we cannot resolve git state
+    (e.g., `--self-test` synthetic fixtures, atomic-staging callers running
+    against a tmpdir outside any working tree). This preserves backward
+    compatibility for non-git callers.
+
+    Strips git's discovery env vars (BeanRider ISSUE-0048) so `-C
+    <project_root>` is authoritative: `GIT_DIR`/`GIT_WORK_TREE` take
+    precedence over `-C`, and git exports them (absolute, from a worktree)
+    into every hook. Left inherited, the probe resolves against the invoking
+    repo regardless of `project_root` — so `--self-test`'s tmpdir fixtures
+    would resolve to the real repo's `sysop/runtime/locks/` and the documented fallback
+    would never fire. Stripping them restores the fallback without changing
+    the answer for real callers (discovery proceeds from `project_root`,
+    which is what `-C` already intends; the Phase-32 cross-worktree
+    guarantee is preserved).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            env=_git_discovery_env(),
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return project_root / "sysop/runtime/locks"
+    if result.returncode != 0:
+        return project_root / "sysop/runtime/locks"
+    raw = result.stdout.strip()
+    if not raw:
+        return project_root / "sysop/runtime/locks"
+    common_dir = Path(raw)
+    if not common_dir.is_absolute():
+        common_dir = (project_root / common_dir).resolve()
+    main_repo_root = common_dir.parent
+    return main_repo_root / "sysop/runtime/locks"
+
+
+@dataclass
+class Report:
+    errors: list[Finding] = field(default_factory=list)
+    warnings: list[Finding] = field(default_factory=list)
+    task_count: int = 0
+    phase_count: int = 0
+
+    def error(self, location: str, message: str) -> None:
+        self.errors.append(Finding("ERROR", location, message))
+
+    def warn(self, location: str, message: str) -> None:
+        self.warnings.append(Finding("WARNING", location, message))
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+
+# ---------------------------------------------------------------------------
+# Core validator
+# ---------------------------------------------------------------------------
+def validate(base_dir: Path, project_root: Path | None = None) -> Report:
+    """Validate the tasks tree rooted at *base_dir*.
+
+    *project_root* is the directory containing `sysop/runtime/locks/` (for in-progress lock
+    checks). Defaults to the parent of *base_dir*.
+    """
+    report = Report()
+    base_dir = Path(base_dir).resolve()
+    if project_root is None:
+        project_root = base_dir.parent
+    project_root = Path(project_root).resolve()
+
+    index_path = base_dir / "index.yml"
+    if not index_path.is_file():
+        report.error(str(index_path), "index.yml not found")
+        return report
+
+    # Invariant 1: parses with yaml.safe_load
+    # THE TRACKER IS REFUSED, NOT REPAIRED — and this is the opposite of what the
+    # two body readers below do. `UnicodeDecodeError` is a **ValueError**, not an
+    # OSError, and PyYAML does not convert it, so before 2026-09-19 a stray byte
+    # here raised out of validate() and took the ENTIRE run with it. The first
+    # fix used `errors="replace"` like the body readers. **The round disqualified
+    # that**: replacing bytes in the tracker makes a corrupt file parse, so the
+    # run reported five unrelated schema errors and NOTHING about the corruption
+    # — a maintainer chasing phantom schema problems. A body is prose being
+    # scanned for a heading and may be repaired; index.yml is the tracker and
+    # must be refused with a reason.
+    #
+    # The three arms are ordered and distinct on purpose. A decode failure is not
+    # a read failure and a YAML value error is not either: the first cut folded
+    # `ValueError` into the OSError arm and reported `completed: 2026-02-31` as
+    # "Cannot read:" on a file that read perfectly, routing past the YAML branch
+    # directly above it.
+    try:
+        with open(index_path, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh)
+    except UnicodeDecodeError as e:
+        report.error(
+            str(index_path),
+            f"not valid UTF-8: {_sanitize_log(str(e)[:500])}. "
+            "The tracker is refused rather than repaired; fix the byte and re-run.",
+        )
+        return report
+    except yaml.YAMLError as e:
+        report.error(str(index_path), f"YAML parse error: {_sanitize_log(str(e)[:500])}")
+        return report
+    except OSError as e:
+        report.error(str(index_path), f"Cannot read: {_sanitize_log(str(e)[:500])}")
+        return report
+    except Exception as e:  # ValueError for `2026-02-31`; KeyError, TypeError, … (`Q-621`)
+        report.error(str(index_path), f"YAML value error: {_sanitize_log(str(e)[:500])}")
+        return report
+
+    if not isinstance(raw, dict):
+        report.error(str(index_path), "top-level YAML must be a mapping")
+        return report
+
+    # Invariant 2: schema_version known (Decision 2: forward-compat — accept >= MIN)
+    schema_version = raw.get("schema_version")
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int):
+        report.error(
+            f"{index_path}: schema_version",
+            f"schema_version must be an integer, got {_sanitize_log(type(schema_version).__name__)}",
+        )
+        return report
+    if schema_version < MIN_SCHEMA_VERSION:
+        report.error(
+            f"{index_path}: schema_version",
+            f"schema_version {schema_version} is older than supported minimum {MIN_SCHEMA_VERSION}; "
+            "this index.yml predates the current Sysop schema.",
+        )
+        return report
+
+    phases = raw.get("phases") or []
+    tasks = raw.get("tasks") or []
+
+    if not isinstance(phases, list):
+        report.error(f"{index_path}: phases", "must be a list")
+        return report
+    if not isinstance(tasks, list):
+        report.error(f"{index_path}: tasks", "must be a list")
+        return report
+
+    report.phase_count = len(phases)
+    report.task_count = len(tasks)
+
+    _validate_phases(phases, index_path, report)
+    task_ids = _validate_tasks(
+        tasks, base_dir, project_root, phases, index_path, schema_version, report
+    )
+    _validate_references(tasks, task_ids, index_path, report)
+    _validate_orphans(base_dir, tasks, index_path, report)
+    _scan_secrets(base_dir, report)
+
+    return report
+
+
+def _validate_phases(phases: list, index_path: Path, report: Report) -> None:
+    """Invariants 5 + 8 (phase parts) + uniqueness of phase numbers."""
+    current_focus_count = 0
+    seen_numbers: set[int] = set()
+    for idx, phase in enumerate(phases):
+        loc = f"{index_path}: phases[{idx}]"
+        if not isinstance(phase, dict):
+            report.error(loc, "phase entry must be a mapping")
+            continue
+
+        number = phase.get("number")
+        # bool is a subclass of int — reject it explicitly.
+        if isinstance(number, bool) or not isinstance(number, (int, float)):
+            report.error(loc, f"phase 'number' must be int or float, got {_sanitize_log(type(number).__name__)}")
+        else:
+            if number in seen_numbers:
+                report.error(loc, f"duplicate phase number {number}")
+            seen_numbers.add(number)
+
+        title = phase.get("title")
+        if not isinstance(title, str) or not title.strip():
+            report.error(loc, "phase 'title' must be a non-empty string")
+
+        status = phase.get("status")
+        if status not in PHASE_STATUSES:
+            report.error(
+                loc,
+                f"phase 'status' must be one of {sorted(PHASE_STATUSES)}, got {_sanitize_log(status)}",
+            )
+
+        cf = phase.get("current_focus")
+        if not isinstance(cf, bool):
+            report.error(loc, f"phase 'current_focus' must be bool, got {_sanitize_log(type(cf).__name__)}")
+        elif cf:
+            current_focus_count += 1
+
+    # Invariant 5: exactly one current_focus phase
+    if current_focus_count != 1:
+        report.error(
+            f"{index_path}: phases",
+            f"exactly one phase must have current_focus: true (found {current_focus_count})",
+        )
+
+
+def _validate_tasks(
+    tasks: list,
+    base_dir: Path,
+    project_root: Path,
+    phases: list,
+    index_path: Path,
+    schema_version: int,
+    report: Report,
+) -> set[str]:
+    """Per-task validation (invariants 3, 7, 8, 9, 10) and ID matching.
+
+    Returns the set of known task IDs (for downstream reference checks).
+    """
+    phase_numbers = {
+        p.get("number")
+        for p in phases
+        if isinstance(p, dict)
+        and isinstance(p.get("number"), (int, float))
+        and not isinstance(p.get("number"), bool)
+    }
+    locks_dir = _resolve_canonical_locks_dir(project_root)
+    base_tasks_real = os.path.realpath(base_dir)
+
+    seen_ids: set[str] = set()
+    task_ids: set[str] = set()
+
+    for idx, task in enumerate(tasks):
+        loc = f"{index_path}: tasks[{idx}]"
+        if not isinstance(task, dict):
+            report.error(loc, "task entry must be a mapping")
+            continue
+
+        tid = task.get("id")
+        if not isinstance(tid, str) or not _TASK_ID_RE.match(tid):
+            report.error(
+                loc,
+                f"task 'id' must match ^[A-Z][A-Z0-9-]{{2,80}}$, got {_sanitize_log(tid)}",
+            )
+            # We still proceed to surface as many downstream errors as we can.
+            tid_for_use: str | None = tid if isinstance(tid, str) else None
+        else:
+            tid_for_use = tid
+
+        # Invariant 7: unique IDs
+        if tid_for_use is not None:
+            if tid_for_use in seen_ids:
+                report.error(loc, f"duplicate task id: {_sanitize_log(tid_for_use)}")
+            else:
+                seen_ids.add(tid_for_use)
+            task_ids.add(tid_for_use)
+
+        loc_id = f"{index_path}: tasks[{idx}] ({_sanitize_log(tid_for_use) if tid_for_use else '?'})"
+
+        # phase
+        phase = task.get("phase")
+        if isinstance(phase, bool) or not isinstance(phase, (int, float)):
+            report.error(loc_id, f"task 'phase' must be int or float, got {_sanitize_log(type(phase).__name__)}")
+        elif phase not in phase_numbers:
+            report.error(loc_id, f"task 'phase' {phase} does not match any phases[].number")
+
+        # title
+        title = task.get("title")
+        if not isinstance(title, str) or not title.strip():
+            report.error(loc_id, "task 'title' must be a non-empty string")
+
+        # Invariant 8: status
+        status = task.get("status")
+        if status not in TASK_STATUSES:
+            report.error(
+                loc_id,
+                f"task 'status' must be one of {sorted(TASK_STATUSES)}, got {_sanitize_log(status)}",
+            )
+
+        # depends_on / surfaced_by / whitelist must be lists if present
+        for list_field in ("depends_on", "surfaced_by", "whitelist"):
+            val = task.get(list_field)
+            if val is not None and not isinstance(val, list):
+                report.error(loc_id, f"'{list_field}' must be a list, got {_sanitize_log(type(val).__name__)}")
+
+        # Invariant 10: status-field consistency
+        _check_status_consistency(task, status, loc_id, report)
+
+        # Phase 19: blast_radius (enum membership always when present;
+        # required on open/in_progress at schema_version >= 2).
+        _check_blast_radius(task, status, schema_version, loc_id, report)
+
+        # Invariant 3: body path resolution
+        # Schema says body is "relative path under tasks/" — accept either
+        # "tasks/<...>" or a path already relative to project root.
+        body = task.get("body")
+        resolved_body_path: Path | None = None
+        if isinstance(body, str) and body:
+            if body.startswith("tasks/"):
+                candidate = project_root / body
+            else:
+                candidate = base_dir / body
+            real_candidate = os.path.realpath(str(candidate))
+            if not real_candidate.startswith(base_tasks_real + os.sep) and real_candidate != base_tasks_real:
+                report.error(
+                    loc_id,
+                    f"body path escapes tasks/ base: {_sanitize_log(body)} -> {_sanitize_log(real_candidate)}",
+                )
+            elif not os.path.isfile(real_candidate):
+                report.error(loc_id, f"body file does not exist: {_sanitize_log(body)}")
+            else:
+                resolved_body_path = Path(real_candidate)
+                _check_body_first_heading(resolved_body_path, tid_for_use, loc_id, report)
+
+        # Phase 35: manual_smoke field — warn-only heading-presence check.
+        _check_manual_smoke(task, resolved_body_path, loc_id, report)
+
+        # Phase 235 (Q-235): solo field — type guard only.
+        _check_solo(task, loc_id, report)
+
+        # Phase 58b's test-decision check was RETIRED in Phase 234 (Q-022). It
+        # read the body off the FILESYSTEM while the record it looked for is
+        # written by the Step 7e executor inside the worktree and committed on
+        # the feature branch. Run from `main` — where /claim-task Step 4c and
+        # /review-close's final guard both run it — the section was absent for
+        # the entire in_progress window, so the warning fired on every claimed
+        # task on every run: noise in the channel carrying twelve real
+        # invariants. The read-and-verify gate that replaced it reads the right
+        # revision (`/review-close` Step 2d, `git show "refs/heads/<branch>:<path>"`), is a
+        # hard gate rather than a warning, and has its own doc-only skip. See
+        # tasks/schema.md § Test decision.
+
+        # archive_summary similar containment check
+        archive_summary = task.get("archive_summary")
+        if isinstance(archive_summary, str) and archive_summary:
+            if archive_summary.startswith("tasks/"):
+                candidate = project_root / archive_summary
+            else:
+                candidate = base_dir / archive_summary
+            real_candidate = os.path.realpath(str(candidate))
+            if not real_candidate.startswith(base_tasks_real + os.sep) and real_candidate != base_tasks_real:
+                report.error(
+                    loc_id,
+                    f"archive_summary path escapes tasks/ base: {_sanitize_log(archive_summary)}",
+                )
+            elif not os.path.isfile(real_candidate):
+                report.error(loc_id, f"archive_summary file does not exist: {_sanitize_log(archive_summary)}")
+
+        # Invariant 9: in_progress requires lock
+        if status == "in_progress" and tid_for_use is not None:
+            lock_path = locks_dir / f"{tid_for_use}.lock"
+            if not _is_file(lock_path):
+                report.error(
+                    loc_id,
+                    f"status=in_progress but lock file missing at {lock_path}. "
+                    "The canonical sysop/runtime/locks/ lives under the main repo root "
+                    "(resolved via 'git rev-parse --git-common-dir'); re-run "
+                    "`bash sysop/scripts/claim_task.sh --lock <TASK_ID> <BRANCH>` to "
+                    "recreate it, or flip the task back to status=open.",
+                )
+            else:
+                _check_expired_placeholder_lock(lock_path, tid_for_use, report)
+
+    # The same check for review-batch claims. batch_work.sh seeds the same
+    # placeholder, and a BATCH-<N>.lock has no tasks/index.yml entry to reach it
+    # through the loop above. Other locks with no in_progress task are NOT read
+    # here: that is a different defect (an orphan lock), not an unannotated one.
+    try:
+        batch_locks = sorted(
+            p for p in locks_dir.iterdir()
+            if _BATCH_LOCK_NAME_RE.match(p.name) and _is_file(p)
+        ) if locks_dir.is_dir() else []
+    except OSError:
+        batch_locks = []  # an unreadable locks dir is not this warning's to report
+    for batch_lock in batch_locks:
+        _check_expired_placeholder_lock(batch_lock, batch_lock.stem, report)
+
+    return task_ids
+
+
+def _parse_lock_expiry(value: object) -> datetime | None:
+    """`expires:` as an aware UTC datetime, or None when it cannot be read.
+
+    The writers emit `%Y-%m-%dT%H:%M:%SZ`, which PyYAML already loads as a
+    datetime (aware on PyYAML 6, naive-UTC before it). A string is tried in the
+    writers' format, then as ISO 8601; a bare date (a hand-extended expiry such
+    as `2026-10-01`) is midnight UTC. Anything else is None.
+    """
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        return datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _is_file(path: Path) -> bool:
+    """`Path.is_file()` that answers False on any OSError. On Python <= 3.13 it raises
+    for EACCES (a locks dir the caller cannot search) where 3.14 returns False, so an
+    unreadable locks dir crashed the whole schema run on older interpreters."""
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def _has_text(value: object) -> bool:
+    """True when a lock field holds some non-blank text, at any depth: an empty list,
+    an empty mapping, `0` or `false` annotates nothing."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple)):
+        return any(_has_text(v) for v in value)
+    if isinstance(value, dict):
+        return any(_has_text(v) for v in value.values())
+    return False
+
+
+def _load_lock_yaml(text: str) -> object:
+    """`yaml.safe_load` of a lock, tolerating a `workspace:`, `branch:` or `agent:`
+    value that contains `: `. The lock writers emit those values unquoted, and a
+    `: ` in one is invalid YAML that hid every other field.
+    On a parse error, each such line's value is re-read as a single-quoted scalar of
+    the line's text. `sitrep_survey.load_lock_text` also reads those fields as their lines;
+    this script reads none of them, so its standalone copy is the fallback alone."""
+    try:
+        return yaml.safe_load(text)
+    except Exception:  # not only YAMLError (`Q-621`); a retry that fails re-raises
+        out = []
+        for line in text.splitlines(keepends=True):
+            body = line.splitlines()[0]
+            key, sep, value = body.partition(":")
+            if sep and key in ("workspace", "branch", "agent"):
+                quoted = value.strip().replace("'", "''")
+                line = f"{key}: '{quoted}'{line[len(body):]}"
+            out.append(line)
+        quoted_text = "".join(out)
+        if quoted_text == text:
+            raise
+        return yaml.safe_load(quoted_text)
+
+
+def _check_expired_placeholder_lock(lock_path: Path, claim_id: str, report: Report) -> None:
+    """Warn when a lock is past `expires:` AND nothing says why it is still held.
+
+    Once `expires:` lapses, a deliberate park and an abandoned claim look the same
+    unless someone wrote which it is. So the warning needs all of: an expired lock,
+    the seeded `plan_summary`, an empty `notes:`, and no park record under
+    `sysop/runtime/parked/<ID>__*.md` written since the claim started (where
+    `/claim-task` and `/auto-build` record a deliberate park, leaving the lock in
+    place; a batch's is `BATCH-<N>__*.md`). Any one of those three is a statement of
+    what the claim is. A release leaves an older park record behind, so a record
+    from before this claim's `started:` says nothing about this claim.
+
+    A WARNING, never an error. `sysop/runtime/` is gitignored, so CI never sees a
+    real lock, and a consumer's CI may seed stub locks before running this
+    validator — a blocking check there would be measuring the stub. Warnings do
+    not change the exit code (module docstring).
+
+    A lock that cannot be read or parsed as a mapping, or whose `expires:` is
+    missing or unparseable, gets no warning: expiry cannot be established, and a
+    stub or hand-edited lock must not crash or fail validation.
+    """
+    try:
+        raw = _load_lock_yaml(lock_path.read_text(encoding="utf-8"))
+    except Exception:  # PyYAML raises KeyError, TypeError, … too (`Q-621`)
+        return
+    if not isinstance(raw, dict):
+        return
+    summary = raw.get("plan_summary")
+    if not isinstance(summary, str) or summary.strip() != LOCK_PLAN_SUMMARY_PLACEHOLDER:
+        return
+    if _has_text(raw.get("notes")):
+        return
+    expires = _parse_lock_expiry(raw.get("expires"))
+    if expires is None or expires > datetime.now(timezone.utc):
+        return
+    started = _parse_lock_expiry(raw.get("started"))
+    try:
+        for marker in (lock_path.parent.parent / "parked").glob(f"{glob.escape(claim_id)}__*.md"):
+            if started is not None and marker.stat().st_mtime >= started.timestamp():
+                return
+    except OSError:
+        pass
+    if _BATCH_LOCK_NAME_RE.match(lock_path.name):
+        release = f"bash sysop/scripts/batch_work.sh --release {claim_id[len('BATCH-'):]}"
+    else:
+        release = f"bash sysop/scripts/claim_task.sh --release {claim_id}"
+    report.warn(
+        str(lock_path),
+        f"claim {_sanitize_log(claim_id)} expired at {expires.strftime('%Y-%m-%dT%H:%M:%SZ')} "
+        "and the lock does not say why it is still held (plan_summary is the seeded "
+        "placeholder, notes is empty, no park record). If parked: write why in "
+        "plan_summary or notes and extend expires:. If the work is finished and waiting "
+        "to merge: close it with /document-work and /review-close, and do not release it, "
+        f"which reopens the task. If abandoned: {release}",
+    )
+
+
+def _check_status_consistency(task: dict, status: object, loc: str, report: Report) -> None:
+    """Invariant 10 — status-specific field requirements."""
+    has_body = isinstance(task.get("body"), str) and task["body"]
+    has_archive_summary = isinstance(task.get("archive_summary"), str) and task["archive_summary"]
+    has_completed_date = isinstance(task.get("completed_date"), str) and task["completed_date"]
+    has_effort = task.get("effort") in EFFORT_VALUES
+    has_user_action = isinstance(task.get("user_action"), bool)
+
+    if status in ("open", "in_progress", "deferred"):
+        if not has_body:
+            report.error(loc, f"status={status} requires 'body' field")
+
+    if status in ("open", "in_progress"):
+        if not has_effort:
+            report.error(
+                loc,
+                f"status={status} requires 'effort' to be one of {sorted(EFFORT_VALUES)}, "
+                f"got {_sanitize_log(task.get('effort'))}",
+            )
+        if not has_user_action:
+            report.error(loc, f"status={status} requires 'user_action' (bool)")
+
+    if status == "done":
+        # completed_date is RECOMMENDED but not REQUIRED — migration imports
+        # historical tasks whose completion dates have to be reconstructed via
+        # git-blame backfill (sysop/scripts/backfill_completed_dates.py). New
+        # completions written by /review-close MUST set a date; that contract
+        # is enforced at the skill layer, not here.
+        if has_completed_date and not _ISO_DATE_RE.match(task["completed_date"]):
+            report.error(
+                loc,
+                f"'completed_date' must be ISO YYYY-MM-DD, got {_sanitize_log(task['completed_date'])}",
+            )
+        elif not has_completed_date:
+            report.warn(loc, "status=done has no completed_date — git-blame backfill recommended")
+        if not has_body and not has_archive_summary:
+            report.error(
+                loc,
+                "status=done without 'body' requires 'archive_summary' pointing at tasks/archive/_phase_<N>.md",
+            )
+        # Invariant 10 extension (ISSUE-0009): status-vs-directory drift catch.
+        # A done task's body must not live under open/ or deferred/. That state
+        # is the silent half-migration produced when /review-close Step 4c's
+        # status flip wrote but the corresponding `git mv` was skipped (e.g.,
+        # by a stale prefix assumption in the rename heredoc). Accepts bodies
+        # under archive/ (canonical) and at tasks/ root (flat layouts).
+        if has_body:
+            body_parts = task["body"].split("/")
+            for stale_dir in ("open", "deferred"):
+                if stale_dir in body_parts:
+                    report.error(
+                        loc,
+                        f"status=done but body path contains '{stale_dir}/' segment "
+                        f"({_sanitize_log(task['body'])}); a done task's body must live under "
+                        "archive/ (or at tasks/ root). This is the half-migrated state "
+                        "described in tasks/schema.md § Status-specific requirements.",
+                    )
+                    break
+
+
+def _check_blast_radius(
+    task: dict, status: object, schema_version: int, loc: str, report: Report
+) -> None:
+    """Phase 19: blast_radius field validation.
+
+    - Whenever `blast_radius` is present (any status, any schema_version),
+      it must be one of BLAST_RADIUS_VALUES — catches typos at v1 too.
+    - At schema_version >= BLAST_RADIUS_REQUIRED_FROM_VERSION (2), tasks
+      with status in {open, in_progress} must declare it. Mirrors how
+      `effort:` is required for the same status set. Deferred/done tasks
+      may omit it — same accommodation as Phase 16's `completed_date` on
+      legacy done tasks (don't force backfill on history).
+    """
+    raw = task.get("blast_radius")
+    present = raw is not None  # explicit None vs missing both treated as absent
+    if present:
+        if raw not in BLAST_RADIUS_VALUES:
+            report.error(
+                loc,
+                f"'blast_radius' must be one of {sorted(BLAST_RADIUS_VALUES)}, "
+                f"got {_sanitize_log(raw)}",
+            )
+        return
+
+    if (
+        schema_version >= BLAST_RADIUS_REQUIRED_FROM_VERSION
+        and status in BLAST_RADIUS_REQUIRED_STATUSES
+    ):
+        report.error(
+            loc,
+            f"status={status} at schema_version>={BLAST_RADIUS_REQUIRED_FROM_VERSION} "
+            f"requires 'blast_radius' (one of {sorted(BLAST_RADIUS_VALUES)}). "
+            "See tasks/schema.md § Blast radius for value definitions.",
+        )
+
+
+def _check_solo(task: dict, loc: str, report: Report) -> None:
+    """Phase 235 (Q-235): `solo: true` declares that the task mutates state
+    shared outside the filesystem view, so it must not batch with anything — even a
+    task whose paths are disjoint. See schema.md § "Solo".
+
+    Type guard only, and deliberately so. The field's meaning is a claim about runtime
+    state that no static check can confirm or refute, and its one reader (/auto-build
+    Step 2 invariant `d.`) fails safe: an absent or false field simply batches normally,
+    which is the pre-Phase-235 behaviour. There is nothing to warn about that would not
+    be a guess.
+
+    - Absent or `false`: no check fires.
+    - Present but not a bool: hard error, mirroring `manual_smoke`'s type guard. `"yes"`
+      is truthy in Python and would silently solo every batch it touched.
+    """
+    raw = task.get("solo")
+    if raw is None:
+        return
+    if not isinstance(raw, bool):
+        report.error(
+            loc,
+            f"'solo' must be bool, got {_sanitize_log(type(raw).__name__)}",
+        )
+
+
+def _check_manual_smoke(
+    task: dict, body_path: Path | None, loc: str, report: Report
+) -> None:
+    """Phase 35 (BeanRider ISSUE-0008): when manual_smoke: true, the body
+    should contain a heading matching the smoke pattern. Warn-only — the
+    actual merge gate lives in /review-close Step 3c.
+
+    - If `manual_smoke` is absent or `false`, no check fires.
+    - If `manual_smoke` is present but not a bool, hard error (type guard).
+    - If `manual_smoke: true` and body resolves but lacks the heading, warn.
+    - If body did not resolve (missing/escaping path), skip — body-existence
+      is checked elsewhere; don't double-report.
+    """
+    raw = task.get("manual_smoke")
+    if raw is None:
+        return
+    if not isinstance(raw, bool):
+        report.error(
+            loc,
+            f"'manual_smoke' must be bool, got {_sanitize_log(type(raw).__name__)}",
+        )
+        return
+    if not raw:
+        return
+    if body_path is None or not body_path.is_file():
+        return
+    try:
+        with open(body_path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except (OSError, ValueError):
+        return
+    if not _MANUAL_SMOKE_HEADING_RE.search(text):
+        report.warn(
+            loc,
+            "manual_smoke: true but body lacks a procedure heading "
+            "('manual smoke', 'operator action', 'before merge', ...; case-insensitive). "
+            "Add the procedure under '## Manual smoke required' (or similar). "
+            "See tasks/schema.md § Manual smoke.",
+        )
+
+
+def _check_body_first_heading(body_path: Path, task_id: str | None, loc: str, report: Report) -> None:
+    """The first non-empty heading line of a body file must be `# <TASK-ID>`."""
+    if task_id is None:
+        return
+    try:
+        with open(body_path, "r", encoding="utf-8", errors="replace") as fh:
+            for raw_line in fh:
+                line = raw_line.rstrip("\n")
+                if not line.strip():
+                    continue
+                m = _BODY_FIRST_HEADING_RE.match(line)
+                if not m:
+                    report.error(
+                        f"{body_path}:1",
+                        f"first non-empty line must be a level-1 heading '# {task_id}', got {_sanitize_log(line)}",
+                    )
+                    return
+                heading_text = m.group(1).strip()
+                if heading_text != task_id:
+                    report.error(
+                        f"{body_path}:1",
+                        f"first heading must be '# {task_id}' (case-sensitive), got '# {_sanitize_log(heading_text)}'",
+                    )
+                return
+        report.error(f"{body_path}:1", f"body file is empty (expected '# {task_id}')")
+    except (OSError, ValueError) as e:
+        report.error(str(body_path), f"cannot read body file: {_sanitize_log(str(e)[:500])}")
+
+
+def _validate_references(
+    tasks: list, task_ids: set[str], index_path: Path, report: Report
+) -> None:
+    """Invariant 6: reference integrity for depends_on / surfaced_by / whitelist."""
+    for idx, task in enumerate(tasks):
+        if not isinstance(task, dict):
+            continue
+        tid = task.get("id") if isinstance(task.get("id"), str) else "?"
+        loc = f"{index_path}: tasks[{idx}] ({_sanitize_log(tid)})"
+
+        for field_name, allow_external in (
+            ("depends_on", False),
+            ("surfaced_by", False),
+            ("whitelist", True),
+        ):
+            refs = task.get(field_name)
+            if not isinstance(refs, list):
+                continue
+            for ref in refs:
+                if not isinstance(ref, str):
+                    report.error(loc, f"{field_name} entry must be a string, got {_sanitize_log(type(ref).__name__)}")
+                    continue
+                if ref in task_ids:
+                    continue
+                if allow_external and _BATCH_EXTERNAL_RE.match(ref):
+                    continue
+                if field_name == "surfaced_by" and ref == _IMPORTED_SENTINEL:
+                    continue
+                if allow_external:
+                    extra = " (or external BATCH-NNN ref)"
+                elif field_name == "surfaced_by":
+                    extra = " (or the 'imported' provenance sentinel)"
+                else:
+                    extra = ""
+                report.error(
+                    loc,
+                    f"{field_name} references unknown task id '{_sanitize_log(ref)}'{extra}",
+                )
+
+
+def _validate_orphans(base_dir: Path, tasks: list, index_path: Path, report: Report) -> None:
+    """Invariant 4: every .md file under open/, deferred/, archive/ is indexed."""
+    referenced: set[str] = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        for field_name in ("body", "archive_summary"):
+            v = task.get(field_name)
+            if isinstance(v, str) and v:
+                # Normalize to realpath for comparison.
+                if v.startswith("tasks/"):
+                    candidate = base_dir.parent / v
+                else:
+                    candidate = base_dir / v
+                referenced.add(os.path.realpath(str(candidate)))
+
+    for sub in ("open", "deferred", "archive"):
+        sub_dir = base_dir / sub
+        if not sub_dir.is_dir():
+            continue
+        for md in sub_dir.glob("*.md"):
+            # Phase summaries (e.g., _phase_6.md) only need to be referenced
+            # by archive_summary, which is already in `referenced`.
+            real = os.path.realpath(str(md))
+            if real in referenced:
+                continue
+            if sub == "archive" and _PHASE_SUMMARY_RE.match(md.name):
+                report.error(
+                    f"{md}:1",
+                    "phase summary file is not referenced by any task's archive_summary",
+                )
+            else:
+                report.error(
+                    f"{md}:1",
+                    "orphan body file — not referenced by any task in index.yml",
+                )
+
+
+def _scan_secrets(base_dir: Path, report: Report) -> None:
+    """Invariant 11: warn-only secret pattern scan of tasks/**/*.md."""
+    for md in base_dir.rglob("*.md"):
+        try:
+            with open(md, "r", encoding="utf-8", errors="replace") as fh:
+                for lineno, line in enumerate(fh, start=1):
+                    _check_secret_line(md, lineno, line, report)
+        except OSError as e:
+            report.warn(str(md), f"could not scan for secrets: {_sanitize_log(str(e)[:500])}")
+
+
+def _check_secret_line(path: Path, lineno: int, line: str, report: Report) -> None:
+    if _AWS_ACCESS_KEY_RE.search(line):
+        report.warn(f"{path}:{lineno}", "matches AWS access key pattern (AKIA...)")
+    if _SK_PREFIX_RE.search(line):
+        report.warn(f"{path}:{lineno}", "matches sk- prefixed token pattern")
+    # Long hex check last because it's the noisiest.
+    if _LONG_HEX_RE.search(line):
+        report.warn(f"{path}:{lineno}", "contains long hex string (>=32 chars)")
+
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+def render(report: Report, quiet: bool) -> None:
+    if not quiet or not report.ok:
+        for f in report.errors:
+            print(f.format())
+        for f in report.warnings:
+            print(f.format())
+
+    if report.ok and not quiet:
+        print(
+            f"OK: {report.task_count} tasks across {report.phase_count} phases, "
+            f"0 errors, {len(report.warnings)} warnings"
+        )
+    elif not report.ok:
+        # Always print a summary line on failure, even in quiet mode.
+        print(
+            f"FAIL: {report.task_count} tasks across {report.phase_count} phases, "
+            f"{len(report.errors)} errors, {len(report.warnings)} warnings"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Self-test
+# ---------------------------------------------------------------------------
+_VALID_INDEX = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "Done phase"
+    status: done
+    current_focus: false
+  - number: 2
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-ALPHA
+    title: "Alpha task"
+    phase: 2
+    status: open
+    effort: Medium
+    blast_radius: single-module
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-ALPHA.md
+
+  - id: TECH-BETA
+    title: "Beta task"
+    phase: 2
+    status: open
+    effort: Low
+    blast_radius: single-file
+    user_action: true
+    depends_on: [FEAT-ALPHA]
+    surfaced_by: []
+    whitelist: [BATCH-42]
+    body: tasks/open/TECH-BETA.md
+
+  - id: FEAT-DONE
+    title: "Done task (blast_radius intentionally omitted — legacy done is exempt)"
+    phase: 1
+    status: done
+    completed_date: "2026-01-15"
+    archive_summary: tasks/archive/_phase_1.md
+"""
+
+_VALID_BODY_ALPHA = """\
+# FEAT-ALPHA
+
+## Context
+Alpha.
+"""
+
+_VALID_BODY_BETA = """\
+# TECH-BETA
+
+## Context
+Beta.
+"""
+
+_VALID_PHASE_SUMMARY = """\
+# Phase 1 summary
+
+Done.
+"""
+
+_BAD_INDEX = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "P1"
+    status: in_progress
+    current_focus: true
+  - number: 2
+    title: "P2"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-DUP
+    title: "Dup 1"
+    phase: 1
+    status: open
+    effort: Medium
+    user_action: false
+    depends_on: [FEAT-MISSING]
+    surfaced_by: []
+    body: tasks/open/FEAT-DUP.md
+
+  - id: FEAT-DUP
+    title: "Dup 2"
+    phase: 1
+    status: open
+    effort: Medium
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-DUP.md
+"""
+
+_BAD_BODY = """\
+# FEAT-DUP
+
+body.
+"""
+
+# Drifted-status fixture (ISSUE-0009): a done task whose body still lives under
+# open/ — the half-migrated state Step 4c's prefix-agnostic heredoc + this
+# validator invariant prevent from shipping.
+_DRIFTED_STATUS_INDEX = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "P1"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-DRIFT
+    title: "Drifted task"
+    phase: 1
+    status: done
+    completed_date: "2026-05-14"
+    body: tasks/open/FEAT-DRIFT.md
+"""
+
+_DRIFTED_STATUS_BODY = """\
+# FEAT-DRIFT
+
+drift.
+"""
+
+# Phase 19 fixtures — blast_radius v1-optional / v2-required contract.
+_BLAST_RADIUS_V1_OPTIONAL_INDEX = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-WITH-BR
+    title: "Task that declares blast_radius"
+    phase: 1
+    status: open
+    effort: Medium
+    blast_radius: single-file
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-WITH-BR.md
+
+  - id: FEAT-NO-BR
+    title: "Task that omits blast_radius (legal at v1)"
+    phase: 1
+    status: open
+    effort: Low
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-NO-BR.md
+"""
+
+_BLAST_RADIUS_V1_BODY_WITH = """\
+# FEAT-WITH-BR
+
+br set.
+"""
+
+_BLAST_RADIUS_V1_BODY_WITHOUT = """\
+# FEAT-NO-BR
+
+br omitted.
+"""
+
+_BLAST_RADIUS_V2_REQUIRED_INDEX = """\
+schema_version: 2
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-V2
+    title: "v2 task with blast_radius"
+    phase: 1
+    status: open
+    effort: Medium
+    blast_radius: cross-module
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-V2.md
+"""
+
+_BLAST_RADIUS_V2_BODY = """\
+# FEAT-V2
+
+v2.
+"""
+
+_BLAST_RADIUS_V2_MISSING_INDEX = """\
+schema_version: 2
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-MISSING-BR
+    title: "v2 open task missing blast_radius (should fail)"
+    phase: 1
+    status: open
+    effort: Medium
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-MISSING-BR.md
+"""
+
+_BLAST_RADIUS_V2_MISSING_BODY = """\
+# FEAT-MISSING-BR
+
+missing br.
+"""
+
+_BLAST_RADIUS_BAD_VALUE_INDEX = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-BAD-BR
+    title: "Task with out-of-enum blast_radius (must fail at v1 too)"
+    phase: 1
+    status: open
+    effort: Medium
+    blast_radius: enormous
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-BAD-BR.md
+"""
+
+_BLAST_RADIUS_BAD_BODY = """\
+# FEAT-BAD-BR
+
+bad br.
+"""
+
+# Phase 35 fixtures — manual_smoke field warn-only heading-presence check.
+_MANUAL_SMOKE_INDEX = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-SMOKE-WITH
+    title: "Smoke task with documented heading"
+    phase: 1
+    status: open
+    effort: Medium
+    user_action: false
+    manual_smoke: true
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-SMOKE-WITH.md
+
+  - id: FEAT-SMOKE-WITHOUT
+    title: "Smoke task missing heading (should warn)"
+    phase: 1
+    status: open
+    effort: Medium
+    user_action: false
+    manual_smoke: true
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-SMOKE-WITHOUT.md
+
+  - id: FEAT-NO-SMOKE
+    title: "Task without manual_smoke (no check fires)"
+    phase: 1
+    status: open
+    effort: Low
+    user_action: false
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-NO-SMOKE.md
+"""
+
+_MANUAL_SMOKE_BODY_WITH = """\
+# FEAT-SMOKE-WITH
+
+## Context
+needs a browser smoke.
+
+## Manual smoke required
+1. Open localhost:3000/...
+2. Verify thing.
+"""
+
+_MANUAL_SMOKE_BODY_WITHOUT = """\
+# FEAT-SMOKE-WITHOUT
+
+## Context
+manual_smoke set but no smoke heading.
+"""
+
+_MANUAL_SMOKE_BODY_PLAIN = """\
+# FEAT-NO-SMOKE
+
+## Context
+nothing special.
+"""
+
+_MANUAL_SMOKE_BAD_TYPE_INDEX = """\
+schema_version: 1
+
+phases:
+  - number: 1
+    title: "Active phase"
+    status: in_progress
+    current_focus: true
+
+tasks:
+  - id: FEAT-SMOKE-BADTYPE
+    title: "manual_smoke is a string, not bool — should hard-fail"
+    phase: 1
+    status: open
+    effort: Low
+    user_action: false
+    manual_smoke: "yes"
+    depends_on: []
+    surfaced_by: []
+    body: tasks/open/FEAT-SMOKE-BADTYPE.md
+"""
+
+_MANUAL_SMOKE_BAD_TYPE_BODY = """\
+# FEAT-SMOKE-BADTYPE
+
+## Manual smoke required
+yes.
+"""
+
+def _write(p: Path, content: str) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(content)
+
+
+def _build_valid_fixture(root: Path) -> Path:
+    tasks_dir = root / "tasks"
+    _write(tasks_dir / "index.yml", _VALID_INDEX)
+    _write(tasks_dir / "open" / "FEAT-ALPHA.md", _VALID_BODY_ALPHA)
+    _write(tasks_dir / "open" / "TECH-BETA.md", _VALID_BODY_BETA)
+    _write(tasks_dir / "archive" / "_phase_1.md", _VALID_PHASE_SUMMARY)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def _build_bad_fixture(root: Path) -> Path:
+    tasks_dir = root / "tasks"
+    _write(tasks_dir / "index.yml", _BAD_INDEX)
+    _write(tasks_dir / "open" / "FEAT-DUP.md", _BAD_BODY)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def _build_drifted_status_fixture(root: Path) -> Path:
+    """ISSUE-0009: status=done with body under open/ must fail validation."""
+    tasks_dir = root / "tasks"
+    _write(tasks_dir / "index.yml", _DRIFTED_STATUS_INDEX)
+    _write(tasks_dir / "open" / "FEAT-DRIFT.md", _DRIFTED_STATUS_BODY)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def _build_blast_radius_v1_optional_fixture(root: Path) -> Path:
+    """Phase 19: at schema_version 1, blast_radius is optional. Both tasks pass."""
+    tasks_dir = root / "tasks"
+    _write(tasks_dir / "index.yml", _BLAST_RADIUS_V1_OPTIONAL_INDEX)
+    _write(tasks_dir / "open" / "FEAT-WITH-BR.md", _BLAST_RADIUS_V1_BODY_WITH)
+    _write(tasks_dir / "open" / "FEAT-NO-BR.md", _BLAST_RADIUS_V1_BODY_WITHOUT)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def _build_blast_radius_v2_required_fixture(root: Path) -> Path:
+    """Phase 19: at schema_version 2, blast_radius on open task is required + valid."""
+    tasks_dir = root / "tasks"
+    _write(tasks_dir / "index.yml", _BLAST_RADIUS_V2_REQUIRED_INDEX)
+    _write(tasks_dir / "open" / "FEAT-V2.md", _BLAST_RADIUS_V2_BODY)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def _build_blast_radius_v2_missing_fixture(root: Path) -> Path:
+    """Phase 19: at schema_version 2, open task missing blast_radius must fail."""
+    tasks_dir = root / "tasks"
+    _write(tasks_dir / "index.yml", _BLAST_RADIUS_V2_MISSING_INDEX)
+    _write(tasks_dir / "open" / "FEAT-MISSING-BR.md", _BLAST_RADIUS_V2_MISSING_BODY)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def _build_blast_radius_bad_value_fixture(root: Path) -> Path:
+    """Phase 19: an out-of-enum blast_radius must fail at v1 too (enum is always enforced when present)."""
+    tasks_dir = root / "tasks"
+    _write(tasks_dir / "index.yml", _BLAST_RADIUS_BAD_VALUE_INDEX)
+    _write(tasks_dir / "open" / "FEAT-BAD-BR.md", _BLAST_RADIUS_BAD_BODY)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def _build_manual_smoke_fixture(root: Path) -> Path:
+    """Phase 35: manual_smoke heading-presence warn-only check + no-field control."""
+    tasks_dir = root / "tasks"
+    _write(tasks_dir / "index.yml", _MANUAL_SMOKE_INDEX)
+    _write(tasks_dir / "open" / "FEAT-SMOKE-WITH.md", _MANUAL_SMOKE_BODY_WITH)
+    _write(tasks_dir / "open" / "FEAT-SMOKE-WITHOUT.md", _MANUAL_SMOKE_BODY_WITHOUT)
+    _write(tasks_dir / "open" / "FEAT-NO-SMOKE.md", _MANUAL_SMOKE_BODY_PLAIN)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def _build_manual_smoke_bad_type_fixture(root: Path) -> Path:
+    """Phase 35: manual_smoke field with non-bool type is a hard error."""
+    tasks_dir = root / "tasks"
+    _write(tasks_dir / "index.yml", _MANUAL_SMOKE_BAD_TYPE_INDEX)
+    _write(tasks_dir / "open" / "FEAT-SMOKE-BADTYPE.md", _MANUAL_SMOKE_BAD_TYPE_BODY)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def _build_placeholder_lock_fixture(root: Path) -> Path:
+    """Expired-placeholder lock warning: one row per state the check separates.
+
+    Warns: STALE (expired + placeholder) and BATCH-3 (the same, batch lock).
+    Silent: PARKED (annotated + extended), FILLED (expired, summary written),
+    FRESH (placeholder, not yet expired).
+    """
+    tasks_dir = root / "tasks"
+    rows = ("STALE", "PARKED", "FILLED", "FRESH")
+    entries = "".join(
+        f"  - id: FEAT-LOCK-{r}\n    title: \"lock {r}\"\n    phase: 1\n"
+        f"    status: in_progress\n    effort: Low\n    user_action: false\n"
+        f"    depends_on: []\n    surfaced_by: []\n    body: tasks/open/FEAT-LOCK-{r}.md\n"
+        for r in rows
+    )
+    _write(tasks_dir / "index.yml",
+           "schema_version: 1\n\nphases:\n  - number: 1\n    title: \"P\"\n"
+           "    status: in_progress\n    current_focus: true\n\ntasks:\n" + entries)
+    for r in rows:
+        _write(tasks_dir / "open" / f"FEAT-LOCK-{r}.md", f"# FEAT-LOCK-{r}\n\nbody.\n")
+    placeholder = LOCK_PLAN_SUMMARY_PLACEHOLDER
+    locks = {
+        "FEAT-LOCK-STALE": ("2020-01-01T00:00:00Z", placeholder),
+        "FEAT-LOCK-PARKED": ("2999-01-01T00:00:00Z", "PARKED: blocked on vendor API key"),
+        "FEAT-LOCK-FILLED": ("2020-01-01T00:00:00Z", "wire the importer"),
+        "FEAT-LOCK-FRESH": ("2999-01-01T00:00:00Z", placeholder),
+        "BATCH-3": ("2020-01-01T00:00:00Z", placeholder),
+    }
+    for claim, (expires, summary) in locks.items():
+        _write(root / "sysop/runtime/locks" / f"{claim}.lock",
+               f"task_id: {claim}\nstatus: in_progress\nexpires: {expires}\n"
+               f"plan_summary: {summary}\nnotes:\n")
+    return tasks_dir
+
+
+def _build_forward_compat_fixture(root: Path) -> Path:
+    """Decision 2: schema_version > MIN_SCHEMA_VERSION must be accepted."""
+    tasks_dir = root / "tasks"
+    _write(tasks_dir / "index.yml", _VALID_INDEX.replace("schema_version: 1", "schema_version: 2", 1))
+    _write(tasks_dir / "open" / "FEAT-ALPHA.md", _VALID_BODY_ALPHA)
+    _write(tasks_dir / "open" / "TECH-BETA.md", _VALID_BODY_BETA)
+    _write(tasks_dir / "archive" / "_phase_1.md", _VALID_PHASE_SUMMARY)
+    (root / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+    return tasks_dir
+
+
+def _self_test() -> int:
+    print("Running validator self-test...")
+    failures: list[str] = []
+
+    # Valid fixture
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_valid_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        if not report.ok:
+            failures.append("valid fixture failed validation:")
+            for f in report.errors:
+                failures.append("  " + f.format())
+        else:
+            print("  valid fixture: OK")
+
+    # Forward-compat fixture (Decision 2): schema_version: 2 must also pass.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_forward_compat_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        if not report.ok:
+            failures.append("forward-compat fixture (schema_version: 2) failed validation:")
+            for f in report.errors:
+                failures.append("  " + f.format())
+        else:
+            print("  forward-compat fixture (schema_version: 2): OK")
+
+    # Bad fixture
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_bad_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        if report.ok:
+            failures.append("bad fixture passed validation (expected failure)")
+        else:
+            messages = " | ".join(f.message for f in report.errors)
+            expected_substrings = [
+                "duplicate task id",
+                "depends_on references unknown task id 'FEAT-MISSING'",
+                "exactly one phase must have current_focus: true",
+            ]
+            missing = [s for s in expected_substrings if s not in messages]
+            if missing:
+                failures.append(
+                    "bad fixture failed but missing expected errors: " + ", ".join(missing)
+                )
+                failures.append("  actual errors:")
+                for f in report.errors:
+                    failures.append("    " + f.format())
+            else:
+                print("  bad fixture: correctly rejected with expected errors")
+
+    # Drifted-status fixture (ISSUE-0009): status=done with body under open/.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_drifted_status_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        if report.ok:
+            failures.append("drifted-status fixture passed validation (expected failure)")
+        else:
+            messages = " | ".join(f.message for f in report.errors)
+            if "status=done but body path contains 'open/' segment" not in messages:
+                failures.append(
+                    "drifted-status fixture failed but missing the status-vs-directory error"
+                )
+                failures.append("  actual errors:")
+                for f in report.errors:
+                    failures.append("    " + f.format())
+            else:
+                print("  drifted-status fixture (ISSUE-0009): correctly rejected")
+
+    # Phase 19: blast_radius v1-optional fixture — both with/without pass.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_blast_radius_v1_optional_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        if not report.ok:
+            failures.append("blast_radius v1-optional fixture failed validation:")
+            for f in report.errors:
+                failures.append("  " + f.format())
+        else:
+            print("  blast_radius v1-optional fixture (Phase 19): OK")
+
+    # Phase 19: blast_radius v2-required fixture — passes with valid value.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_blast_radius_v2_required_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        if not report.ok:
+            failures.append("blast_radius v2-required fixture failed validation:")
+            for f in report.errors:
+                failures.append("  " + f.format())
+        else:
+            print("  blast_radius v2-required fixture (Phase 19): OK")
+
+    # Phase 19: blast_radius v2-missing fixture — must fail with clear message.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_blast_radius_v2_missing_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        if report.ok:
+            failures.append("blast_radius v2-missing fixture passed (expected failure)")
+        else:
+            messages = " | ".join(f.message for f in report.errors)
+            if "requires 'blast_radius'" not in messages:
+                failures.append(
+                    "blast_radius v2-missing fixture failed but missing the requires-blast_radius error"
+                )
+                failures.append("  actual errors:")
+                for f in report.errors:
+                    failures.append("    " + f.format())
+            else:
+                print("  blast_radius v2-missing fixture (Phase 19): correctly rejected")
+
+    # Phase 19: blast_radius bad-value fixture — out-of-enum must fail even at v1.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_blast_radius_bad_value_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        if report.ok:
+            failures.append("blast_radius bad-value fixture passed (expected failure)")
+        else:
+            messages = " | ".join(f.message for f in report.errors)
+            if "'blast_radius' must be one of" not in messages:
+                failures.append(
+                    "blast_radius bad-value fixture failed but missing the enum-membership error"
+                )
+                failures.append("  actual errors:")
+                for f in report.errors:
+                    failures.append("    " + f.format())
+            else:
+                print("  blast_radius bad-value fixture (Phase 19): correctly rejected")
+
+    # Phase 35: manual_smoke heading-presence — must PASS validation overall
+    # (warn-only) AND must emit a warning naming FEAT-SMOKE-WITHOUT, AND must
+    # NOT emit a warning naming FEAT-SMOKE-WITH or FEAT-NO-SMOKE.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_manual_smoke_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        if not report.ok:
+            failures.append("manual_smoke fixture failed validation (warn-only check must not block):")
+            for f in report.errors:
+                failures.append("  " + f.format())
+        else:
+            warn_blob = " | ".join(f.format() for f in report.warnings)
+            missing_warn = "FEAT-SMOKE-WITHOUT" not in warn_blob or "manual_smoke: true but body lacks" not in warn_blob
+            spurious_warn = (
+                "FEAT-SMOKE-WITH " in warn_blob and "manual_smoke" in warn_blob
+            ) or (
+                "FEAT-NO-SMOKE" in warn_blob and "manual_smoke" in warn_blob
+            )
+            if missing_warn:
+                failures.append("manual_smoke fixture missing expected warning for FEAT-SMOKE-WITHOUT")
+                failures.append("  actual warnings:")
+                for f in report.warnings:
+                    failures.append("    " + f.format())
+            elif spurious_warn:
+                failures.append("manual_smoke fixture has spurious warning on a task that should not warn")
+                failures.append("  actual warnings:")
+                for f in report.warnings:
+                    failures.append("    " + f.format())
+            else:
+                print("  manual_smoke fixture (Phase 35): correctly warned (warn-only)")
+
+    # Phase 35: manual_smoke with non-bool type — hard error.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_manual_smoke_bad_type_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        if report.ok:
+            failures.append("manual_smoke bad-type fixture passed (expected failure)")
+        else:
+            messages = " | ".join(f.message for f in report.errors)
+            if "'manual_smoke' must be bool" not in messages:
+                failures.append("manual_smoke bad-type fixture failed but missing the type error")
+                failures.append("  actual errors:")
+                for f in report.errors:
+                    failures.append("    " + f.format())
+            else:
+                print("  manual_smoke bad-type fixture (Phase 35): correctly rejected")
+
+    # Expired lock still carrying the seeded plan_summary — warn-only, and it
+    # must separate the two warned rows from the three silent ones.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        tasks_dir = _build_placeholder_lock_fixture(root)
+        report = validate(tasks_dir, project_root=root)
+        flagged = sorted(
+            claim for claim in ("FEAT-LOCK-STALE", "FEAT-LOCK-PARKED", "FEAT-LOCK-FILLED",
+                                "FEAT-LOCK-FRESH", "BATCH-3")
+            if any(f"claim {claim} expired" in f.message for f in report.warnings)
+        )
+        if not report.ok:
+            failures.append("placeholder-lock fixture failed validation (warn-only check must not block):")
+            for f in report.errors:
+                failures.append("  " + f.format())
+        elif flagged != ["BATCH-3", "FEAT-LOCK-STALE"]:
+            failures.append(f"placeholder-lock fixture warned for {flagged}, expected BATCH-3 + FEAT-LOCK-STALE")
+        else:
+            print("  placeholder-lock fixture: warned for the two expired placeholder locks only")
+
+    if failures:
+        print("SELF-TEST FAILED:")
+        for line in failures:
+            print(line)
+        return 1
+    print("SELF-TEST OK")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def _default_tasks_dir() -> Path:
+    # <repo>/sysop/scripts/validate_tasks.py → <repo>/tasks (Phase 128).
+    return Path(__file__).resolve().parents[2] / "tasks"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Validate tasks/index.yml and per-task body files."
+    )
+    parser.add_argument(
+        "--path",
+        type=str,
+        default=None,
+        help="Path to a tasks/ directory (default: <repo>/tasks), e.g. an "
+        "export of the staged tree. Every invariant still applies, including "
+        "the in-progress lock check.",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Only print on failure (suitable for pre-commit hooks).",
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run internal consistency check against synthetic fixtures.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.self_test:
+        return _self_test()
+
+    base_dir = Path(args.path).resolve() if args.path else _default_tasks_dir()
+    if not base_dir.is_dir():
+        print(f"ERROR: tasks directory not found: {base_dir}")
+        return 2
+
+    # project_root is the parent of tasks/, under --path as without it. --path
+    # does NOT exempt a tree from the in-progress lock check (Invariant 9), and
+    # an earlier version of this comment said it did (`Q-059`). The locks dir is
+    # resolved from project_root by `_resolve_canonical_locks_dir`:
+    #
+    #   * inside any checkout of a repo, through `git rev-parse
+    #     --git-common-dir` to the MAIN repo's `sysop/runtime/locks/` — so a
+    #     staged tree kept inside the repo is checked against the real locks;
+    #   * outside every repo, `<project_root>/sysop/runtime/locks/` — beside the
+    #     tree, where a bare export has none, so every in_progress task fails.
+    #
+    # Sysop's pre-commit example (`git-hooks/examples/pre-commit-tasks-validate.example`)
+    # handles the second case by copying the real locks in beside its export.
+    # A caller that wants the gate without lock state (CI, where the locks are
+    # gitignored runtime) gets no escape hatch here, and must not read one in.
+    project_root = base_dir.parent
+
+    try:
+        report = validate(base_dir, project_root=project_root)
+    except Exception as e:  # noqa: BLE001 — top-level safety net
+        # Sanitize before printing in case the exception message embeds paths
+        # or other untrusted strings.
+        print(f"ERROR: validator crashed: {_sanitize_log(str(e)[:500])}")
+        return 2
+
+    render(report, quiet=args.quiet)
+    return 0 if report.ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

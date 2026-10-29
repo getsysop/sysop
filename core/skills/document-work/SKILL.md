@@ -1,0 +1,469 @@
+---
+name: document-work
+description: Commit, document, and prepare completed work for review
+model: opus
+---
+<!-- sysop:model-roles frontmatter=reasoning -->
+
+The "I'm done" skill. Commits code changes, writes documentation to the right files, and prepares everything for `/review-close`.
+
+> **Helper names** referenced in this skill (e.g., `_sanitize_log`, `useAbortableFetch`, `getDisplayError`, `redact_api_keys`, `shared_cli.py`) are placeholders — substitute the equivalent helpers from your project's `convention_map.md`. Worked examples may also reference specific batch numbers, file paths, or env-var names from the originating project; treat those as illustrations, not literal requirements.
+
+## Pre-flight: Permission Guard
+
+This skill ends with `git push -u origin HEAD`. Under `dontAsk` mode a missing push allow-rule halts the session after work is committed locally but before it reaches the remote — confusing because everything *looks* successful until the push step.
+
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
+
+- `Bash(git push -u origin:*)`
+- `Bash(python3 sysop/scripts/git_check.py:*)` — Step 5's Rule A check, chained into the push
+- `Bash(git push origin:*)`
+- `Bash(python3 -:*)` — required by Step 3b's heredoc'd follow-up-stub check
+- `Bash(python3 sysop/scripts/pending_doc_hold.py:*)` — Step 3 step 2b's `guard`
+
+If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "pushes the documented branch upstream as the final step before `/review-close`, after Step 3b's `python3` heredoc verifies named follow-up task IDs resolve in `tasks/index.yml`"). Do not proceed — unless the guard's step 3 mode check applies.
+
+If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and continue.
+
+## Step 0: Parse Arguments
+
+Parse `$ARGUMENTS` for the optional `--non-interactive` flag:
+
+- **`--non-interactive`** → invoked by an `/auto-build` execution agent (Phase 6e), NOT by a human. Affects three steps later in this skill:
+  - **Step 2 (Commit)** — derive the commit message from `tasks/index.yml § tasks[]` `title:` + `<TASK_ID>` (resolve `<TASK_ID>` from the current branch name) rather than asking the human.
+  - **Step 4 (Verify)** — skip the human-confirm prompt; print the pending-docs contents to stdout (so the parent's transcript captures them) and proceed to Step 5.
+  - **Step 5 (Prepare)** — do NOT `git push`. `/review-close` owns the push from the orchestrator-driven flow.
+- **Bare invocation (no flag)** → interactive mode (default behavior). All three steps prompt or push as documented.
+
+Step 3b (HARD FAIL follow-up stub check) is identical in both modes — non-interactive callers honor the gate the same way.
+
+A direct human invocation of `/document-work --non-interactive` is not blocked, but it's intended for orchestrator use; behavior in a non-orchestrator context is "skip the prompts" and may not produce the result a human expects.
+
+## Step 1: Gather Context
+
+Run these in parallel:
+- `git status` — check for uncommitted changes
+- `git log --oneline -5` — recent commits
+- `git branch --show-current` — current branch
+- `git diff --stat` — unstaged changes summary
+- `git diff --cached --stat` — staged changes summary
+
+Also read `tasks/index.yml` to check if the work maps to a task ID. The body for any referenced ID lives **wherever that entry's `body:` field points**, resolved relative to `tasks/` — normally `tasks/open/<TASK-ID>.md`. Do **not** resolve the path from the entry's `status:`: a claim does not move the body, there is no `tasks/in_progress/` directory in any shipped layout, and a flat `tasks/` layout is valid too (`tasks/schema.md`), so `status` predicts the directory for none of the statuses this skill runs against.
+
+## Step 0: Resolve the default branch
+
+**Before any step below, run this once and substitute the name it prints wherever a later
+step writes `<default branch>`:**
+
+```bash
+bash sysop/scripts/default_branch.sh
+```
+
+It is not `main` on every consumer. **If it exits non-zero, stop** — do not
+substitute an empty value: `git diff ...HEAD` and `git rev-list --count ..<branch>` both
+exit 0 on an empty operand, the second printing `0`, so an unresolved name reads as
+"no changes" rather than as an error. This step is Step 0 because four of this skill's
+five sites are upstream of Step 5, where the instruction used to live.
+
+## Step 1b: Simplify Pass
+
+Review the task's full change surface — committed branch work plus anything staged or unstaged — for inline quality improvements:
+
+1. Read `.claude/convention_map.md`. For each file in the diff, note the applicable conventions (4-7 per file section).
+2. Read the **full change surface this task introduces**, not just the uncommitted remainder: `git diff <default branch>...HEAD` (three dots — the committed branch work; on the canonical path the `/claim-task` Step 7e executor has **already committed everything**, so the two commands below alone inspect an empty diff and this whole pass silently reviews nothing) plus `git diff --cached` and `git diff` (anything not yet committed, the solo-path case). Check all of it against:
+   - **Convention map violations** — the 4-7 conventions listed for each file's matching section
+   - **Duplicated logic** — code that reimplements an existing helper (e.g., `_latest_obs_sql()`, `_escape_like()`, `getDisplayError()`, `useAbortableFetch()`, `isSafeHref()`, `validate_identifier()`)
+   - **Unnecessary complexity** — verbose patterns that can be simplified without changing behavior
+3. Fix any issues found inline — edit the source files directly, citing the convention map section
+4. If nothing needs simplifying, proceed silently to Step 2
+
+This step catches reuse and quality issues *before* `/review-close`'s review gate sees them — on the canonical path the work is already committed, so "before" means before the merge, not before the commit.
+
+## Step 1c: UI Verification
+
+If the change surface touches `frontend/` — the same full basis as Step 1b:
+`git diff <default branch>...HEAD` plus staged + unstaged (on the
+canonical path the work is already committed, so a staged+unstaged-only test
+never fires) — run the shared UI verification procedure at
+`.claude/skills/_shared/ui-verify.md` before committing. Hard-fail on console errors; warn on console warnings; skip
+cleanly if the dev server is not running.
+
+This is the same gate `/claim-task` Step 7e's executor runs internally
+(post-fix UI verification). Re-running it here catches regressions introduced
+after the claim step (e.g., last-minute fixups or simplify-pass edits from
+Step 1b).
+
+If the gate fails, fix the regression and re-run Step 1b → 1c before
+proceeding to Step 2.
+
+## Step 2: Commit Code Changes
+
+Every close-out commit this step writes (or amends) MUST carry a `Doc-Work: <TASK_ID>` git trailer on a final line of the commit message body, separated from the body prose by one blank line. The trailer is the deterministic marker `/sitrep` uses to classify the branch as "doc-work done" without re-scanning subject heuristics. If the work closes multiple task IDs (rare — a single commit landing both a `FEAT-*` and a follow-up `TECH-*`), emit one `Doc-Work:` line per ID — git natively supports repeated trailer keys.
+
+```
+<type>: <title> (<TASK_ID>)
+
+<optional body prose>
+
+Doc-Work: <TASK_ID>
+Co-Authored-By: ...
+```
+
+**All trailers share one trailing paragraph — no blank line between them.** `git interpret-trailers --parse` only inspects the last paragraph of the commit body; if `Doc-Work:` sits in a paragraph of its own above `Co-Authored-By:` (or vice versa), parsing silently drops whichever line isn't in the final paragraph and `/sitrep` will misclassify the commit as "in progress." When you invoke `git commit --trailer "Doc-Work: ..."` or `git commit --amend --trailer ...`, git handles the placement correctly; the hazard is only when the commit message is hand-written end-to-end.
+
+If no `<TASK_ID>` can be derived from the branch (true adhoc work on `main` with no task entry), omit the trailer — `/sitrep` correctly classifies adhoc work as "not a task" via the absence of a lock and index entry.
+
+**Trailer placement on existing commits.** If Step 2 enters with no uncommitted changes (the executor in `/claim-task` Step 7e or another upstream step already committed), the most recent commit IS the close-out commit. Verify it carries `Doc-Work: <TASK_ID>` for the current branch's `<TASK_ID>` (resolved per the derivation rule below) by running:
+
+```bash
+git log -1 --format=%B | git interpret-trailers --parse | grep -q "^Doc-Work: <TASK_ID>$"
+```
+
+If the trailer is absent, **probe for an upstream first**:
+
+```bash
+git rev-parse --abbrev-ref --quiet '@{u}' >/dev/null 2>&1
+```
+
+- If the probe **fails** (no upstream — the normal `/claim-task` → `/document-work` → `/review-close` pipeline state, since the executor in `/claim-task` Step 7e's Executor Prompt hard-constrains "Do NOT push"), amend the most recent commit to add the trailer: `git commit --amend --no-edit --trailer "Doc-Work: <TASK_ID>"`. Safe because the commit has not been pushed yet (the worktree branch has no upstream until `/review-close` Step 4a pushes it).
+- If the probe **succeeds** (the branch already tracks a remote — e.g., `/document-work` invoked outside the claim-task pipeline on a pushed branch, or on `main` mid-direct-commit-flow), do **NOT** amend. Instead, write a fresh trailer-only commit so published history isn't rewritten: `git commit --allow-empty -m "chore: emit Doc-Work trailer (<TASK_ID>)" --trailer "Doc-Work: <TASK_ID>"`. `/sitrep` finds the trailer on this commit and classifies the branch identically to an amended one.
+
+This is the only Step-2 path that could use `--amend`, and the probe-then-branch shape hardens the no-upstream-yet pipeline invariant into a check that catches `/document-work` invocations outside the orchestrated flow before they can rewrite pushed history.
+
+**If invoked with `--non-interactive`** (Phase 6e execution agent): if there are uncommitted changes, stage tracked changes via `git add` (never add `.env`, credentials, or secrets) and commit with a derived message + trailer. Derive `<TASK_ID>` by matching the current branch name (`git branch --show-current`) against `tasks[].branch` first, then by lowercase-mapping the branch suffix back to a task ID (e.g., `tech/tech-foo` → `TECH-FOO`). Format: `<type>: <title> (<TASK_ID>)` for the subject, with `<type>` chosen from the ID prefix (FEAT → feat, TECH → tech, BUG → fix; for any other prefix, the conventional type that fits the change), and `Doc-Work: <TASK_ID>` as the final trailer line. If there are no uncommitted changes, apply the trailer-placement rule above to the most recent commit.
+
+**Interactive invocation (default):** if there are uncommitted changes (staged or unstaged):
+
+1. Show the user a summary of what will be committed
+2. Stage all tracked changes and relevant untracked files (`git add` specific files — never add `.env`, credentials, or secrets)
+3. Ask the user for a brief description of what was done if the changes aren't self-evident from context
+4. Derive `<TASK_ID>` from the current branch using the same resolution as `--non-interactive` (match `tasks[].branch` first, then lowercase-segment mapping). If a `<TASK_ID>` resolves, commit with a conventional message (`fix:`, `feat:`, `refactor:`, `docs:`, `test:`, etc.) AND a `Doc-Work: <TASK_ID>` trailer on the final line. If no `<TASK_ID>` resolves (adhoc on `main`), omit the trailer.
+
+If there are no uncommitted changes, apply the trailer-placement rule above to the most recent commit.
+
+## Step 3: Write Pending Documentation
+
+Instead of modifying shared documentation files directly (which causes merge conflicts when parallel branches merge), write a structured file to `sysop/runtime/pending-docs/`. The `/review-close` skill will consolidate these into the shared docs after merging.
+
+1. Create the `sysop/runtime/pending-docs/` directory if it doesn't exist: `mkdir -p sysop/runtime/pending-docs`
+2. Sanitize the branch name for the filename (replace `/` with `-`)\
+2b. **Choose the file, and carry any hold.** Run `python3 sysop/scripts/pending_doc_hold.py guard sysop/runtime/pending-docs/<sanitized-branch-name>.md`. **Write the path its `WRITE:` line names**, here and wherever the steps below say `<pending-doc path>`. It is the base name unless a close is holding that doc; then it is a `<name>--<n>.md` beside it, and the held doc is left alone. **On a `CARRY HOLD: <reason>` line, put `hold: "<reason>"` in the new doc**, writing any `"` in it as `\"`, and joining it with this doc's own reason into one value when there is one: the main checkout's copy of this doc is held, and Step 3b's collect refuses a doc that would drop the hold. Leave it out only when the human says that step is done, and then they clear main's copy first (`python3 sysop/scripts/pending_doc_hold.py clear <file name>`). **Any non-zero exit: stop and show the error.**
+3. Write `<pending-doc path>` (step 2b) with this YAML frontmatter, keeping `branch:` quoted and writing any `"` in the name as `\"` (unquoted, a name like `1234` or `2026-09-01` reads as a number or a date, and `/review-close` cannot match the doc to its branch):
+
+```yaml
+---
+branch: "<branch-name>"
+branch_tip: <full 40-char SHA — `git rev-parse HEAD`, run NOW>
+date: <YYYY-MM-DD>
+type: <feature|bugfix|ui-iteration|infrastructure|adhoc>
+roadmap_ids: [<FEAT-NNNN | TECH-NNNN | BUG-NNNN>, ...]
+review_task_ids: [<TASK-NNNN>, ...]
+summary: "<one-sentence description of the work, including key files affected>"
+---
+```
+
+> **`branch_tip:` is the commit this doc's `summary:` describes, and it is a provenance field, not a timestamp**. `/review-close` Step 3b compares it against the branch tip and **refuses to collect** a doc that later commits have overtaken — because Step 4c routes `summary:` into `PROJECT_STATUS.md` §6 in the same commit that flips the task to `done`, and a doc that no longer describes its branch writes a false statement into the durable record. `date:` cannot serve: it is day-granular and cannot see same-day drift, which is the whole of the reported case.
+>
+> **Stamp it here, at Step 3, and not earlier.** Step 2 is the last step that commits, unless a finding below is fixed or filed in Step 3 — Steps 3b through 6 create no commits, and the pending-doc is itself untracked (gitignored), so writing it does not move `HEAD`. That is what makes `git rev-parse HEAD` at this moment stable through the rest of the skill. **If you commit anything to the branch after this point, re-stamp it**; a stale value is exactly the defect the field exists to catch, and it stops the next close at **exit 6** rather than hiding — nothing collected, main untouched, the branch SKIP'd with its worktree intact so re-running this skill is still possible.
+>
+> **Full SHA, unabbreviated, and unquoted is fine** — a hex string parses as a YAML string and carries none of the shapes the `summary:` note below warns about. The reader validates it as an object name before handing it to git and reports anything else as unknown-not-stale, so a hand-mangled value degrades to the earlier behaviour rather than halting; that is a fallback, not a licence to omit the field.
+
+> **`summary:` is quoted, and the quotes are load-bearing — do not drop them.** This value is free-form prose written per-branch, and the shapes this workflow's own conventions invite are exactly the ones that break bare YAML. **Every one of the following shapes breaks unquoted, and each is exercised by `tests/test_pending_doc_integrity.py`** — the list is the claim, because a bare ratio over an unshipped corpus is a number a reader cannot check: a conventional-commit prefix (`fix: handle the rollback case`) and any other `": "` raise `ScannerError`; a leading `[` (`[FEAT-0001] add the guard`) raises `ParserError`; a leading `*` raises `ScannerError`. The quiet one is worse than the loud ones — a summary that cites an issue by number (`resolves` followed by a `#`-prefixed number) parses **successfully** and yields just the word `resolves`, because `#` opens a YAML comment, and that truncated summary is what lands in `PROJECT_STATUS.md`. `/auto-fix` and `/auto-judge` already quote this field (their templates emit a `:` and had to); this template is the one a human drives, and it was the one left bare. If the summary itself contains a double quote, escape it (`\"`) or switch the value to single quotes — do not solve it by removing the quoting.
+
+**`hold:` — only when this merge does not finish the task.** If a step outside this branch must still happen before a task in `roadmap_ids` may be marked `done` (a rollout, a check that can only run after deploy, a human step the body lists), add one line to the frontmatter: `hold: "<what is still to be done>"`, quoted like `summary:`. `/review-close` then merges the code and holds this doc, so the task stays `in_progress` until the human finishes the step and runs `python3 sysop/scripts/pending_doc_hold.py clear <TASK_ID>`. Omit the key otherwise, and never write it empty. **Do not use `user_action` for this:** that flag decides whether an agent may take the task, and it gets cleared for that reason. Never write `held_since:` either; `/review-close` stamps it.
+
+**Two ID namespaces — each independently optional.** `roadmap_ids` and `review_task_ids` capture distinct lifecycles and have different consumers; either or both may be `[]`.
+
+- **`roadmap_ids`** — IDs that live in `tasks/index.yml` (typically `FEAT-NNNN`, `TECH-NNNN`, `BUG-NNNN`). Consumed by `/review-close` Step 4c: each ID is round-tripped through `yaml.safe_load` to flip `status: done`, and its body file is `git mv`'d from `open/` (or `deferred/`) to `archive/`. An ID that doesn't match an entry in `tasks/index.yml` is silently skipped — so misclassifying review-task IDs here makes them invisible.
+- **`review_task_ids`** — IDs that live in `review_tasks.md` (typically `TASK-NNNN` from `/codebase-review` or `/security-audit`). **Documentary only** — never consulted programmatically by `/review-close`. Their actual closure happens in `/review-close` Step 4b via `bash sysop/scripts/close_batch.sh`, which reads `review_tasks.md` directly. The field exists so the PROJECT_STATUS entry can mention which review-queue tasks the work touched, and so a human reader can grep for the ID later.
+
+If the work closes both kinds of IDs (e.g., a feature that also resolves a review-queue task), populate both. If it closes neither (an adhoc commit), both stay `[]`.
+
+**Type selection** — set the type explicitly based on the intent of the work:
+
+| Type | When to use |
+|---|---|
+| `feature` | New user-facing functionality, `FEAT-*` task |
+| `bugfix` | Fixing broken behavior, `fix:` commits |
+| `ui-iteration` | Visual/UX changes to existing components |
+| `infrastructure` | `TECH-*`, `DATA-*`, `UX-*` tasks, tooling, pipeline |
+| `adhoc` | One-off work, no task ID |
+
+Set the type based on intent, not branch prefix — branch prefixes can mismatch.
+If multiple types could apply, use the primary one.
+
+**Do NOT** modify `PROJECT_STATUS.md`, `CHANGELOG.md`, `UI_Iterations.md`, `tasks/index.yml`, or `tasks/**/*.md` body files directly (with two exceptions, both named below). Status transitions on `tasks/index.yml` are owned by `/claim-task` and `/review-close`. **Filing a NEW follow-up task entry (id + body file under `tasks/open/`) IS allowed and is required when the work surfaces a follow-up that Step 3b would otherwise hard-fail on.**
+
+**Before filing one, fix it if you can — filing is not the default.** Each finding gets one of three outcomes; nothing is parked. This is the same rule the `/claim-task` and `/auto-build` executors run (Step 7e Sequence item 2b and Step 7c Sequence item 3‑tier respectively); it is restated here because `/document-work` is also invoked directly, outside either executor, and the decision to file is made *here* — Step 3b only verifies that something already decided-and-named actually exists.
+
+1. **Fix it in this branch** — whatever module it is in, and past a one-line change, as long as the close can still review the branch. Read the code before you change what it does, and add a test when the fix changes behaviour. **Never, at any size:** migrations, anything that writes to production, and auth or payment logic. Only the human's answer (below) can clear one, and the fix's `## Also fixed` line then ends `(approved: <YYYY-MM-DD>, "<the question as asked>")`. Record each fix as one line under an `## Also fixed` heading in the task body, per `tasks/schema.md` § *Also fixed* — which is the **one further exception** to the "do not modify `tasks/**/*.md` body files" rule above, alongside filing a new body.
+2. **File a task** only when it cannot be fixed now: it needs a design decision or a human action, it is too large to review in this branch, or it is on the never-list. Add it to an existing open task in that module before opening a new entry.
+3. **Drop it** when nothing is wrong: nothing is broken today, it is a preference or a hypothetical, or it is already handled. A real future condition goes in a comment or a test at the site, not in a ledger.
+
+**When an answer from the human would make it fixable** — a design choice, which of two readings is intended, permission for a never-list item — ask before you file. Interactive: ask with `AskUserQuestion`, as a menu with your recommended answer first, and make the fix on the answer. Under `--non-interactive`, or when no answer comes, file the task and write the question into its body with the fix you would make for each answer, so the next session starts from the question rather than re-deriving it.
+
+**A fix or a filing made here comes after Step 2's commit, so commit it yourself**: the fix, its `## Also fixed` line and any new task entry and body, in one commit on the branch carrying the `Doc-Work: <TASK_ID>` trailer (none when no `<TASK_ID>` resolves, as Step 2 does), then re-stamp `branch_tip:` in the pending-doc. Left uncommitted, it dirties the worktree and `/review-close` skips the branch.
+
+**`tasks/notes.md` is retired — write nothing to it**, and it is not a further exception to the do-not-modify rule above. A consumer's existing ledger is theirs to clear; leave it alone.
+
+A fix or a drop puts no `<PREFIX>-<NAME>` token into the pending-docs prose, so neither reaches Step 3b's gate at all: **that gate is a filed-task gate**, and an in-branch fix is invisible to it by construction. The record that keeps an in-branch fix honest is `## Also fixed` plus `/review-close` Step 2a reading the diff against the body, not this check.
+
+<!-- Routing logic (which shared docs to update based on type) lives in /review-close Step 4c -->
+<!-- Canonical process: WORKFLOW.md §2.4 (Documentation) -->
+
+## Step 3b: Follow-up Task Stub Check (HARD FAIL)
+
+The pending-docs body often names follow-up tasks like "filed as `TECH-FOO-BAR`" or "deferred to `BUG-BAZ`". Historically these were named in prose but no actual task stub was created — the follow-up rotted forever because `/next-task` never saw it.
+
+Run this check on the just-written pending-docs file. The source of truth is `tasks/index.yml` (see `tasks/schema.md`). All ID resolution and whitelist lookups go through it via `python3 - <<'PY'` heredoc; never grep the file as text.
+
+**Scope and skip conditions:**
+
+- If `tasks/index.yml` does NOT exist at the project root (consumer hasn't run `install_tasks_scaffold` or deleted the file), log `Follow-up check: skipped (no tasks/index.yml)` and continue. The gate only protects projects that have opted into the `tasks/` system.
+- If `tasks/index.yml` exists but has no entries under `tasks:` (or the file is empty), the discovered prefix set is empty and no tokens are scanned. Log `Follow-up check: 0 task IDs named (no prefixes in tasks/index.yml)` and continue.
+
+**Algorithm:**
+
+1. **Discover the prefix vocabulary dynamically** from `tasks/index.yml` — collect the leading `^[A-Z][A-Z0-9]*` segment of every `tasks[].id`. Sysop's vocabulary is consumer-extensible (`roadmap_ids` covers FEAT/TECH/BUG-style prefixes; consumers can add their own). Reading from the index keeps the gate framework-agnostic. The check has no opinion on which prefixes a project uses — it only enforces that named tokens matching those prefixes resolve. **Known limitation:** a pending-doc that mentions a token with a prefix NOT yet present in the index (e.g., the very first `BUG-*` mentioned before any `BUG-*` task is filed) slips through unchecked. Once at least one task with that prefix is filed, all future mentions are gated. This is intentional — the gate cannot distinguish a typo from a genuinely novel prefix without an explicit allow-list, and the workflow encourages "file the stub first" anyway.
+2. **Token scan** the pending-docs body (after splitting YAML frontmatter) for `\b(?:<prefix1>|<prefix2>|...)-[A-Z0-9][A-Z0-9-]+\b` using the prefix set from step 1. Strip duplicates. Preserve 1-based line numbers (in the body, not the full file) for the error message.
+3. **Build the resolution set** from `tasks/index.yml`:
+   - Parse with `yaml.safe_load` (never `yaml.load` / `yaml.full_load`).
+   - Treat every value of `tasks[].id` as a known task ID. Match is case-sensitive on the token itself.
+4. **Build the bypass set:**
+   - **Parent task IDs** — read `roadmap_ids:` from the pending-docs frontmatter (see Step 3 for namespace semantics). Every ID listed there is a parent (the heading the work is documented under) and is subtracted from the check.
+   - **Pending-docs `whitelist:` frontmatter** — read the optional `whitelist:` list from the same frontmatter. IDs there are skipped (used when the body intentionally mentions external/non-task IDs).
+   - **Per-task `whitelist:` in `tasks/index.yml`** — for each parent task ID, look up its entry in `tasks/index.yml` and union its `whitelist:` list (if present) into the bypass set. The field is defined in `tasks/schema.md` and may be absent on most tasks — treat missing as `[]`.
+5. **For each grepped token, fail if it is NOT in the resolution set AND NOT in the bypass set.** If any such tokens remain, HARD FAIL with this message, listing each missing token with its line number:
+   ```
+   /document-work: blocked. Pending docs name follow-up task IDs that aren't filed in tasks/index.yml:
+     - TECH-FOO-BAR (line N of pending-docs body)
+     - BUG-BAZ (line M of pending-docs body)
+
+   File a stub for each in tasks/index.yml + tasks/open/<TASK-ID>.md (per tasks/schema.md),
+   then re-run /document-work.
+
+   Stub minimum: an entry in tasks/index.yml (id, title, phase, status: open, effort, user_action,
+   depends_on: [], surfaced_by: [<parent task id>], body: open/<TASK-ID>.md) plus a body file under
+   tasks/open/ whose first heading is `# <TASK-ID>`. Cross-reference from the parent task's body if
+   appropriate.
+
+   Quote the title: title: "<the title>". Unquoted, YAML reads ` #` (space then hash) as the
+   start of a comment, so `title: Fix the widget #define` lands as `Fix the widget`. A follow-up
+   stub is filed FROM a review finding, so an issue or PR number in the title is the normal
+   case here — see tasks/README.md § Authoring an entry by hand for the entry shape.
+   ```
+   Do NOT proceed to Step 4. Block until the user files the stubs.
+6. If all tokens resolve (either in `tasks/index.yml` or via the bypass set), log `Follow-up check: <N> task IDs named, all resolved` and continue.
+
+**Quote every `title:` you write** — `title: "<the title>"`. This step is an authoring path, not just a gate: it *requires* the stub above, so the title it asks for is composed here, by hand, with no template to copy. Unquoted, YAML reads ` #` (space then hash) as the start of a comment, so `title: Fix the widget #define` lands on disk as `Fix the widget`, and the rest is gone the first time anything reads the file. The validator stays green, because what survives is still a legal title. **This step is the most exposed of the four authoring paths**, not the least: a follow-up stub is filed *from* a review finding, so an issue number, a PR number or a heading fragment in the title is the ordinary case rather than the edge one. The entry shape to copy is `tasks/README.md` § *Authoring an entry by hand*.
+
+**Reference implementation** (copy-pasteable; run from repo root after writing the pending-docs file):
+
+```bash
+# `python3` command word (not `.venv/bin/python3`, no PATH prefix, no `&&` compound) so
+# the allow-rule `Bash(python3 -:*)` matches as a single simple command. PyYAML — which
+# this heredoc imports — is resolved for venv-only consumers by the bootstrap below; the
+# pending-docs path (formerly a shell $PENDING assignment) is computed in-process too, so
+# the whole block is one command (BeanRider ISSUE-0049).
+python3 - <<'PY'
+import os, re, sys, subprocess
+try:
+    import yaml
+except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-0049)
+    import glob, os, subprocess
+    _sites = []
+    try:
+        _r = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+            env=dict((_k, _v) for _k, _v in os.environ.items()
+                 if _k not in ("GIT_DIR", "GIT_WORK_TREE",
+                               "GIT_COMMON_DIR", "GIT_INDEX_FILE")),
+        )
+        _g = _r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        _g = ""
+    for _root in ([os.path.dirname(os.path.abspath(_g))] if _g else []) + ["."]:
+        for _layout in (".venv", "venv"):
+            _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
+    sys.path[:0] = _sites
+    try:
+        import yaml
+    except ImportError:
+        print("ERROR: Step 3b requires PyYAML. Install it in the project venv "
+              "(e.g. `.venv/bin/pip install pyyaml` from the main checkout) — a "
+              "PEP-668 system Python refuses a bare `pip install`.", file=sys.stderr)
+        sys.exit(2)
+
+try:
+    branch = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
+except UnicodeDecodeError as e:
+    print(f"ERROR: the current branch name is not UTF-8 ({e})", file=sys.stderr)
+    sys.exit(2)
+# The doc Step 3 step 2b chose: `guard` names it again, since the doc it wrote is the
+# unstamped candidate (a held one is never chosen). Without the script nothing can have
+# written a sibling, so the base name is the doc.
+pending_path = f"sysop/runtime/pending-docs/{branch.replace('/', '-')}.md"
+_g, _hold = None, os.path.join("sysop", "scripts", "pending_doc_hold.py")
+if os.path.exists(_hold):
+    _g = subprocess.run([sys.executable, _hold, "guard", pending_path],
+                        capture_output=True, text=True, errors="replace")
+    pending_path = next((ln[len("WRITE: "):] for ln in _g.stdout.splitlines()
+                         if ln.startswith("WRITE: ")), "")
+if _g is not None and (_g.returncode != 0 or not pending_path):
+    print(f"ERROR: pending_doc_hold.py guard failed ({_g.returncode}): {_g.stderr.strip()}",
+          file=sys.stderr)
+    sys.exit(2)
+try:
+    with open(pending_path, encoding="utf-8") as f:
+        raw = f.read()
+except (OSError, UnicodeDecodeError) as e:
+    print(f"ERROR: {pending_path} could not be read ({type(e).__name__}: {e})", file=sys.stderr)
+    sys.exit(2)
+
+# Split YAML frontmatter from body
+fm = {}
+body = raw
+m = re.match(r"\ufeff?---\n(.*?)\n---(?:\n|$)", raw, re.DOTALL)   # /review-close Step 3b's reader
+if m:
+    try:
+        fm = yaml.safe_load(m.group(1)) or {}
+        if not isinstance(fm, dict):
+            raise ValueError(f"frontmatter is a {type(fm).__name__}, not a mapping")
+    except Exception as e:
+        print(f"ERROR: {pending_path} could not be parsed ({type(e).__name__}: {e})", file=sys.stderr)
+        sys.exit(2)
+    body = raw[m.end():]
+
+# Skip if no tasks/ system
+if not os.path.exists("tasks/index.yml"):
+    print("Follow-up check: skipped (no tasks/index.yml)")
+    sys.exit(0)
+
+try:
+    with open("tasks/index.yml", encoding="utf-8") as f:
+        idx = yaml.safe_load(f) or {}
+    if not isinstance(idx, dict) or not isinstance(idx.get("tasks") or [], list):
+        raise ValueError("the index is not a mapping whose tasks: is a list")
+except Exception as e:
+    print(f"ERROR: tasks/index.yml could not be read ({type(e).__name__}: {e})", file=sys.stderr)
+    sys.exit(2)
+tasks_by_id = dict((t["id"], t) for t in (idx.get("tasks") or []) if isinstance(t, dict) and t.get("id"))
+known_ids = set(tasks_by_id)
+
+# 1. Dynamic prefix discovery
+prefix_re = re.compile(r"^[A-Z][A-Z0-9]*")
+prefixes = set()
+for tid in known_ids:
+    m = prefix_re.match(tid)
+    if m:
+        prefixes.add(m.group(0))
+
+if not prefixes:
+    print("Follow-up check: 0 task IDs named (no prefixes in tasks/index.yml)")
+    sys.exit(0)
+
+# 2. Token scan with line numbers
+token_re = re.compile(
+    r"\b(?:" + "|".join(sorted(prefixes)) + r")-[A-Z0-9][A-Z0-9-]+\b"
+)
+found = {}  # id -> first line number (1-based, in body)
+for i, line in enumerate(body.splitlines(), start=1):
+    for m in token_re.finditer(line):
+        found.setdefault(m.group(0), i)
+
+# 3+4. Bypass set: parent roadmap_ids, frontmatter whitelist, per-parent whitelist
+bypass = set()
+parents = fm.get("roadmap_ids") or []
+bypass.update(parents)
+bypass.update(fm.get("whitelist") or [])
+for parent in parents:
+    task = tasks_by_id.get(parent)
+    if task:
+        bypass.update(task.get("whitelist") or [])
+
+# 5. Missing = found - bypass - known
+missing = [(tok, ln) for tok, ln in found.items() if tok not in bypass and tok not in known_ids]
+if missing:
+    print(
+        "/document-work: blocked. Pending docs name follow-up task IDs "
+        "that aren't filed in tasks/index.yml:"
+    )
+    for tok, ln in missing:
+        print(f"  - {tok} (line {ln} of pending-docs body)")
+    print(
+        "\nFile a stub for each in tasks/index.yml + tasks/open/<TASK-ID>.md "
+        "(per tasks/schema.md),\nthen re-run /document-work."
+        "\n\nQuote the title: title: \"<the title>\". Unquoted, YAML reads ' #' "
+        "(space then hash) as\nthe start of a comment, so `title: Fix the widget "
+        "#define` lands as `Fix the widget`.\nA follow-up stub is filed FROM a "
+        "review finding, so a number in the title is the normal\ncase here. Entry "
+        "shape: tasks/README.md section 'Authoring an entry by hand'."
+    )
+    sys.exit(1)
+
+print(f"Follow-up check: {len(found)} task IDs named, all resolved")
+PY
+```
+
+A non-zero exit is the hard-fail; block Step 4 until the consumer files the missing stubs (or bypasses them via one of the two whitelist paths below). Exit 2 is not a missing stub: PyYAML is absent, the branch name is not UTF-8, or the pending doc or `tasks/index.yml` could not be read or parsed, and stderr names which.
+
+**Why this gate:** prevents the recurring drift where pending-docs prose claims "filed as TECH-X" but TECH-X never makes it into `tasks/index.yml`. The failure mode is invisible without the gate — the close-out commit lands clean, the follow-up disappears into prose, and `/next-task` never surfaces it.
+
+**Allowed bypass paths** — if a token is genuinely not a follow-up (e.g., the work documents an external system that happens to use this naming, or a permanent non-task prefix that shares a prefix with the project's vocabulary), pick one:
+
+- **One-off, branch-local:** add the token to a `whitelist:` field in the pending-docs frontmatter:
+  ```yaml
+  whitelist: [SOME-EXTERNAL-ID]   # not a roadmap task — see context
+  ```
+- **Persistent, parent-task-scoped:** add the token to the parent task's `whitelist:` list in `tasks/index.yml` (the field is defined in `tasks/schema.md` line 60 + invariant 6). Use this when the same external reference will keep showing up across multiple documentation passes for that task.
+
+Both bypass paths are visible in code review and intentional. `review_task_ids:` (`TASK-NNNN` from `review_tasks.md`) are NOT bypassed via this mechanism — review-task IDs use a prefix that doesn't appear in `tasks/index.yml`, so the dynamic prefix discovery naturally excludes them.
+
+**Non-interactive callers** (e.g., a future `/auto-build`-style orchestrator) treat the hard-fail identically: block close-out until stubs are filed.
+
+## Step 4: Verify Pending Docs
+
+**If invoked with `--non-interactive`** (Phase 6e execution agent): skip this step's human-confirm prompt entirely. The orchestrator + reviewer pair gated the work; the human reads the pending-docs body after the agent returns. Verify the file exists, print its contents to stdout (so the parent's transcript captures them), and proceed to Step 5.
+
+**Interactive invocation (default):** the pending docs file is untracked (gitignored). No docs commit is needed.
+
+1. Verify `<pending-doc path>` (Step 3 step 2b) exists
+2. Display its full contents to the user for review
+3. Have the user confirm the proposed entries look correct before proceeding
+
+## Step 5: Prepare for Review
+
+**If invoked with `--non-interactive`** (Phase 6e execution agent): do NOT push regardless of branch state. The orchestrator-driven flow defers all pushes to `/review-close`, which the human runs after walking through the final report. Note the number of unpushed commits: `git rev-list --count origin/<default branch>..HEAD`. Proceed to Step 6.
+
+**Interactive invocation (default):**
+
+**If on a feature branch:**
+1. Assert you are not on the default branch (Step 0) before pushing `HEAD` — a concurrent actor moving `HEAD` onto it would otherwise make this push land on `main` (`/review-close` owns `main`, never this skill). This is the inverted form of `_shared/main-push-guard.md` Rule A:
+   ```bash
+   python3 sysop/scripts/git_check.py head-is-not "<default branch>" && git push -u origin HEAD
+   ```
+   A `STOP:` line means `HEAD` is `<default branch>` (or detached): Step 5 pushes a feature branch, and `/review-close` owns the default branch, so nothing was pushed; stop.
+2. That one call is also the push; do not push again.
+
+**If on the default branch:**
+1. Do NOT push — that's `/review-close`'s job
+2. Note the number of unpushed commits: `git rev-list --count origin/<default branch>..HEAD`
+
+## Step 6: Confirm
+
+Report to the user:
+
+```
+Work committed and ready for review.
+
+Code commit:    <hash> <message>
+Branch:         <branch name>
+Pending docs:   <pending-doc path>
+Type:           <type>
+Roadmap IDs:    <roadmap_ids or "none">       (consumed by /review-close Step 4c)
+Review tasks:   <review_task_ids or "none">   (documentary only)
+Summary:        <summary text>
+```
+
+End with: "Start a fresh session (`/clear`, or a new terminal), then run `/review-close` to merge, consolidate docs, and push. `/review-close` is designed context-independent — it reconstructs from the committed branch, the `## Test decision` records, and `sysop/runtime/pending-docs/` — so a clean session reviews this branch (and any others awaiting close) even-handedly, without this implementation session's context biasing the merge gate with the implementer's own rationalizations."

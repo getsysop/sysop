@@ -1,0 +1,831 @@
+"""
+Run deterministic grep checks from .claude/checks.yml.
+
+Parses the YAML registry via PyYAML's safe_load and runs grep for each check.
+Used by /codebase-review and /security-audit for pre-scan.
+See WORKFLOW.md §6.5 for format documentation.
+
+Usage (via wrapper):
+    bash sysop/scripts/run_checks.sh [--mode quality|security|both]
+                               [--fail-on-blocking]
+                               [--update-baseline]
+
+Direct usage:
+    python -m run_checks [--mode quality|security|both] [--repo-root /path]
+                         [--fail-on-blocking] [--update-baseline]
+                         [--baseline-file .claude/checks_baseline.txt]
+
+CI contract:
+    --fail-on-blocking exits non-zero when any finding from a check marked
+    `blocking: true` is NOT in the baseline file. Baseline-matched findings
+    are printed with a [baseline] tag so they stay visible without failing CI.
+    Use --update-baseline to regenerate the baseline after deliberately
+    accepting new tech debt (review required).
+
+    An advisory (`blocking: false`) check's findings are baselined too, and
+    that is the whole of what it buys them: a [baseline] tag instead of a
+    plain line. The gate reads `blocking: true` on its own, so an advisory
+    entry cannot change an exit code in either direction (internal tracker #363).
+"""
+import argparse
+import os
+import subprocess
+import sys
+import time
+
+from _log import _sanitize_log
+
+from .accounting import FAILED, RunReport, stderr_excerpt
+from .baseline import (
+    _is_coverage,
+    finding_key,
+    is_baseline_suppressed,
+    legacy_entries,
+    load_baseline,
+    migrate_baseline,
+    unmatched_entries,
+    unregistered_entries,
+    write_baseline,
+)
+from .config import parse_checks_yml
+from .coverage import _run_coverage
+from .grep import run_check
+from .lint import _run_eslint
+from .lsp import run_lsp_diagnostics
+from .pip_audit import _run_pip_audit
+from .semgrep import _run_semgrep
+
+
+def _classify_checks(checks, active_token=None):
+    """Bucket a check list into per-stage sets/lists plus the blocking ids.
+
+    A single classification path shared by the ``--mode``-filtered run and the
+    ``--update-baseline`` path (which runs against every check). Centralising
+    the check-id prefix dispatch is defensive: a new stage prefix (say
+    ``bandit-``) is added in one place — duplicated classification is exactly
+    where a new prefix silently regresses.
+
+    Args:
+        checks: list of check dicts as parsed from ``checks.yml``.
+        active_token: optional ``used_by`` token to require (e.g.
+            ``"codebase-review"``). When ``None``, every check is accepted
+            regardless of its ``used_by`` field — used by ``--update-baseline``
+            so the baseline covers every blocking check across both modes.
+
+    Returns a 7-tuple:
+        (grep_checks, lsp_ids, semgrep_ids, lint_ids, pip_audit_ids,
+         coverage_checks, blocking_ids)
+      - grep_checks / coverage_checks: full check dicts (``run_check`` and
+        ``_run_coverage`` need fields beyond the id — coverage needs
+        ``critical_path`` / ``report``).
+      - lsp_ids / semgrep_ids / lint_ids / pip_audit_ids: dicts of check id →
+        full check dict, keyed off the id prefix the stage dispatches on
+        (Phase 133: the tool-shelling stages post-filter findings through each
+        check's ``paths:``, so they need the spec, not just the id; `Q-701`:
+        eslint and pip-audit read it to honour the overlay's disabling
+        sentinel — membership tests on the dict behave exactly like the old
+        sets).
+      - blocking_ids: every ``blocking: true`` check id across all buckets that
+        passed the ``active_token`` filter.
+    """
+    grep_checks = []
+    lsp_ids = {}
+    semgrep_ids = {}
+    lint_ids = {}
+    pip_audit_ids = {}
+    coverage_checks = []
+    blocking_ids = set()
+    for c in checks:
+        cid = c.get("id", "")
+        used = c.get("used_by", []) or []
+        if active_token is not None and active_token not in used:
+            continue
+        if cid.startswith("pyright-") or cid.startswith("tsc-"):
+            lsp_ids[cid] = c
+        elif cid.startswith("semgrep-"):
+            semgrep_ids[cid] = c
+        elif cid.startswith("lint-"):
+            lint_ids[cid] = c
+        elif cid.startswith("pip-audit-"):
+            pip_audit_ids[cid] = c
+        elif cid.startswith("coverage-"):
+            coverage_checks.append(c)
+        else:
+            grep_checks.append(c)
+        if c.get("blocking") is True:
+            blocking_ids.add(cid)
+    return (grep_checks, lsp_ids, semgrep_ids, lint_ids,
+            pip_audit_ids, coverage_checks, blocking_ids)
+
+
+def _pending_rounds_note(repo_root, stale_seconds=2 * 3600):
+    """Return a one-line note about review rounds that never completed, or None.
+
+    A review round writes a nonce-keyed marker under
+    ``sysop/runtime/pending-rounds/`` and clears it once ``review_tasks.md`` is
+    written. A marker that outlives its round is evidence the round died
+    mid-flight — a refusal after starting, a crash, quota exhaustion, context
+    death — none of which currently produce an error or an empty result set to
+    notice.
+
+    Markers are anchored to the MAIN checkout (``--git-common-dir``), so a
+    pre-scan run from inside a worktree still sees them. Fresh markers are
+    ignored: a concurrent session mid-round is normal, and alarming on it would
+    train consumers to tune the signal out.
+
+    Never raises. A probe that breaks the pre-scan would be a worse defect than
+    the silence it reports on. A timeout, though, is not answered with the
+    ``None`` a probe that looked and found nothing returns (`Q-278`):
+    accounting.py holds a timeout to be ``failed``, so it returns a note saying
+    the check did not run. Not the repo_root fallback the non-git branch takes —
+    from a worktree that reads the wrong tree and answers "none" with
+    confidence. Other OSErrors still return ``None``.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=10, cwd=repo_root,
+        )
+        common = result.stdout.strip()
+        if result.returncode == 0 and common:
+            # An absolute common-dir (the worktree case) wins the join; a bare
+            # ".git" (main checkout) resolves against repo_root.
+            root = os.path.dirname(
+                os.path.abspath(os.path.join(repo_root, common))
+            )
+        else:
+            root = repo_root
+        marker_dir = os.path.join(root, "sysop", "runtime", "pending-rounds")
+        if not os.path.isdir(marker_dir):
+            return None
+        now = time.time()
+        stale = []
+        for name in sorted(os.listdir(marker_dir)):
+            if not name.endswith(".pending"):
+                continue
+            try:
+                age = now - os.stat(os.path.join(marker_dir, name)).st_mtime
+            except OSError:
+                continue
+            if age >= stale_seconds:
+                stale.append(name)
+        if not stale:
+            return None
+        shown = ", ".join(stale[:3])
+        more = f" (+{len(stale) - 3} more)" if len(stale) > 3 else ""
+        return (
+            f"    ⚠ {len(stale)} review round(s) started and never completed: "
+            f"{shown}{more}\n"
+            "      their findings are absent or partial — re-run the skill; "
+            "markers live in sysop/runtime/pending-rounds/"
+        )
+    except subprocess.TimeoutExpired:
+        # Ahead of the arm below, which would otherwise take it: TimeoutExpired
+        # IS a SubprocessError.
+        return (
+            "    ⚠ review-round probe did not run: `git rev-parse "
+            "--git-common-dir` timed out\n"
+            "      never-completed rounds, if any, are not reported this run; "
+            "markers live in sysop/runtime/pending-rounds/"
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Run grep checks from .claude/checks.yml"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["quality", "security", "both"],
+        default="both",
+        help="Which checks to run (default: both)",
+    )
+    parser.add_argument(
+        "--repo-root", default=None, help="Repository root (auto-detected if omitted)"
+    )
+    parser.add_argument(
+        "--fail-on-blocking",
+        action="store_true",
+        help="Exit 1 when any non-baseline finding from a `blocking: true` check fires.",
+    )
+    parser.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="Write current findings (all checks, never coverage) to the baseline "
+             "file and exit 0.",
+    )
+    parser.add_argument(
+        "--print-keys",
+        action="store_true",
+        help="Print the exact baseline key for every current finding and exit 0. "
+             "For grep and semgrep checks the identity is a content hash, so "
+             "those keys cannot be typed from what the finding line shows; this "
+             "is how a consumer hand-adds an accepted finding.",
+    )
+    parser.add_argument(
+        "--migrate-baseline",
+        action="store_true",
+        help="Convert an existing two-field baseline to identity-bearing keys, "
+             "in place and preserving comments. Rewrites an entry only where "
+             "exactly one current finding matches it; drops the rest for "
+             "re-triage, EXCEPT entries whose check did not execute this run, "
+             "which are held untouched and named in the report. Not a "
+             "regeneration — see --update-baseline for that.",
+    )
+    parser.add_argument(
+        "--baseline-file",
+        default=None,
+        help="Baseline file path (default: .claude/checks_baseline.txt)",
+    )
+    args = parser.parse_args()
+
+    # Determine repo root
+    repo_root = args.repo_root
+    if not repo_root:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            repo_root = result.stdout.strip()
+            # Fall back to cwd when not in a git repo (returncode != 0) or
+            # when stdout is empty — otherwise downstream os.path.join("", ...)
+            # silently produces a relative path that breaks file lookups.
+            if result.returncode != 0 or not repo_root:
+                repo_root = os.getcwd()
+        except FileNotFoundError:
+            # No git binary: the same answer as "not a git repo" above.
+            repo_root = os.getcwd()
+        except subprocess.TimeoutExpired:
+            # NOT the cwd fallback (`Q-278`). A timeout means git is present and
+            # did not answer, so the root is unknown rather than absent — and
+            # cwd is only right by luck. Wrong when cwd is a subdirectory (a loud
+            # `checks.yml not found`); worse when cwd is a DIFFERENT configured
+            # root, which ran that project's checks instead and reported
+            # `0 failed`. (Reachable on a direct `python -m run_checks` only:
+            # run_checks.sh always passes --repo-root.) accounting.py holds a
+            # timeout to be `failed`; no RunReport exists yet to record that in,
+            # so this refuses instead, exit 1 as for the missing registry below.
+            print(
+                "Error: `git rev-parse --show-toplevel` timed out, so the "
+                "repository root is unknown.\n"
+                "   Not falling back to the current directory: it may be a "
+                "different project's root.\n"
+                "   Re-run with --repo-root <path>.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    checks_file = os.path.join(repo_root, ".claude", "checks.yml")
+    if not os.path.exists(checks_file):
+        print(f"Error: {checks_file} not found", file=sys.stderr)
+        sys.exit(1)
+
+    baseline_file = args.baseline_file or os.path.join(
+        repo_root, ".claude", "checks_baseline.txt"
+    )
+
+    all_checks = parse_checks_yml(checks_file)
+
+    # --update-baseline short-circuits BEFORE the mode-filtered pass and runs
+    # ONLY the all-checks pass (spec §2). The old code ran the mode-filtered
+    # pass, discarded its findings, then re-ran every stage a second time over
+    # all checks — double execution and a double-record ambiguity for the
+    # accounting layer. One pass, one RunReport.
+    # The three baseline verbs are mutually exclusive. `--update-baseline`
+    # rewrites the whole file and keeps no comment; `--migrate-baseline`
+    # preserves every one. Passing both used to run the destroyer and exit 0,
+    # reading as success while a consumer's hand-written triage rationale went
+    # to zero — the dispatch order was the only thing deciding it.
+    verbs = [n for n, v in (("--update-baseline", args.update_baseline),
+                            ("--print-keys", args.print_keys),
+                            ("--migrate-baseline", args.migrate_baseline)) if v]
+    if len(verbs) > 1:
+        print(
+            f"error: {' and '.join(verbs)} cannot be combined — they do "
+            "different things to the same file.\n"
+            "   --update-baseline regenerates it (accepts every current "
+            "finding, keeps no comment).\n"
+            "   --migrate-baseline converts existing entries in place "
+            "(preserves comments).\n"
+            "   --print-keys writes nothing. Run one.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    if args.update_baseline:
+        _run_update_baseline(repo_root, all_checks, baseline_file)
+        return
+
+    # `--print-keys` and `--migrate-baseline` share --update-baseline's
+    # all-checks, single-pass shape for the same reason: a key or a migration
+    # decision derived from a mode-filtered subset would be silently partial.
+    if args.print_keys:
+        _run_print_keys(repo_root, all_checks)
+        return
+
+    if args.migrate_baseline:
+        _run_migrate_baseline(repo_root, all_checks, baseline_file)
+        return
+
+    # Map --mode to the used_by token, then classify every check by stage in
+    # one pass (see _classify_checks). The mode values don't match used_by
+    # values directly, so the mapping is the single translation point.
+    _mode_token_map = {"quality": "codebase-review",
+                       "security": "security-audit",
+                       "both": None}
+    active_token = _mode_token_map.get(args.mode)
+    classified = _classify_checks(all_checks, active_token=active_token)
+    blocking_ids = classified[6]  # stages run via _run_all_stages(classified)
+
+    # The selected set is every check that passed the mode filter — the same
+    # filter _classify_checks applies, re-derived here as the full dict list so
+    # the accounting report can see each check's `blocking` flag and scope
+    # (needed for the localized-vs-placeholder ⚠ decision).
+    selected_checks = [
+        c for c in all_checks
+        if active_token is None or active_token in (c.get("used_by") or [])
+    ]
+    total_checks = len(selected_checks)
+    if total_checks == 0:
+        print(f"No checks found for mode: {args.mode}")
+        sys.exit(0)
+
+    report = RunReport(selected_checks)
+    all_findings = _run_all_stages(repo_root, classified, report)
+
+    baseline = load_baseline(baseline_file)
+
+    # Emit findings, tagging baseline-matched ones inline so they stay visible.
+    # Coverage findings never baseline-suppress (Phase 61b crown-jewel gate) —
+    # is_baseline_suppressed() encodes that carve-out so a stale or hand-edited
+    # baseline entry can't smuggle an uncovered critical-path line past the gate.
+    baseline_hits = 0
+    new_blocking_hits = 0
+    new_coverage_hits = 0  # blocking coverage findings (can't be baselined)
+    # Blocking checks whose findings are being suppressed. Since internal tracker #363 a check can
+    # be baselined while advisory and promoted to `blocking: true` later, and the
+    # promotion is then inert for every pre-existing finding — `new blocking: 0`,
+    # exit 0. That is correct behaviour for an accepted finding and indefensible
+    # to leave silent: an armed-but-inert gate reads exactly like a clean scan.
+    blocking_suppressed = set()
+    for check_id, file_line, msg, identity in all_findings:
+        if is_baseline_suppressed(check_id, file_line, blocking_ids, baseline,
+                                  identity):
+            print(f"[baseline] {msg}")
+            baseline_hits += 1
+            if check_id in blocking_ids:
+                blocking_suppressed.add(check_id)
+        else:
+            print(msg)
+            if check_id in blocking_ids:
+                new_blocking_hits += 1
+                if _is_coverage(check_id):
+                    new_coverage_hits += 1
+
+    # Inline `no-check:` waivers, reprinted rather than dropped — same contract
+    # as [baseline]: suppressed from the gate, still visible in the output. A
+    # waiver that produced no line would let a consumer disable a critical
+    # check with a comment and leave nothing behind that says so.
+    for _wid, _wfl, wmsg in report.waived():
+        print(f"[waived] {wmsg}")
+
+    # Two-field entries for checks that now carry an identity. These stopped
+    # matching the moment the identity key arrived, and they are named here
+    # rather than honoured by a load-time fallback: a fallback would let the
+    # legacy entry keep meaning "whatever this check finds at this line", which
+    # is the defect, permanently, for exactly the baselines that have it. The
+    # finding they used to excuse is firing somewhere in the output above.
+    stale = legacy_entries(baseline, all_findings)
+    if stale:
+        shown = ", ".join(stale[:5])
+        more = f" (+{len(stale) - 5} more)" if len(stale) > 5 else ""
+        noun, verb = (("entry", "matches") if len(stale) == 1
+                      else ("entries", "match"))
+        print(
+            f"\n⚠ {len(stale)} baseline {noun} no longer {verb}: {shown}{more}\n"
+            "  These predate the identity field and cannot say WHICH finding "
+            "they accepted.\n"
+            "  Convert them: bash sysop/scripts/run_checks.sh --migrate-baseline\n"
+            "  (that pass covers EVERY check, not just this --mode's — so it "
+            "may report\n   entries this warning did not name.)",
+            file=sys.stderr,
+        )
+
+    # Entries of ANY arity whose check ran to completion and produced no finding
+    # with their key. The legacy warning above names only two-field
+    # entries, so an identity-bearing entry whose finding moved stopped
+    # suppressing with nothing said: the finding re-fired as new every run until
+    # someone read the file. Warning only — this changes no exit code.
+    unmatched = unmatched_entries(baseline, all_findings, report.executed_ids(),
+                                  repo_root)
+    if unmatched:
+        _print_unmatched(unmatched, {(wid, wfl) for wid, wfl, _m in report.waived()})
+    # And entries naming a check this checks.yml no longer defines: they can
+    # never match, and the report above cannot see them (an undefined check
+    # never executes). Read against every defined check, not this --mode's.
+    unregistered = unregistered_entries(
+        baseline, [c.get("id", "") for c in all_checks])
+    if unregistered:
+        _print_unregistered(unregistered)
+
+    # Accounting summary block to stderr — keeps stdout clean for grep/wc
+    # piping. Reports checks *executed* vs *skipped* vs *failed*, not just
+    # selected, so a stage that skipped its precondition or crashed is visible
+    # instead of hiding behind a bare "N findings from M checks".
+    summary = report.render(all_findings, mode=args.mode,
+                            baseline_matched=baseline_hits,
+                            new_blocking=new_blocking_hits)
+    # One layer up from check accounting: a review ROUND that started and never
+    # finished. The pre-scan is the one surface a loop-mode consumer re-reads
+    # every round (self_check.sh is a one-shot probe nothing re-runs during
+    # operation), so the never-completed signal is appended here to give it
+    # real reach. Not added to --update-baseline: that path is a maintenance
+    # snapshot, not a review round.
+    # Name the inert-gate case rather than leaving it to arithmetic the reader has
+    # to do (`baseline-matched: N` alone cannot say whether any of the N belonged
+    # to a blocking check). WORKFLOW.md § CI integration states the remedy.
+    if blocking_suppressed:
+        names = ", ".join(sorted(blocking_suppressed))
+        summary += (
+            f"\n   blocking suppressed: {names} — baselined finding(s) on a "
+            "`blocking: true` check; the gate covers new findings only. Drop those "
+            "lines from the baseline if the gate is meant to bite."
+        )
+    note = _pending_rounds_note(repo_root)
+    if note:
+        summary += "\n" + note
+    print("\n" + summary, file=sys.stderr)
+
+    # Gate: a new non-baselined blocking finding OR a blocking check whose
+    # stage crashed (`failed`). A blocking tool that dies produces zero
+    # findings and would otherwise pass silently — the accounting layer closes
+    # that corner (spec §4). A *skipped* blocking check is loud (⚠ in the
+    # summary) but non-fatal — gate-on-skipped would redden every armed CI
+    # consumer whose coverage report is produced after the gate step.
+    blocking_failures = report.blocking_failures()
+    if args.fail_on_blocking and (new_blocking_hits > 0 or blocking_failures):
+        if new_blocking_hits > 0:
+            # When legacy entries are present the failure is almost certainly
+            # them, and the remedy is the CONVERTER. Naming the regenerator
+            # here sent a consumer to the one command that discards their
+            # rationale and silently accepts every current finding — including
+            # the unreviewed one that just failed the gate. Two remedies for
+            # one failure, and the destructive one was attached to the exit.
+            if stale:
+                print(
+                    f"\nerror: {new_blocking_hits} new blocking finding(s) — "
+                    "failing CI.\n"
+                    f"   {len(stale)} of your baseline entries no longer match "
+                    "(see the warning above).\n"
+                    "   Convert them first — this preserves your comments:\n"
+                    "     bash sysop/scripts/run_checks.sh --migrate-baseline\n"
+                    "   Only then, for genuinely new tech debt, "
+                    "--update-baseline (which keeps no comment).",
+                    file=sys.stderr,
+                )
+            else:
+                # TWO remedies, cheapest-to-recover first. Naming only the
+                # regenerator sent a consumer whose baseline is mostly
+                # hand-written triage rationale down the one path that
+                # discards it — `write_baseline` stamps a fixed header and
+                # keeps no comment. That is the same defect Phase 213 fixed on
+                # the stale-entry branch above and left standing on this one,
+                # and Phase 215 made it reachable without any consumer edit: a
+                # widened shipped pattern can turn a green gate red on its own.
+                print(
+                    f"\nerror: {new_blocking_hits} new blocking finding(s) — "
+                    "failing CI.\n"
+                    "   To accept a finding WITHOUT losing the comments in "
+                    "your baseline:\n"
+                    "     bash sysop/scripts/run_checks.sh --print-keys\n"
+                    "   then append the keys you accept, with your reason "
+                    "beside them.\n"
+                    "   To regenerate wholesale instead (accepts every current "
+                    "finding and\n"
+                    "   keeps NO comments):\n"
+                    "     bash sysop/scripts/run_checks.sh --mode both "
+                    "--update-baseline\n"
+                    "   (Review the diff before committing — baseline entries "
+                    "bypass CI.)",
+                    file=sys.stderr,
+                )
+            if new_coverage_hits > 0:
+                # Coverage findings are NOT baselineable (Phase 61b crown-jewel
+                # gate) — steer the consumer away from the dead-end
+                # --update-baseline path the generic message above suggests.
+                print(
+                    f"\n   {new_coverage_hits} of these are crown-jewel coverage gaps "
+                    "— these are NOT baselineable.\n"
+                    "   Cover the changed line with a test, or (if genuinely "
+                    "untestable) exclude it\n"
+                    "   with a coverage pragma (# pragma: no cover / "
+                    "/* istanbul ignore */).",
+                    file=sys.stderr,
+                )
+        if blocking_failures:
+            names = "; ".join(
+                f"{cid} ({stage}: {reason})"
+                for cid, stage, reason, _ in blocking_failures
+            )
+            print(
+                f"\nerror: {len(blocking_failures)} blocking check(s) FAILED to run "
+                "— failing CI.\n"
+                f"   {names}\n"
+                "   A blocking check that crashed produces zero findings; a green\n"
+                "   gate would be a lie. Fix the tool/environment, then re-run.",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+
+def _print_unmatched(unmatched, waived_anchors=frozenset()):
+    """Print the stale-entry warning for `unmatched_entries`' result, to stderr.
+
+    Its own text, not the legacy warning's: the remedy differs. A legacy entry
+    is converted; one of these is re-anchored from `--print-keys` (the finding
+    it excused, if it still exists, is in this run's findings under a new key) or
+    removed. Entries whose anchor file is absent are listed apart, because that
+    is either a moved file or a checkout that does not hold it.
+    """
+    def _shown(entries):
+        more = f" (+{len(entries) - 5} more)" if len(entries) > 5 else ""
+        return ", ".join(entries[:5]) + more
+
+    # A finding an inline `no-check:` marker now waives never reaches the findings or
+    # `--print-keys`, so the re-anchor hint cannot apply to its entry: say so.
+    waived = [e for e, _p in unmatched
+              if tuple(e.split("|")[:2]) in waived_anchors]
+    absent = [e for e, present in unmatched if not present and e not in waived]
+    present = [e for e, here in unmatched if here and e not in waived]
+    noun = "entry" if len(unmatched) == 1 else "entries"
+    lines = [f"\n⚠ {len(unmatched)} baseline {noun} matched no finding this run "
+             "— re-anchor or remove:"]
+    if present:
+        lines.append(f"  {_shown(present)}")
+    if absent:
+        lines.append(f"  anchor file not in this checkout: {_shown(absent)}")
+    if waived:
+        lines.append("  waived inline by a no-check marker on the same line — remove the "
+                     f"entry: {_shown(waived)}")
+    lines.append(
+        "  Each one's check ran and found nothing with the entry's key, so the entry "
+        "suppresses\n  nothing. If its finding moved, it is among this run's findings "
+        "under a new key;\n  print every current key with:\n"
+        "    bash sysop/scripts/run_checks.sh --print-keys\n"
+        "  and replace the entry's line with the new key, keeping your comment. If "
+        "the code\n  is unchanged, the check may have skipped the file (grep drops a "
+        "binary file,\n  semgrep a file over its size limit), or a narrowed `paths:` or "
+        "`exclude_dir:`, yours\n  or one an update shipped, may have put it out of "
+        "the check's scope: check that before\n  removing the entry.")
+    print("\n".join(lines), file=sys.stderr)
+
+
+def _print_unregistered(entries):
+    """Print the warning for `unregistered_entries`' result, to stderr."""
+    more = f" (+{len(entries) - 5} more)" if len(entries) > 5 else ""
+    noun, verb = (("entry names", "it suppresses") if len(entries) == 1
+                  else ("entries name", "they suppress"))
+    print(
+        f"\n⚠ {len(entries)} baseline {noun} a check this checks.yml does not "
+        f"define — {verb} nothing:\n  {', '.join(entries[:5])}{more}\n"
+        "  If the check was renamed, re-anchor the entry from --print-keys; if it "
+        "was removed,\n  delete the entry.",
+        file=sys.stderr)
+
+
+def _run_all_stages(repo_root, classified, report):
+    """Run every pre-scan stage over a classified check set, recording outcomes.
+
+    ``classified`` is the 7-tuple from ``_classify_checks``; ``report`` is the
+    ``RunReport`` each stage records into. Shared by the normal run and the
+    ``--update-baseline`` pass so the two can never drift in which stages they
+    invoke or how findings are collected. Returns the concatenated findings.
+    """
+    (grep_checks, lsp_included, semgrep_included, lint_included,
+     pip_audit_included, coverage_checks, _blocking_ids) = classified
+
+    all_findings = []
+    # Each run_check is wrapped so one bad check (an invalid regex in a
+    # position_check, an unexpected grep return) cannot kill the whole run —
+    # and the escape is recorded `failed` so it is not an unaccounted hole.
+    for check in grep_checks:
+        try:
+            all_findings.extend(run_check(check, repo_root, report))
+        except Exception as e:
+            # _sanitize_log strips ANSI/control chars — a subprocess or regex
+            # exception may carry escape sequences that corrupt the terminal.
+            print(
+                f"warn: check {check.get('id')} failed: {_sanitize_log(e)}",
+                file=sys.stderr,
+            )
+            if check.get("id"):
+                report.record([check.get("id")], FAILED, "grep",
+                              "exception", stderr_excerpt(str(e)))
+
+    # LSP / typechecker diagnostics.
+    if lsp_included:
+        all_findings.extend(run_lsp_diagnostics(repo_root, lsp_included, report))
+
+    # Semgrep / AST diagnostics.
+    all_findings.extend(_run_semgrep(repo_root, semgrep_included, report))
+
+    # ESLint diagnostics. lint-* findings are emitted by _run_eslint under a
+    # single catch-all check_id ("lint-error") with the original ESLint
+    # rule_id embedded in the message text.
+    all_findings.extend(_run_eslint(repo_root, lint_included, report))
+
+    # pip-audit diagnostics.
+    all_findings.extend(_run_pip_audit(repo_root, pip_audit_included, report))
+
+    # Coverage diff gate (Phase 61a measurement + Phase 61b hard gate).
+    # Scoped to each check's `critical_path` globs; routed through diff-cover
+    # for both the Python and frontend reports. A `blocking: true` coverage
+    # check is the crown-jewel gate — its findings count toward
+    # --fail-on-blocking and (unlike every other stage) never baseline-suppress
+    # (see is_baseline_suppressed). A consumer who wants measurement only keeps
+    # `blocking: false`. Unlike the id-set stages, the coverage stage needs
+    # each check's `critical_path` / `report` fields, so _classify_checks
+    # hands it the full check dicts.
+    all_findings.extend(_run_coverage(repo_root, coverage_checks, report))
+    return all_findings
+
+
+def _run_update_baseline(repo_root, all_checks, baseline_file):
+    """Single-pass ``--update-baseline`` (spec §2).
+
+    Runs every stage ONCE over all checks (active_token=None so the baseline
+    covers both modes' blocking checks), then writes the baseline — unless a
+    blocking check FAILED, in which case it refuses and writes nothing: a
+    crashed tool is not a state to snapshot (spec §4).
+    """
+    classified = _classify_checks(all_checks, active_token=None)
+    blocking_ids = classified[6]
+    report = RunReport(all_checks)  # selected == every check
+    all_findings = _run_all_stages(repo_root, classified, report)
+
+    # Inline waivers, reprinted here too. This is the path a maintainer audits
+    # suppressions on, and the header count alone tells them a waiver exists
+    # without saying which line — the first version printed nothing here while
+    # WORKFLOW.md promised a `[waived]` line, so the promise held on the run
+    # nobody was auditing and broke on the one they were.
+    for _wid, _wfl, wmsg in report.waived():
+        print(f"[waived] {wmsg}")
+
+    # Show what actually ran before deciding whether to persist it.
+    print("\n" + report.render(all_findings, mode="both"), file=sys.stderr)
+
+    blocking_failures = report.blocking_failures()
+    if blocking_failures:
+        names = "; ".join(
+            f"{cid} ({stage}: {reason})"
+            for cid, stage, reason, _ in blocking_failures
+        )
+        print(
+            f"\nerror: refusing to write baseline — {len(blocking_failures)} "
+            f"blocking check(s) FAILED to run: {names}\n"
+            "   A crashed tool is not a state to snapshot. Fix the failure, "
+            "then re-run --update-baseline.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # The tally is what write_baseline reports it persisted, not a second
+    # copy of its filter. The hand-inlined copy that used to live here was
+    # already one edit away from disagreeing with it (internal tracker #363 changed
+    # the predicate; a duplicate would have kept printing the old number).
+    # Checks that produced nothing this run keep their existing entries. A
+    # wholesale rewrite would delete them and exit 0 — the `Wrote N` line below
+    # reading like success while a consumer's triage verdicts went silently
+    # missing. Refusing instead is NOT available here: this command is
+    # deliberately lenient on `skipped`, because the shipped defaults make
+    # `skipped` the universal starting state on a fresh install. See
+    # `write_baseline`'s docstring for the full argument.
+    # BOTH sets, exactly as `--migrate-baseline` passes both. `non_executed_ids`
+    # is checks that produced nothing; `incomplete_ids` is `degraded` checks —
+    # ones that ran, emitted real findings, and covered less than their declared
+    # inputs. Its own docstring gives the reason this path needs it too: "an
+    # entry it did not match may simply be in the part that was not scanned.
+    # Absence of evidence, so those are held rather than dropped."
+    #
+    # Passing only `non_executed_ids` left the whole `degraded` class still
+    # silently deleted on the ONE command that destroys entries — the exact
+    # failure this fix exists to close, and worse than the original because the
+    # "carried forward unverified" line below would not print either, the set
+    # being empty. Found by this phase's own review round, after the first cut
+    # shipped with the hole.
+    non_executed = set(report.non_executed_ids()) | set(report.incomplete_ids())
+    written = write_baseline(
+        baseline_file, all_findings, blocking_ids, non_executed
+    )
+    baseline_rel = baseline_file.replace(repo_root.rstrip("/") + "/", "")
+    print(
+        f"Wrote {written} baseline finding(s) to {baseline_rel}",
+        file=sys.stderr,
+    )
+    # Named, not merely counted: the failure this closes was silence, so a run
+    # that carried entries forward has to say which checks it could not verify.
+    if non_executed:
+        print(
+            f"   {len(non_executed)} check(s) did not run this pass; their "
+            f"existing baseline entries were carried forward unverified: "
+            f"{', '.join(sorted(non_executed))}",
+            file=sys.stderr,
+        )
+    sys.exit(0)
+
+
+def _run_print_keys(repo_root, all_checks):
+    """Print `key<TAB>message` for every current finding, then exit 0.
+
+    Exists because the identity field is a hash: `WORKFLOW.md` documents a
+    consumer hand-adding an accepted finding to the baseline, and no printed
+    finding line carries the hash, so without this the documented capability
+    would have been removed rather than changed. Coverage is filtered out for
+    the same reason `write_baseline` filters it — a coverage key is not an
+    entry anyone may add.
+    """
+    classified = _classify_checks(all_checks, active_token=None)
+    report = RunReport(all_checks)
+    all_findings = _run_all_stages(repo_root, classified, report)
+    for check_id, file_line, msg, identity in sorted(all_findings):
+        if _is_coverage(check_id):
+            continue
+        print(f"{finding_key(check_id, file_line, identity)}\t{msg}")
+    # The accounting block, for the same reason the other two verbs print it:
+    # this list is what a consumer picks an entry to accept FROM, so a stage
+    # that did not run makes it silently partial. Omitting it here hid six
+    # skipped checks on one fixture, two of them blocking coverage gates.
+    print("\n" + report.render(all_findings, mode="both"), file=sys.stderr)
+    sys.exit(0)
+
+
+def _run_migrate_baseline(repo_root, all_checks, baseline_file):
+    """One-shot two-field -> identity-bearing conversion, in place.
+
+    Deliberately NOT a second standing regeneration command (Phase 193 ratified
+    "one ledger, one format, one regeneration command"): it is run once, when
+    the identity key arrives, and `--update-baseline` remains the only way to
+    regenerate. The report is mandatory rather than opt-in because the whole
+    argument for rewriting in place instead of dropping everything is that a
+    human sees what each entry now excuses.
+    """
+    if not os.path.exists(baseline_file):
+        print(f"error: no baseline at {baseline_file} — nothing to migrate.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    classified = _classify_checks(all_checks, active_token=None)
+    report = RunReport(all_checks)
+    all_findings = _run_all_stages(repo_root, classified, report)
+    print("\n" + report.render(all_findings, mode="both"), file=sys.stderr)
+
+    rows, refusal = migrate_baseline(
+        baseline_file, all_findings, repo_root, report.non_executed_ids(),
+        report.incomplete_ids()
+    )
+    if refusal:
+        print(f"\nerror: {refusal}", file=sys.stderr)
+        sys.exit(1)
+
+    tally = {}
+    for action, old, new, detail in rows:
+        tally[action] = tally.get(action, 0) + 1
+        if action == "rewritten":
+            print(f"  rewrote  {old}\n        -> {new}\n           {detail}")
+        elif action.startswith("dropped"):
+            print(f"  DROPPED  {old}\n           {detail}")
+        elif action == "header-updated":
+            # The one line this command REWRITES, and it printed as `kept` —
+            # beside the old text, which reads as confirmation that nothing
+            # happened. It is the row most likely to sit next to a destroyed
+            # comment, so mislabelling it is the worst place to be vague.
+            print(f"  REPLACED the generated header line\n        was: {old}")
+        elif action == "kept-3field" or not detail:
+            # Already migrated, or nothing to say. Counted, not narrated.
+            continue
+        else:
+            # Every other `kept-*` carries a reason the operator has to act on
+            # — an entry held because its stage did not run, one whose path
+            # cannot be keyed, one whose check found nothing this pass. Those
+            # reasons existed and reached nobody: only `rewritten` and
+            # `dropped*` were printed, so the transient-vs-permanent
+            # distinction that motivated writing them was invisible, and the
+            # consumer saw a bare count.
+            print(f"  kept     {old}\n           {detail}")
+    for action in sorted(tally):
+        print(f"{action}: {tally[action]}", file=sys.stderr)
+    print(
+        "\nEvery DROPPED entry is a finding that will now fire. Re-triage it "
+        "and re-accept it with --print-keys, or fix it.",
+        file=sys.stderr,
+    )
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

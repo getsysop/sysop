@@ -1,0 +1,547 @@
+---
+name: share-wins
+description: Share the `[good]` positive-signal entries from SYSOP_ISSUES.md upstream as one aggregated comment on a standing "Wins" Discussion in the Sysop repo — per-entry human consent, shown-equals-posted, then flip each shared entry's status to `Shared` with a back-ref so re-runs never double-post. Dry-run by default. GitHub-specific by design.
+argument-hint: "[--execute] [--repo owner/name]"
+model: opus
+---
+<!-- sysop:model-roles frontmatter=reasoning -->
+
+The **positive-signal** half of Sysop's give-back loop. `/review-close` Step 7
+*captures* both kinds of signal into `SYSOP_ISSUES.md`: friction (`ISSUE-NNNN`
+entries — bugs in Sysop-shipped content) and wins (`GOOD-NNNN` entries, marked
+`[good]` — something Sysop did notably well that's worth *protecting from a
+future change*). Two sibling skills transport the friction (`/report-issues`)
+and the locally-grown conventions (`/contribute-convention`) upstream. This skill
+transports the third thing: the wins.
+
+Without it, a tester round is asymmetric — it tells the maintainer what to
+**fix** but not what to **protect**. The `[good]` capture worked, but
+the entries died in a local file: nobody upstream ever saw them, so the next
+change could quietly "fix" the exact behavior a tester relied on. This closes
+that gap.
+
+**This is a GitHub-touching skill** — the third give-back skill after
+`/report-issues` and `/contribute-convention`, whose transport shape it mirrors
+(permission guard → `gh auth` → resolve upstream repo → render → per-entry
+consent → post → annotate the source → report). Like them — and unlike
+`/pr-dependabot`, which operates on *your own* repo — it sends **upstream to the
+Sysop repo** (the public `getsysop/sysop` unless you've configured otherwise —
+Step 0.6). That direction is the whole point.
+
+**Why a Discussion, not an Issue.** A win is not a defect or a proposal — it has
+no open/close lifecycle and creates no work item. It is social proof plus a
+durable "don't regress this" registry. So it belongs in **GitHub Discussions**,
+not the issue tracker, and all of a round's wins go into **one aggregated
+comment** on a standing "Wins" thread — not one issue each (the deliberate
+contrast with `/report-issues`, which files one issue per entry). This is the
+one skill in the family that posts to Discussions via the GraphQL API rather
+than `gh issue`.
+
+**The privacy being spent is yours.** A `[good]` entry quotes what worked — skill
+names, error text, sometimes details of your setup. So: **per-entry consent is
+mandatory**, **dry-run is the default**, and the skill shows you the exact
+comment body — every character that would leave your machine — before anything is
+posted. It never auto-redacts (lossy, and the call is yours) and never shares an
+entry you didn't explicitly pick.
+
+## Pre-flight: Permission Guard
+
+This skill shells out to `gh api graphql` (both to resolve the target Discussion
+and to post the comment) and edits `sysop/SYSOP_ISSUES.md` in place. Its only network
+side effect is posting a Discussion comment (and, once, creating the standing
+Wins thread if it doesn't exist yet) — and only under `--execute` after you pick
+which entries.
+
+Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
+
+- `Bash(gh api graphql:*)` — resolve the repo/category/discussion **and** post the
+  comment. This is **one rule for both** because a GraphQL query (read) and a
+  GraphQL mutation (write) are the *same* `gh api graphql` command — the
+  permission classifier cannot tell them apart, so the write path the documented
+  happy path requires needs this rule listed.
+
+If it is unsatisfied, stop with the `_shared/permission-guard.md` § Algorithm
+step 5 message (one-line reason: "shares SYSOP_ISSUES.md `[good]` entries
+upstream as a Sysop Discussion comment; shells `gh api graphql` against the Sysop
+repo"). Do not proceed — unless the guard's step 3 mode check applies.
+
+`gh auth status` and the `gh repo view` visibility probe are **not** listed as
+required rules — their absence must not stop the run. Both ship in the template
+allow-list (`Bash(gh auth status)`, `Bash(gh repo view:*)`), because `gh` is not
+in Claude Code's built-in read-only set and every `gh` call therefore needs a
+rule; under `dontAsk` an unlisted one is auto-denied. They stay off the required
+list because each fails loudly on its own terms — a denied auth check reads the
+same as not-logged-in and stops the skill with a visible message, and a denied
+visibility probe degrades per `_shared/upstream-repo.md` § B rather than
+halting. The skill's own read queries *are* `gh api graphql` calls (resolving the
+repo/thread), but they share that command with the write mutation, so the single
+`Bash(gh api graphql:*)` rule above already covers them — there is no separate
+read-only rule to add. Editing `sysop/SYSOP_ISSUES.md` uses the `Edit` tool and staging the
+body uses `Write`. Under `dontAsk` both are denied unless a rule covers the
+path, so the template seeds `Edit(/sysop/SYSOP_ISSUES.md)` and
+`Edit(/sysop/runtime/giveback/**)` (an `Edit` rule admits `Write` too). They
+are not required rules, because a mode that prompts asks for a missing one.
+If either is missing and the run is under `dontAsk`, stop before Step 4 and
+name it: the post would be denied, or would go out unrecorded. The run is
+under `dontAsk` when `permissions.defaultMode` says so in
+`.claude/settings.local.json` or, failing that, `.claude/settings.json`, or
+when any call this run has been denied with a message naming don't-ask mode. Neither rule binds unless Claude Code was started at
+the project root.
+
+If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
+continue.
+
+## Step 0: Parse Arguments
+
+Parse `$ARGUMENTS`:
+
+- **`--execute`** — actually post the comment for the entries you consent to.
+  **Without it, the skill is read-only** (reads + renders + prints the plan,
+  posts nothing, edits nothing).
+- **`--repo owner/name`** — override the upstream target repo for this run.
+  Beats every other source. Absent, the target comes from `<project>/CLAUDE.md
+  § Sysop upstream repo` if that section exists, else the shipped default
+  `getsysop/sysop`. Use the flag for one-off exceptions and a fork; use the
+  CLAUDE.md section for a standing default (see Step 0.6) — e.g. a tester on a
+  private Sysop mirror who wants every win on that repo (the target must have
+  Discussions enabled and not be archived; `getsysop/sysop` has them on).
+
+There is no `--include-resolved` analog (`/report-issues` has one): a win has
+only two states — `Good — keep` (eligible) and `Shared` (already sent) — so
+there is nothing extra to opt into.
+
+## Step 0.5: Confirm `gh` is authenticated
+
+Run `gh auth status`. If it reports not-logged-in, stop and tell the human to
+run `gh auth login` (suggest the `! gh auth login` in-session form). Do not
+attempt to authenticate on their behalf. Posting to Discussions needs a token
+with the `repo` (or `public_repo`) scope — the default `gh auth login` grant
+covers it; if a mutation later fails with a scope error, tell the human to run
+`gh auth refresh -s repo` rather than looping.
+
+## Step 0.6: Resolve the target repo and its visibility
+
+Follow `_shared/upstream-repo.md` — the shared protocol for all three give-back
+skills. In short: `--repo` beats `<project>/CLAUDE.md § Sysop upstream repo`
+beats the shipped default `getsysop/sysop` (which is **public**); a present-but
+-unparseable section is a hard stop, never a silent fall-back to the default.
+Print the target and its source once, plainly, before anything is posted:
+`Target repo for wins: <owner/name>   (source: ...)`. Then probe visibility
+(`gh repo view ... --json visibility`), carrying `[verified]` or `[assumed]` per
+that partial's § B. Every `gh api graphql` call in this skill passes the
+resolved `<owner>`/`<name>` explicitly — never rely on the current directory's
+remote, which is the consumer's project, not Sysop.
+
+**The sensitivity nudge runs later, not here.** It needs the exact rendered payload, which does not exist yet at this step; it fires at the consent gate (Step 2, just before Step 3) per `_shared/upstream-repo.md` § C. Carry this step's resolved target and visibility forward to it.
+
+A win is the least sensitive of the three corpora, but "the security audit finally
+caught X" is a perfectly ordinary win to write down, so the corpus is not exempt.
+
+Reachability is separate from visibility. If the resolved target isn't reachable
+from where you are (a fork slug typo, a private repo you lack access to), the
+first resolve query returns a null repository — stop and tell the human the
+target repo isn't reachable rather than looping. The visibility probe failing is
+*not* proof of that and never triggers this stop on its own.
+
+## Step 1: Read and classify the `[good]` entries
+
+Read `sysop/SYSOP_ISSUES.md` — inside the `sysop/` vendor dir at the consumer-repo
+root (NOT under `.claude/`, and no longer at the bare repo root). If an
+older install left it at the root, read that instead rather than
+reporting nothing. If neither exists, stop with one line: `note:
+sysop/SYSOP_ISSUES.md not present — no wins to share. (Create it and log wins
+there first — one "## GOOD-0001 — <title> (<date>)  [good]" heading per win, with a
+"**Status:** Good — keep" line; /review-close Step 7 also appends to it.)` and stop.
+
+The file mixes friction (`ISSUE-NNNN`) and wins (`GOOD-NNNN`). **This skill
+handles only the wins** — the `[good]` entries. An entry is a win if its heading
+carries the `[good]` marker (`## GOOD-NNNN — <title> (<date>)  [good]`) and/or its
+`**Status:**` is a win status. Read them with judgment: **this file is
+deliberately loose, consumer-restructurable markdown** — the seed template invites
+"you can restructure freely" — so do not assume a rigid shape. If an entry looks
+like a win but its status is missing or ambiguous, surface it to the human as
+"unclear — is this a win to share? (y/n)" rather than silently guessing.
+
+**Entry boundaries — both id kinds, and fences are not headings.** An entry
+begins at a **column-0 `## ` heading whose text starts with an entry id** —
+`ISSUE-NNNN` **or** `GOOD-NNNN` — and ends at the line before the next such
+heading, the next column-0 `## ` heading of any kind, or end-of-file, whichever
+comes first. Three rules keep that honest on a file nothing validates:
+
+- **The number is digits, and the seeded templates are not entries.** `NNNN` in
+  the seed's `## ISSUE-NNNN` / `## GOOD-NNNN` template headings is a literal
+  placeholder, so an id-shape read on digits already excludes both. A read on the
+  bare `## ISSUE-` prefix does not — and the retired instruction permitted either,
+  which is the ambiguity this replaces.
+- **A `## ` line inside a fenced block is neither a boundary nor an entry, and a
+  fence opener may be indented up to three spaces.** This is the independent
+  defence and the only one that reaches a *real* entry: in internal tracker #264 a wrapped
+  list item put a triple-backtick `plan` opener at **column 3**, which CommonMark
+  reads as a fence opener with an info string rather than as prose, and the 119
+  lines it opened absorbed the rest of one entry, the whole of the next, and the
+  head of a third. Counting only column-0 fences misses it, which is why the indent
+  allowance is stated. It also covers the seeded templates a second time: both sit
+  inside triple-backtick fences, *above* every real entry, so neither read above
+  can reach them. Where the `<!-- Entries below. Newest first. -->` marker
+  survives, entries are below it; the fence rule is what holds when a consumer has
+  restructured the marker away.
+- **An unterminated fence is reported, never assumed shut.** If a ``` opens and
+  never closes, everything after it reads as one block and the entries inside it
+  vanish without a trace. Say so and stop rather than posting whatever the
+  truncated block appears to contain — announcing the swallow costs a re-run,
+  and not announcing it costs a wrong post. **An odd number of fence-opener-eligible
+  lines is the cheap signal**: internal tracker #264 took the file from 36 such lines (balanced) to 39,
+  and that count is checkable without parsing anything.
+
+Classify each `[good]` entry by `**Status:**`:
+
+| Status | Eligible to share? |
+|---|---|
+| `Good — keep` | **yes** |
+| `Shared` | no — already sent (skip) |
+
+**Backstop, independent of status:** an entry that already carries a `**Shared:**
+<url>` line (written by a prior run, Step 5) is **ineligible** no matter what its
+`Status:` says. This is what keeps a re-run from double-posting even if a status
+flip was missed. Friction (`ISSUE-NNNN`) entries are out of scope here — ignore
+them; they're `/report-issues`' job. **They are still boundaries**: an
+`ISSUE-NNNN` heading ends the win above it, per the boundary rule above. Reading
+one as body text is the symmetric form of the defect that put `GOOD-0026` inside
+internal tracker #360 — the direction that fails here is a win published with a
+bug report's text appended to it.
+
+Read the consumer name from the file's H1 (`# Sysop Issues — <consumer>`) — you'll
+name it in the comment so cross-repo readers know which project the win came from.
+If the H1 has no name, omit it.
+
+If no `[good]` entries are eligible, print `No shareable [good] entries in
+SYSOP_ISSUES.md. Nothing to share.` and stop.
+
+## Step 2: Render the wins — always
+
+For **every** eligible entry, print the exact win section it would contribute to
+the aggregated comment, so the human reads the full text of each candidate before
+consenting. Do this whether or not `--execute` was passed.
+
+Each win renders as one section of the comment body:
+
+```
+### <entry title>
+<EVERY subsection the entry has, in the entry's own order, verbatim — except
+ `### Environment`, which is dropped — each re-headed one level DEEPER than the
+ win title above, i.e. a `### What worked` in the entry becomes `#### What
+ worked` here>
+```
+
+**Demote the carried headings by one level; do not paste them at their source
+depth.** A win entry is `## GOOD-NNNN — <title>` with `###` subsections, while
+this comment is `## Wins from <consumer>` with `###` per win. Carrying a
+subsection verbatim makes `### What worked` a *sibling* of the win titles either
+side of it, so the win boundaries disappear and a reader cannot tell a win from a
+section of one. Only the body text was carried before, so the nesting used to be
+right by accident; carrying the headings is what makes the depth load-bearing.
+
+**Carry every section, not just `### What worked`.** The shape above used to
+name that one section and nothing else, and the loss was permanent: Step 5
+writes a `**Shared:** <url>` line back to the entry, and `:193`'s backstop then
+makes it ineligible *no matter what its `Status:` says* — so the truncated copy
+is the only copy that ever goes upstream and no later run can carry the missing
+half. What got dropped was the half that makes a win a *registry* rather than
+applause — the part that says where a fix must sit to stay durable, or which
+future edit would destroy the property being praised.
+
+**Enumerating the titles is what fails, and the numbers rot too, so neither is
+written here.** Consumers invent their own headings for that half: one real
+corpus carried a protect-rationale under five different spellings (`### Why this
+is worth protecting`, `### Why it is worth protecting`, `### Why it is worth
+protecting from a future change`, `### Why a future change could lose it`, and a
+singleton), and that corpus roughly quadrupled between the measurement that
+motivated this fix and the phase that shipped it. A rule keyed to a list of
+titles would have been wrong on arrival. "Every section except `### Environment`"
+needs no list and no count to stay current, which is the whole reason it is
+phrased that way. If you want the current figures, derive them from the
+consumer's own `SYSOP_ISSUES.md`; do not quote a number from this file.
+
+`### Environment` is the one exclusion because the assembled comment already
+carries the consumer name and the Sysop commit in its own footer, so repeating a
+per-entry environment block is noise, not signal.
+
+Keep the reporter's words; do not rewrite them. **"Include only what the entry
+actually has" means: do not invent a section the entry lacks — it does NOT mean
+narrow the entry to the sections named here.** That sentence used to sit three
+lines below a template naming a single section, where it read both ways, and the
+resolution was left to the model: the same skill truncated on some runs and not
+others, which is exactly the run-to-run non-determinism the upstream report
+described and could not explain. An entry with no `### What worked` at all is
+still shared, under whatever headings it does have. Then print the **full assembled comment** exactly as it would be
+posted if every eligible entry were included — this is the shown-equals-posted
+payload (the consented subset is re-shown in Step 4 before the actual post):
+
+```
+## Wins from <consumer> — <today's date, YYYY-MM-DD>
+
+Positive signal captured while running Sysop — things that worked notably well
+and are worth protecting from a future change.
+
+### <win 1 title>
+#### <win 1 subsection 1 heading>
+<its text, verbatim>
+#### <win 1 subsection 2 heading>
+<its text, verbatim>
+
+### <win 2 title>
+#### <win 2 subsection 1 heading>
+<its text, verbatim>
+
+---
+Shared from <consumer> via /review-close Step 7 + /share-wins. Sysop commit/install: <from .claude/sysop.lock if readable, with " (installed from a dirty source tree)" appended when the lock carries "source_dirty": true, else "unknown">.
+```
+
+Omit the `<consumer>` bits if no consumer name was found.
+
+**Redaction is the human's call, done by editing the log first.** Before the
+consent step, print one reminder — substituting the **resolved target** from
+Step 0.6: *"This comment is exactly what will be posted to `<target>`'s Wins
+discussion — visible to anyone who can see that repo. If any of it names a path,
+secret, or detail you don't want exposed there, edit `sysop/SYSOP_ISSUES.md` to
+redact it and re-run — I will not auto-redact."* (Don't hardcode "publicly" —
+with the target pointed at a private fork or tester mirror, the discussion is
+visible only to that repo's collaborators.)
+
+**Then run the sensitivity nudge** (`_shared/upstream-repo.md` § C) over the
+rendered comment — every line of it, including each win's heading — printing it
+when the Step 0.6 visibility is `PUBLIC`, `INTERNAL`, or `UNKNOWN`.
+
+If `--execute` was **not** passed, stop here: print `Dry-run. Re-run with
+--execute to choose which wins to share.` and stop. Nothing is posted or edited.
+
+## Step 3: Per-entry consent (mandatory)
+
+Only under `--execute`. Get explicit consent **per entry** — the sibling skills
+gate one item at a time on purpose (`/report-issues` Step 3, `/contribute-convention`
+Step 7), and it matches this skill's privacy model: the human approves each win
+individually, having just read its full text in Step 2. The *transport* is
+batched (one comment), but the *consent* is per win — so a human can share three
+wins and hold back a fourth that named something they'd rather not expose.
+
+Use `AskUserQuestion`, but **never enumerate all entries in one question** —
+`AskUserQuestion` caps options per question (~4) and a full win title overflows an
+option label. Ask per entry (a single yes/no "Share this win?"), or batch at most
+**4 entries per question** with a short option label (the `GOOD-NNNN` id) and the
+full title in the option description. Nothing is shared unless the human
+explicitly picks it; an unselected entry is skipped, never defaulted-in.
+
+If the human consents to none, print `Nothing selected. No wins shared.` and stop.
+
+## Step 4: Resolve-or-create the standing Wins discussion, then post one comment
+
+Only under `--execute`, with ≥1 consented entry.
+
+1. **Resolve the repo id + categories.** Query the target repo for its `id`
+   (repositoryId) and its discussion categories. Bind the string args with `-f`
+   (raw string) — **not** `-F` — so an all-numeric `owner`/`name` (legal on
+   GitHub) isn't coerced to a JSON number; reserve `-F` for the one file-read
+   field (`body=@<file>`) in step 4:
+
+   ```bash
+   gh api graphql \
+     -f owner='<owner>' -f name='<name>' \
+     -f query='query($owner:String!,$name:String!){
+       repository(owner:$owner,name:$name){
+         id
+         discussionCategories(first:25){ nodes{ id name } }
+       }
+     }'
+   ```
+
+   If `repository` is null, the target isn't reachable — stop (see Step 0.6).
+   Then pick the category for **new** discussions: prefer the one named `Show and
+   tell` (GitHub's default home for "here's something that worked"); if absent
+   (a fork with custom categories), fall back to `General` (a default that's
+   almost always present); if neither exists, record "no category" and **keep
+   going** — a category is needed only on the *create* path (step 3), so its
+   absence must not stop the common case where the thread already exists and only
+   a comment is needed. Record the chosen category `id` (categoryId) for step 3.
+
+2. **Find the standing Wins thread.** Query existing discussions oldest-first
+   (the standing thread, once created, has the lowest number, so it's always on
+   the first page):
+
+   ```bash
+   gh api graphql \
+     -f owner='<owner>' -f name='<name>' \
+     -f query='query($owner:String!,$name:String!){
+       repository(owner:$owner,name:$name){
+         discussions(first:50, orderBy:{field:CREATED_AT, direction:ASC}){
+           nodes{ id number title url }
+         }
+       }
+     }'
+   ```
+
+   Match the standing thread by title: prefer an **exact** match on the canonical
+   title `Wins — what Sysop did well`; if none, match the first discussion whose
+   title **contains** `Wins` (case-insensitive) — this tolerates an emoji prefix
+   or a maintainer rename. If multiple match, pick the **oldest** (lowest
+   `number`) so runs converge on one thread. Record its `id` (discussionId) and
+   `url`. If a thread was found, go straight to step 4 (no category needed).
+
+3. **Create the thread once, if absent.** Only if step 2 found no Wins thread.
+   This is the sole step that needs a category — so **stop here** (not in step 1)
+   if step 1 found none: print a clear note asking the human to enable a
+   `Show and tell` or `General` discussion category on the target repo, and stop.
+   Otherwise create the thread in the category from step 1 — an evergreen thread
+   whose *body* is a short intro; the round's wins go in the **comment** (step 4),
+   so every round — including this first one — appends uniformly. The intro body
+   is a fixed constant with no shell-special characters (no `'`, backtick, or `$`),
+   so an inline `-f` value is safe here:
+
+   ```bash
+   gh api graphql \
+     -f repositoryId='<repositoryId>' -f categoryId='<categoryId>' \
+     -f title='Wins — what Sysop did well' \
+     -f body='A running thread of positive signal from real Sysop use — things worth protecting from a future change. Each comment collects the wins from one Sysop project for a round, shared via /share-wins.' \
+     -f query='mutation($repositoryId:ID!,$categoryId:ID!,$title:String!,$body:String!){
+       createDiscussion(input:{repositoryId:$repositoryId,categoryId:$categoryId,title:$title,body:$body}){
+         discussion{ id url }
+       }
+     }'
+   ```
+
+   Capture the new discussion's `id` (discussionId) and `url`. If the create
+   fails, stop — there is nothing to comment into; record the failure and do
+   **not** touch the log.
+
+4. **Assemble the final comment and post it — pass the body as a file, never
+   inline.** Build the comment body from **only the consented entries** (Step 3),
+   in the exact shape Step 2 showed. The body contains backticks, `$`, and code
+   spans **by design** (wins quote skill names, error text, `run_checks`
+   invocations). Inlining that into a shell string is a real hazard: bash would
+   run backtick/`$()` substitutions and break on stray quotes — silently posting
+   something *different* from what the human approved (breaking shown-equals-posted)
+   and, worst case, **executing** approved *text* as a shell command. This is the
+   exact hazard `/report-issues` Step 4 fixed. So:
+
+   - **Resolve the body file's path first, in a call of its own:**
+     ```bash
+     echo "$(git rev-parse --show-toplevel)/$(git rev-parse --show-prefix)sysop/runtime/giveback/sysop-wins-<date>.md"
+     ```
+     The printed line is `<body file>`. Use it, character for character, both
+     as the path you `Write` and as the path `gh` reads below. Never give
+     either of them the `$(…)` expression instead: `Write` expands nothing and
+     the shell does, so the two would name different files. Stage nowhere
+     else: the seeded `Edit(/sysop/runtime/giveback/**)` rule admits this
+     directory, and under `dontAsk` a `Write` anywhere else is denied. If the
+     call is denied, or the printed line is not the project root (the
+     directory Claude Code was started in) followed by
+     `/sysop/runtime/giveback/`, or it contains a `'`, stop and say so. Do not
+     pick a path of your own.
+   - Write the exact assembled body to `<body file>` using the `Write` tool —
+     never pass the body through the shell. It must be **byte-identical** to
+     what you print next. If `Write` refuses because a file is already there
+     (an earlier run left it), `Read` that file, then `Write` again: what `gh`
+     posts must be the body you just wrote.
+   - Print the final body once — `Posting this comment to <thread url>:` followed
+     by the body — so the human sees the exact consented payload immediately
+     before it goes out.
+   - Post it, binding the file to the GraphQL `$body` **String** variable with
+     `-F body=@<file>` (the `@file` read is a `-F`-only feature — gh reads the
+     value from the file with no shell interpolation; a multi-line markdown body
+     never triggers `-F`'s literal-`true`/`false`/`null`/integer coercion). Bind
+     the opaque `discussionId` with `-f`:
+
+     ```bash
+     gh api graphql \
+       -f discussionId='<discussionId>' \
+       -F body=@'<body file>' \
+       -f query='mutation($discussionId:ID!,$body:String!){
+         addDiscussionComment(input:{discussionId:$discussionId,body:$body}){
+           comment{ url }
+         }
+       }'
+     ```
+
+   - After the call returns (success or failure), remove the file with
+     `rm -f '<body file>'`. Nothing depends on it: the next run rewrites the
+     file before `gh` reads it, so a leftover is never what gets posted. No
+     `rm` rule is seeded, so under `dontAsk` this call is denied — leave the
+     file and carry on.
+
+   Capture the returned `comment.url`. If the post fails (auth lapse, scope,
+   network), **do not** edit the log; record the failure and stop — every
+   consented entry keeps `Status: Good — keep` so a re-run retries cleanly.
+
+## Step 5: Flip each shared entry and record the URL
+
+All consented wins went into the **one** comment, so they share the **same**
+comment URL. For each entry that was in the posted comment, edit **the same file
+Step 1 read** — `sysop/SYSOP_ISSUES.md`, or the bare-root copy if that is where
+Step 1 resolved it — via `Edit`, keyed on the unique `## GOOD-NNNN` anchor so the
+change is surgical. Writing to a path Step 1 did not read would fail *after* the
+comment is already posted, and the status flip is the only thing stopping a re-run
+from double-posting:
+
+- Change its `**Status:**` line to `**Status:** Shared`.
+- Insert a line immediately below the Status line:
+  `**Shared:** <comment url> (<today's date, YYYY-MM-DD>)`.
+
+Leave every other entry — unselected, or a friction `ISSUE-NNNN` entry — exactly
+as it was. The `Shared:` line is the durable back-reference (and the Step 1
+ineligibility backstop) so a later `/share-wins` run — or a human — sees the win is
+already upstream and where it went.
+
+**The post and the flips are not atomic — close the gap loudly.** The comment
+posts once, then each entry is flipped one `Edit` at a time. If the post
+succeeded but a flip **fails** for some entry (file locked, anchor not found),
+that entry keeps `Status: Good — keep` with no `**Shared:**` line — and because
+`/share-wins` has no discussion-side duplicate check, a naive re-run would post it
+**again**. So if any flip fails after a successful post, do **not** silently
+move on: print a prominent warning naming the un-flipped `GOOD-NNNN` id(s), state
+plainly that they are **already upstream at `<comment url>`**, and instruct the
+human to hand-add the `**Shared:** <comment url> (<date>)` line to each before any
+re-run (that line alone is the Step 1 ineligibility backstop). This is the one
+re-post window; naming it is how it stays closed.
+
+## Step 6: Report
+
+Print a summary:
+
+```
+Shared to <target> — Wins discussion: <thread url>
+
+Shared:      <N> win(s) in one comment → <comment url>
+Skipped:     <N> not selected
+Ineligible:  <N> already Shared (unchanged)
+
+SYSOP_ISSUES.md edited: <N status flips> (uncommitted — commit the flips when ready)
+```
+
+The log edits are left uncommitted, same contract as every other Sysop skill: the
+human reviews and commits the status flips intentionally.
+
+## Design notes (reference)
+
+- **Skill, not a script.** Like `/report-issues` and `/contribute-convention`, the
+  input is deliberately loose consumer-restructurable markdown; a rigid parser
+  would choke on a reshaped log (the failure an earlier build removed from the check
+  loader). Agent-read markdown is the robust tool; the one irreversible side
+  effect (posting the comment) is human-gated regardless.
+- **Discussion, not Issue.** A win is "protect this," not tracked work — it has no
+  open/close lifecycle. Filing it as an issue would create triage load for the
+  maintainer for something that needs none. A Discussion comment is the right
+  shape (social proof + a durable registry), and a round's wins **aggregate into
+  one comment**, not one issue each — the deliberate contrast with `/report-issues`.
+- **Standing thread, resolve-or-create.** There is one evergreen "Wins" discussion
+  per repo; the skill finds it by title and creates it once if absent, so there's
+  **no maintainer-seeding prerequisite** and no fragile hardcoded discussion
+  number — the "constant" is the category (`Show and tell`) + the canonical title.
+  It self-heals: the first tester to run `/share-wins` establishes the thread; the
+  oldest-match rule converges a rare create race onto one thread.
+- **Upstream, not local.** Posts to `getsysop/sysop` by default; the give-back
+  only works if the win reaches the maintainer. That default is *public*, so the
+  target is a first-class consumer config (`CLAUDE.md § Sysop upstream repo`,
+  durable — a tester mirror, a private fork) with `--repo` as the per-run
+  override on top.
+- **v1 scope.** Resolve/create the thread + post **one aggregated comment** +
+  flip the source entries. **Out:** reactions automation, filing issues, opening
+  PRs, any write to the Sysop repo beyond the Wins discussion + its comment.

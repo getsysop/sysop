@@ -1,0 +1,237 @@
+# Sysop model roles — the single source of truth for "which model does what."
+#
+# Skills do not hard-pin a model name. They pin a ROLE (see the `<!-- sysop:model-roles … -->`
+# marker at the top of each SKILL.md). At install/update time, sysop/scripts/resolve_skill_models.py
+# rewrites every marked `model:` value to the model this file maps the role to. So swapping
+# the model behind a role — a sunset, a cost trade, a better model shipping — is a one-line
+# edit here, not a sweep across the skills tree.
+#
+# ── roles ─────────────────────────────────────────────────────────────────────
+# reasoning  — deep/adversarial/audit/judge work, and the frontmatter of every skill but
+#              /next-task, /sitrep and /auto-fix (20 of the 23).
+#              Worth full reasoning depth; cost is secondary.
+# mechanical — prescriptive, scoped fix agents (e.g. /auto-fix). Pinned, not
+#              inherited, so cost is deterministic regardless of the session model.
+# quick      — trivial read-only surveys (e.g. /next-task). Latency over depth.
+# convention-gate
+#            — /review-close Step 2b's convention agent, and the Step 4 `4a-fix`
+#              re-check of the close's own fix commit (Phase 328), which is a
+#              convention gate over new hunks. Nothing else. Split out
+#              of `reasoning` (Phase 262) so its model can be chosen on its own: the
+#              2b agent is the deep spawn that runs on every target of a close,
+#              unless Step 2b reuses its unmoved APPROVED (Phase 394).
+# security-gate
+#            — /review-close Step 2b's security twin (its item 3b), and nothing
+#              else; the twin has no re-check. Split out of `reasoning` (Phase 381):
+#              it rode the file's `reasoning` default, so moving it moved the audits
+#              and plan review with it.
+#
+#              `convention-gate` defaults to `sonnet` since Phase 381 (2026-10-14): it
+#              is a scoped check of one branch's diff against a map, and on measured
+#              production closes its findings were fixed before merge. It runs at
+#              `high` since Phase 389 (2026-10-19): its own window recorded no effort
+#              level, so the level is the one the executor A/B and the twin replay
+#              were taken at.
+#
+#              `security-gate` follows `reasoning` since Phase 389 (2026-10-19), after
+#              shipping as `sonnet` for five days. The measured case, from one
+#              consumer's replay on 2026-10-19 (`docs/configuration.md` § Models has
+#              it in full): the eight closes the twin had blocked over three weeks on
+#              the reasoning model were re-run on the same diffs and prompts with the
+#              twin on `sonnet`; at `high` it blocked 3 of the 8, at `medium` 3 of 8
+#              (two of them the same), and four of the five `high` misses were the same
+#              finding filed as a note under APPROVED. A missed block is silent, so the
+#              twin's default is the reasoning model and its effort is `reasoning`'s.
+#              Last re-evaluated 2026-10-19; next on 2027-01-14, or sooner when a model
+#              ships or a new measurement moves the evidence. To put the convention
+#              gate on the reasoning tier too, one key: `convention-gate: reasoning`
+#              (a role may name another role, and then follows it, model and effort).
+#              `security-gate: sonnet` takes the cheaper twin back, and runs it at the
+#              session's level unless `efforts:` gives it one.
+# planner    — the plan-only agent: /claim-task Step 7a, /auto-build Phase 6a.
+# plan-review
+#            — the adversarial reviewer of that plan: /claim-task Step 7b,
+#              /auto-build Phase 6b, and `_shared/adversarial-review.md`'s caller
+#              contract, which /plan-review also follows.
+# executor   — the agent that implements a reviewed plan: /claim-task Step 7e,
+#              /auto-build Phase 6e.
+#
+#              These three were one `reasoning` pin until Phase 349, so moving
+#              execution moved review with it. `planner` and `plan-review` name
+#              `reasoning` and follow it. `executor` defaults to `sonnet` at `high`
+#              effort since Phase 381 (2026-10-14): it is where the spend
+#              concentrates, it works from a plan that was already adversarially
+#              reviewed, and an A/B on coding work (two tasks with reviewed plans,
+#              a Low and a Medium) found Sonnet 5.5 at `high` producing the same
+#              design at every site as Opus 5.5 for about two-fifths of the tokens,
+#              while at `medium` it departed from the plan once. Two tasks is a
+#              small sample; last re-evaluated 2026-10-19, next on 2027-01-14, or
+#              sooner when a model ships. With the executor on Sonnet it is also a different model
+#              from the reasoning-tier plan review, which is the independence
+#              `_shared/adversarial-review.md` asks for. `executor: reasoning`
+#              puts it back on the reasoning model; it keeps `high` unless you also
+#              set `efforts: {executor: none}`, which is the pre-381 state.
+#
+# Every skill carries a pin. Four were un-pinned and rode the session model until
+# Phase 349 — /document-work and /triage (now `reasoning`), /sitrep (`quick`) and
+# /auto-fix's orchestrator (`mechanical`) — which on a session running a model
+# priced above `reasoning` made checklist work the most expensive work in the tree.
+# /triage is `reasoning`, not a cheaper tier, because /auto-judge invokes it mid-turn
+# and a skill's frontmatter model holds for the rest of that turn (per the Claude Code
+# docs; not measured here). The cost runs the other way for /auto-fix, which also
+# invokes it: after an untriaged batch, /auto-fix's orchestrator finishes that turn on
+# the reasoning model (its fix agents keep their own `mechanical` pin).
+roles:
+  reasoning:  opus
+  mechanical: sonnet
+  quick:      haiku
+  convention-gate: sonnet
+  security-gate:   reasoning  # follows `reasoning` (Phase 389): see the twin's case above
+  planner:         reasoning   # follows `reasoning` unless you override it
+  plan-review:     reasoning
+  executor:        sonnet
+
+# ── efforts ───────────────────────────────────────────────────────────────────
+# The reasoning effort a role's INLINE spawns pass as the Agent tool's `effort`
+# argument (Claude Code >= 2.1.292): low / medium / high / xhigh / max, or `none`
+# for no argument, in which case the spawn runs at the session's level. A role with
+# no entry here follows the role its value names, as its model does (`plan-review:
+# reasoning` runs at `reasoning`'s effort); a role mapped to a model, with no entry,
+# passes none. Frontmatter skills carry no effort from this file: the resolver writes
+# none, and they run in the main conversation at your session's level (Claude Code's
+# skill frontmatter has an `effort:` field of its own; Sysop leaves it unset).
+#
+# Three ship (Phase 389, 2026-10-19). `executor: high` because of the A/B above.
+# `reasoning: high`, which `planner`, `plan-review` and `security-gate` follow, because
+# the reasoning tier is where a missed finding costs the most and `high` is the level
+# every measurement of it was taken at; a session below `high` would otherwise drop
+# every deep spawn with it. `convention-gate: high` for the same reason the executor
+# has one: a model moved to the cheaper tier keeps the effort it was measured at.
+# `mechanical` and `quick` pass none. A role you map straight to a model in your local
+# file drops the effort it followed, unless you give it an entry of its own.
+efforts:
+  executor:        high
+  reasoning:       high
+  convention-gate: high
+
+# ── about ─────────────────────────────────────────────────────────────────────
+# What `check_skill_models.py --defaults` prints beside each role, and under the table
+# (`Q-676`). The installer's summary, `/intake` and `/onboard` show that table, so a
+# consumer sees what each role does and why before the first close. One line per role,
+# condensing the reasons above; when a default moves, edit its line and `reevaluated:`
+# in the same commit. A role with no line prints a dash.
+about:
+  reasoning:       "the model most skills you invoke run on, and their audit, review and judging agents"
+  mechanical:      "scoped fix agents (/auto-fix); pinned so their cost does not follow your session"
+  quick:           "read-only surveys (/next-task, /sitrep); latency over depth"
+  convention-gate: "/review-close's per-branch convention check; a scoped diff-against-map read"
+  security-gate:   "/review-close's per-branch security twin; a missed block is silent, so the deep model"
+  planner:         "writes the plan for /claim-task and /auto-build"
+  plan-review:     "adversarially reviews a plan before anything is built"
+  executor:        "implements the reviewed plan; most of the spend, and at high it matched opus in a two-task A/B"
+reevaluated:
+  last: "2026-10-19"
+  next: "2027-01-14, or sooner when a model ships"
+cost_shape: >-
+  A skill you invoke runs in your main conversation, on its own role's model and at your
+  session's effort; the agents it spawns take their role's model and effort. /review-close
+  spawns up to two gate agents per branch, and a convention re-check per fix commit, so one
+  close over several branches pays its conversation's cost once.
+
+# ── served ────────────────────────────────────────────────────────────────────
+# The models the roles above are allowed to resolve to. sysop/scripts/check_skill_models.py
+# fails (exit 1) if any role resolves to a model NOT listed here — that is what turns a
+# sunset LOUD instead of silent. On a sunset: change the role's model above AND this list
+# in the same edit, then re-run check_skill_models.py to confirm green.
+served:
+  - opus
+  - sonnet
+  - haiku
+  - fable    # served but unmapped by default — remap a role to it in
+             # served_models.local.yml (see below). Pre-listed here so that
+             # override stays one key AND still goes loud if fable is ever
+             # dropped from this list on a sunset.
+
+# ── inline_models ─────────────────────────────────────────────────────────────
+# The values an INLINE pin may resolve to. A skill's frontmatter `model:` and a
+# skill BODY's `model: "<x>"` are not the same surface, and they do not accept the
+# same values:
+#
+#   * frontmatter — becomes the skill's own `model:` field, which accepts what
+#     `/model` accepts: aliases, full model ids, and meta-values like `best`.
+#     An unrecognized value there falls back to the session model.
+#   * inline — the agent copies the value into the Agent tool's `model`
+#     parameter, which is a CLOSED ENUM. `best`, `inherit`, and full model ids
+#     are each rejected with InputValidationError at spawn time (verified by
+#     making the calls, 2026-08-21). The failure lands mid-skill, at spawn time,
+#     in every skill the role governs — 17 inline pins today, 4 of them on the
+#     `reasoning` role, 6 on the two roles that follow it (`planner`,
+#     `plan-review`), 3 on `executor`, 2 on `convention-gate`, 1 on
+#     `security-gate` and 1 on `mechanical`.
+#     `check_skill_models.py --list` prints the live set.
+#
+# check_skill_models.py fails (exit 1) when a role governing an inline pin
+# resolves to a value not listed here. If your harness accepts more, extend this
+# list in served_models.local.yml rather than editing this file.
+inline_models:
+  - opus
+  - sonnet
+  - haiku
+  - fable
+
+# ── overriding for your project (without losing sunset updates) ────────────────
+# This file is Sysop-owned: `sysop-update.sh` overwrites it so sunset fixes keep flowing.
+# Do NOT edit the roles above to pick your own models — your edits would be clobbered.
+# Instead create `.claude/served_models.local.yml` with just the keys you want to change.
+# The common case is one key — e.g. run the deep-reasoning skills on Claude Fable 5
+# (`fable` is already in `served:` AND `inline_models:` above, so no additions are
+# needed; the harness needs Claude Code >= 2.1.170 for fable, and where a pinned model
+# is unavailable the session silently keeps its current model):
+#
+#     roles:
+#       reasoning: fable
+#
+# Every role except `quick` governs inline pins, so map each of them —
+# `reasoning`, `mechanical`, `convention-gate`, `security-gate`, `planner`,
+# `plan-review`, `executor` — to one of the four aliases above, or to the name of
+# another role (as the defaults for `planner` and `plan-review` do).
+# Mapping any of them to `best`, `inherit`, `opusplan`, a full model id, or a
+# provider-specific id BREAKS every agent spawn in the skills that role governs — adding
+# the value to `served:` does not help, because `served:` is Sysop's sunset allowlist and
+# not the harness's enum. `quick` governs only frontmatter today and is not so constrained,
+# but that is a property of the current pin set, not a promise.
+#
+# For a value outside the default lists: always extend `served:`, and extend
+# `inline_models:` as well if the role governs any inline pin. The example below needs
+# only `served:`, because `quick` is frontmatter-only:
+#
+#     roles:
+#       quick: inherit               # frontmatter-only role: `inherit` follows the session
+#     served:
+#       - inherit                    # list EVERY non-default value you map a role to —
+#                                    #   check_skill_models.py requires each role to
+#                                    #   resolve to a served entry, with no exemptions.
+#
+# Effort is one key too, under `efforts:` in the same local file. Moving `executor`
+# to another model keeps its `high`; set a level of your own, or `none` to pass no
+# effort and run at the session's level:
+#
+#     roles:
+#       executor: opus
+#     efforts:
+#       executor: none
+#
+# A `CLAUDE_CODE_EFFORT_LEVEL` environment variable overrides every per-spawn effort, so
+# setting it overrides the roles without any error. Below Claude Code 2.1.292 there is no
+# per-spawn effort: save a level for the model under `modelSettings` in your Claude Code
+# settings instead (read at session start):
+#
+#     "modelSettings": { "claude-sonnet-5-5": { "effortLevel": "high" } }
+#
+# The local file is never overwritten and layers on top (local keys win).
+#
+# On non-Claude models: the role indirection itself does not constrain a value to Claude —
+# only the default mapping above happens to be Claude — but that seam is real for
+# FRONTMATTER pins and not for inline ones. A full model id or a provider-specific id
+# (Bedrock ARN, Vertex name) resolves fine in frontmatter and is rejected by the inline
+# enum, so a role governing an inline pin cannot carry one today.

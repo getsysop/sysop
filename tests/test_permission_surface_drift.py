@@ -1,0 +1,732 @@
+"""Drift guard for the permission surface (Phase 152, upstream #205 + #210).
+
+The defect this exists to prevent: the shipped `.claude/settings.json` template
+and the skills' Step 0 "required rules" blocks drifted apart with nothing
+verifying them against each other. `/review-close` hard-required six rules the
+installer never seeded (five `pr`-policy verbs plus a `git worktree list` shape
+mismatch), and `/sitrep` hard-required six git rules that never shipped — five
+plainly read-only verbs the harness auto-approves in every mode, plus a
+`git worktree list:*` for a call it makes inside `sitrep_survey.py` rather than
+at the Bash layer. Neither surfaced because the consumers exercising those paths
+knowingly overrode the documented gate.
+
+Five assertions, in both directions:
+
+1. Every rule a skill declares as *required* (bullet form, inside its pre-flight
+   block) is satisfied by the shipped template — otherwise a fresh install
+   hard-stops at Step 0.
+2. Every rule the template seeds is either named by a skill or carries an
+   explicit justification here, so headroom is a decision rather than accretion.
+3. No skill declares a read-only `git` verb as required. Claude Code
+   auto-approves read-only forms of `git` in every mode, so listing one costs a
+   fresh-install hard-stop and buys nothing (the `/sitrep` regression).
+4. The guard reads `permissions.defaultMode` and skips rather than halting under
+   `bypassPermissions`, and every skill whose pre-flight can hard-stop points at
+   that escape.
+5. No skill cites a pre-Phase-152 guard step number (the Algorithm renumbered;
+   `/report-issues` kept citing step 4, which now names a different step).
+
+WHAT THIS FILE CANNOT DO. Assertions 4 and 5 are drift guards over *prose*. The
+first draft's versions were substring-presence checks over the whole file, and
+an adversarial reviewer defeated all four with semantic inversions that kept the
+tokens — an HTML-commented step, "the allow-list is **not** inert", "**Ignore**
+`permissions.defaultMode`", a skill *naming* the mode check while negating it,
+and "Do not stop." kept as a historical note beside a halting instruction. They
+now parse the numbered Algorithm step in isolation, strip HTML comments and
+blockquoted lines first, and pin whole clauses rather than fragments, which
+kills all six. That is a higher bar, not a proof: prose asserting the opposite
+of what it says elsewhere can still be written. These guards catch drift, not an
+adversary.
+
+WHAT A RULE STRING DOES NOT PROVE. A rule being present does not mean the
+command is authorized — the matcher compares against the literal text sent, and
+an assignment capture, a `for … done` loop, a `|| true` tail, or a variable
+command word each defeat an otherwise-correct rule. Nothing here checks
+invocation shapes; see `WORKFLOW.md` § 8.2a *Invocation shapes* for the ones
+Sysop knows are uncovered.
+
+Matcher semantics used below were established by a `claude-code-guide` probe of
+the official permissions docs on 2026-07-26: rules match the literal text the
+model sends (before shell expansion), and a trailing `:*` is a wildcard with a
+word boundary, so `Bash(git:*)` covers `git worktree list --porcelain` while
+`Bash(git worktree list)` — no wildcard — matches only the bare invocation.
+"""
+import json
+import re
+import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+
+from _prose_guard_helpers import carries  # noqa: E402
+from skill_runner_text import runner_texts  # noqa: E402
+from pathlib import Path
+from skill_runner_text import text_of
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TEMPLATE = REPO_ROOT / "core/companion/.claude/settings.json"
+SKILLS_DIR = REPO_ROOT / "core/skills"
+GUARD = SKILLS_DIR / "_shared/permission-guard.md"
+WORKFLOW = REPO_ROOT / "core/companion/docs/WORKFLOW.md"
+
+# Read-only forms of `git`, auto-approved in every permission mode. A skill that
+# lists one of these as a required rule hard-stops consumers for nothing. Keyed
+# on the bare verb: `git branch:*` is banned, `git branch -d:*` is not (that one
+# writes).
+READ_ONLY_GIT_VERBS = (
+    "git log", "git status", "git branch", "git diff", "git rev-parse",
+    "git rev-list", "git show", "git describe", "git blame", "git ls-files",
+    "git shortlog", "git for-each-ref", "git cat-file", "git merge-base",
+    "git check-ignore", "git name-rev",
+)
+# Verbs above that also have a *write* form, so only their bare spelling is
+# banned: `git branch -d`/-D really does delete, and /review-close requires
+# both. Everything else in the list writes nothing whatever its flags, so a
+# flagged spelling (`git log --oneline`) is banned too and cannot smuggle the
+# verb past the check.
+WRITE_CAPABLE_SPELLINGS = ("git branch",)
+# NOTE ON THE EVIDENCE THIS BAN RESTS ON. The docs verify the *category*
+# ("read-only forms of `git`" run without a prompt in every mode) but never
+# enumerate its members, and describe the surrounding built-in set as
+# non-exhaustive. So membership is an inference, and this test promotes that
+# inference to a gate. That is deliberate and bounded: the cost of a wrong ban
+# is that a genuinely-needed rule cannot be *declared* (it can still ship, and
+# `git worktree list:*` does), while the cost of no ban is the /sitrep
+# regression — a fresh-install hard-stop on rules the installer never seeds.
+# Revisit if Claude Code ever publishes the enumeration.
+
+# Seeded rules no skill names in backticks. Each needs a reason, so that "is this
+# dead weight or intentional headroom?" is answered once per rule instead of
+# re-litigated. Removing a rule from the template does NOT remove it from an
+# installed consumer (install_permissions set-unions), so pruning buys nothing
+# for existing installs — the bar for keeping one is only that it is reachable.
+SEEDED_WITHOUT_SKILL_MENTION = {
+    # ---- Phase 220 entry RETIRED by Phase 241 (`Q-329`). It was true when
+    # written: the rule was seeded for `--check-headers`, an operator-only
+    # spelling. But `/review-close` Step 4b HAS prescribed this script since it
+    # gained a batch-set derivation — it just prescribed it as `bash
+    # …review_index.py --list`, which binds no rule and cannot run at all (bash
+    # lexes the module docstring as one quoted word; exit 2, empty stdout).
+    # So the orphan-rule list and the broken command word were the same defect
+    # seen from two ends, and the list entry was the half that looked healthy.
+    # Phase 241 fixed the command word; the skill now mentions the rule.
+    # ---- Phase 184: prescribed by docs and by the installer, not by a skill
+    # step. `test_prescribed_command_coverage.py` is the guard that now
+    # requires them; each is reachable from shipped instructions.
+    # ---- Phase 425 (`Q-665`): a `Read` rule, which the scan's `Bash|Edit` pattern cannot see.
+    "Read(~/.claude/plugins/cache/sysop/**)":
+        "A plugin install's step files sit in the plugin cache, outside the project, and a "
+        "`Read` there is denied under dontAsk, from the skill's own stub too (measured, "
+        "Phase 425). `_shared/permission-guard.md`'s dontAsk note and WORKFLOW's half-A "
+        "paragraph name it; no step reads it by that path, since the stub's "
+        "${CLAUDE_SKILL_DIR} is substituted.",
+    "Bash(bash sysop/scripts/self_check.sh)":
+        "install.sh's post-install footer prints this in BOTH modes and "
+        "docs/getting-started.md puts it in a fence; WORKFLOW.md § 8.4 lists "
+        "it as the one-command health check. No skill step invokes it.",
+    "Bash(bash sysop/scripts/self_check.sh:*)":
+        "Same self_check.sh script, with flags (Phase 184). The installer "
+        "prints the absolute-path spelling too, which no relative rule can "
+        "match — a stated limit.",
+    "Bash(bash sysop/scripts/cleanup_worktrees.sh)":
+        "WORKFLOW.md § 4 prescribes it as an operator step and /sitrep names "
+        "it as a recommended actuator; /claim-task and /auto-build discuss "
+        "its --force semantics but neither runs it.",
+    "Bash(bash sysop/scripts/cleanup_worktrees.sh:*)":
+        "Same cleanup_worktrees.sh script with --clean / --force (Phase "
+        "184), which is the form WORKFLOW.md § 4 actually shows.",
+    # ---- Phase 237 (`Q-314`): the `user_action` clearing. Deliberately has no
+    # skill invoker — it is a HUMAN action, run when the human finishes the
+    # human-only step. `/roadmap` names the command in its
+    # unblock-the-human-first ordering and `tasks/schema.md` § User ops puts it
+    # in a fence, but `/roadmap` is read-only and must not run it. Seeded
+    # anyway because the human routinely asks the agent to run it on their
+    # behalf once the step is done, which is the same operator shape as
+    # `backfill_completed_dates.py` below.
+    # The BARE form is deliberately NOT seeded: `task_id` is a required
+    # positional, so `python3 sysop/scripts/clear_user_action.py` with no
+    # argument always exits 2 on a usage error. A rule matching only an
+    # invocation that cannot succeed binds nothing — Phase 152's finding, and
+    # this phase's round caught it being re-committed here.
+    "Bash(python3 sysop/scripts/clear_user_action.py:*)":
+        "No skill step invokes it (it is a human action). Prescribed by "
+        "tasks/schema.md \u00a7 User ops in a fence and named by /roadmap's "
+        "unblock-the-human-first ordering; the <TASK-ID> form is the only one "
+        "either prescription shows (Phase 237, Q-314).",
+    "Bash(.venv/bin/python3 sysop/scripts/clear_user_action.py:*)":
+        "The PEP-668 spelling. The script needs PyYAML, and on a Homebrew or "
+        "modern-distro host the venv interpreter is the one that has it - the "
+        "same pairing validate_tasks.py carries (Phase 237).",
+    "Bash(python3 sysop/scripts/backfill_completed_dates.py)":
+        "No skill prescribes it; core/companion/tasks/README.md carries the "
+        "one recipe that runs it, and WORKFLOW.md § 8.2a used to claim an "
+        "allow-rule existed for it when none did (Phase 184).",
+    "Bash(python3 sysop/scripts/backfill_completed_dates.py:*)":
+        "Same backfill_completed_dates.py script with --path (Phase 184), "
+        "the form the roadmap-migration recipe in tasks/README.md uses.",
+    "Bash(bash sysop/scripts/install_hooks.sh)":
+        "Human-invoked only since Phase 150 removed the worktree auto-arm; "
+        "WORKFLOW.md § 8.2a records it as direct-user-invocation-only; § 8.4 "
+        "lists it as the post-reconcile re-arm step.",
+    "Bash(bash sysop/scripts/sysop-update.sh)":
+        "Human/agent-invoked update shim (sysop-update.sh), not a skill step "
+        "— shipped for agent-driven updates in Phase 99.",
+    "Bash(bash sysop/scripts/sysop-update.sh:*)":
+        "Same shim with flags — `--yes` clears install.sh's interactive gate "
+        "for agent-driven updates (Phase 99).",
+    "Bash(.venv/bin/python3 sysop/scripts/validate_tasks.py)":
+        "Phase 45b venv twin; /intake, /add-task, /onboard, /claim-task and "
+        "/auto-build all invoke the venv form with no arguments.",
+    "Bash(.venv/bin/python3 sysop/scripts/validate_tasks.py:*)":
+        "Phase 45b venv twin, invoked with `--quiet` / `--path`.",
+    "Bash(python3 sysop/scripts/sitrep_survey.py)":
+        "No-arg twin of the sitrep_survey.py rule /sitrep declares — the "
+        "script takes only optional flags, so the bare form is a live spelling.",
+    "Bash(python3 sysop/scripts/next_task.py)":
+        "Non-venv twin of the next_task.py call /next-task ships, whose "
+        "$ARGUMENTS may be empty (Phase 45b dual-spelling convention).",
+    "Bash(python3 sysop/scripts/next_task.py:*)":
+        "Non-venv twin of the next_task.py call /next-task ships with "
+        "--review / --avoid-inflight (Phase 45b dual-spelling convention).",
+    "Bash(.venv/bin/python3 sysop/scripts/next_task.py)":
+        "The next_task.py spelling /next-task actually ships (Phase 45b "
+        "venv-preferred), with empty $ARGUMENTS.",
+    "Bash(.venv/bin/python3 sysop/scripts/next_task.py:*)":
+        "The next_task.py spelling /next-task actually ships (Phase 45b "
+        "venv-preferred), with arguments.",
+    "Bash(python3 sysop/scripts/scope_overlap.py)":
+        "No-arg twin of the rule /claim-task Step 2 declares. Every documented "
+        "invocation of scope_overlap.py passes a TASK_ID, so this bare form is "
+        "headroom rather than a live path.",
+    "Bash(.venv/bin/python3 sysop/scripts/scope_overlap.py)":
+        "No-arg twin in the Phase 45b venv spelling; headroom, same as above.",
+    "Bash(.venv/bin/python3 sysop/scripts/scope_overlap.py:*)":
+        "The scope_overlap.py spelling /claim-task Step 2 ships (Phase 45b "
+        "venv-preferred).",
+    "Bash(.venv/bin/python3 sysop/scripts/ingest_security_report.py:*)":
+        "Phase 45b venv twin of /security-audit Step 3c's ingest call.",
+    "Bash(.venv/bin/python3 sysop/scripts/pr_dependabot.py:*)":
+        "Phase 45b venv twin of /pr-dependabot's classifier call.",
+}
+
+
+def _seeded():
+    return json.loads(TEMPLATE.read_text())["permissions"]["allow"]
+
+
+def _inner(rule):
+    """`Bash(git add:*)` -> `git add:*`."""
+    m = re.fullmatch(r"Bash\((.*)\)", rule)
+    return m.group(1) if m else None
+
+
+def _wildcard_prefix(inner):
+    """The command prefix a trailing-wildcard rule authorizes, else None."""
+    for suffix in (":*", " *"):
+        if inner.endswith(suffix):
+            return inner[: -len(suffix)]
+    return None
+
+
+DEFAULT_BRANCH_PLACEHOLDER = "<default branch>"
+
+
+def satisfied(required, allow_rules):
+    """Does `allow_rules` satisfy `required`?
+
+    Exact match, or a broader rule whose wildcard prefix covers it. This mirrors
+    `_shared/permission-guard.md` § Algorithm step 4 — checking exact strings
+    alone reports a false miss against a consumer running `Bash(git:*)`.
+    """
+    if required in allow_rules:
+        return True
+    # `Q-381` (Phase 255): a declared rule may carry the `<default branch>` placeholder.
+    # `install.sh` substitutes the consumer's own branch into the template at install time,
+    # so the seeded rule reads `origin/main` here and `origin/master` on a `master` consumer.
+    # Without this arm the check reports drift against every consumer — and, worse, mirrors a
+    # real failure: `/review-close`'s own Pre-flight guard compares the same two strings and
+    # would hard-stop a correct install. The skill resolves the placeholder before comparing;
+    # this is the same substitution, done for the same reason.
+    if DEFAULT_BRANCH_PLACEHOLDER in required:
+        pat = re.compile("^" + re.escape(required).replace(
+            re.escape(DEFAULT_BRANCH_PLACEHOLDER), r"[^\s()]+") + "$")
+        if any(pat.match(rule) for rule in allow_rules):
+            return True
+    r = _inner(required)
+    if r is None:
+        return False
+    for rule in allow_rules:
+        a = _inner(rule)
+        if a is None:
+            continue
+        prefix = _wildcard_prefix(a)
+        if prefix is None:
+            continue
+        if r == prefix or r.startswith(prefix + " ") or r.startswith(prefix + ":"):
+            return True
+    return False
+
+
+def _preflight_body(text):
+    """The skill's pre-flight / Step 0 section, up to the next `## ` heading."""
+    m = re.search(r"^## (Pre-flight|Step 0)[^\n]*\n(.*?)(?=^## )", text, re.S | re.M)
+    return m.group(2) if m else None
+
+
+# Every CommonMark list-item marker: `-`, `*`, `+`, and an ordered `1.` / `1)`.
+LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d{1,9}[.)]) ")
+
+
+def test_the_list_item_reader_sees_every_marker():
+    """Control for `declared_required()`'s marker set (Phase 333's round): a reader keyed to
+    `-`/`*` alone let a `+` bullet or a `1.` item hard-require a rule unseen."""
+    for line in ("- `Bash(x)`", "* `Bash(x)`", "+ `Bash(x)`", "1. `Bash(x)`", "12) `Bash(x)`",
+                 "   - `Bash(x)`"):
+        assert LIST_ITEM.match(line), f"list item not read: {line!r}"
+    for line in ("`Bash(x)` in prose", "-`Bash(x)`", "1.`Bash(x)`"):
+        assert not LIST_ITEM.match(line), f"prose read as a list item: {line!r}"
+
+
+def declared_required():
+    """skill name -> [rules declared required], list-item form only.
+
+    List-item form is the contract: a `Bash(...)` named in a *paragraph* of the
+    pre-flight is documentation (an explicit non-entry, or a note about what the
+    template ships), not a hard requirement. `/review-close` relies on this to
+    say out loud which verbs it deliberately does NOT require.
+
+    Every CommonMark list marker counts -- `-`, `*`, `+`, `1.` and `1)` -- not just
+    `-`/`*`: Phase 333's round added a `+` bullet and a `1.` item to a pre-flight
+    and a reader keyed to two markers could not see either.
+    """
+    out = {}
+    for name, text in runner_texts(SKILLS_DIR).items():
+        body = _preflight_body(text)
+        if body is None:
+            continue
+        rules = []
+        for line in body.splitlines():
+            if LIST_ITEM.match(line):
+                rules += re.findall(r"`(Bash\([^`]+\))`", line)
+        if rules:
+            out[name] = rules
+    return out
+
+
+def mentioned_anywhere():
+    rules = set()
+    for path in SKILLS_DIR.rglob("*.md"):
+        # `Edit(...)` since Phase 377 (`Q-663`): the template seeds file-edit rules too.
+        rules |= set(re.findall(r"`((?:Bash|Edit)\([^`]+\))`", path.read_text()))
+    return rules
+
+
+# ── sanity floors: every assertion below is vacuous if the parser finds nothing ──
+
+# Every skill whose pre-flight declares required rules. Asserted as a SET, not a
+# count: a count floor let four skills be renamed out of the scan while the
+# suite stayed green (Phase 152 adversarial review). Adding or removing a skill
+# here is a deliberate decision, exactly like EXPECTED_LOOP_ALLOW.
+SKILLS_WITH_DECLARED_RULES = {
+    "auto-build", "auto-fix", "auto-judge", "claim-task", "codebase-review",
+    "contribute-convention", "document-work", "pr-dependabot", "release",
+    "report-issues", "review-close", "roadmap", "security-audit", "share-wins",
+    "sitrep", "triage",
+}
+
+
+def test_parsers_find_the_surface():
+    seeded = _seeded()
+    assert len(seeded) > 50, f"template shrank unexpectedly: {len(seeded)} rules"
+    declared = declared_required()
+    assert set(declared) == SKILLS_WITH_DECLARED_RULES, (
+        "the set of skills whose pre-flight parses changed — a renamed heading "
+        "silently drops a skill from every check below. "
+        f"missing={SKILLS_WITH_DECLARED_RULES - set(declared)} "
+        f"unexpected={set(declared) - SKILLS_WITH_DECLARED_RULES}"
+    )
+    assert len(declared["review-close"]) >= 24, "review-close pre-flight under-parsed"
+    mentioned = mentioned_anywhere()
+    assert len(mentioned) > 40, "backtick-mention scan under-parsed"
+    # `Bash(git:*)` is named only in _shared/permission-guard.md, so this fails
+    # if the scan stops recursing into _shared/ (where the shared partials live).
+    assert "Bash(git:*)" in mentioned, "_shared/ dropped out of the mention scan"
+
+
+# ── direction 1: declared -> seeded ──
+
+def test_every_declared_required_rule_ships_in_the_template():
+    """Upstream #210: six of /review-close's 23 were absent, so a `pr`-policy
+    consumer hard-stopped at Step 0 on a fresh install."""
+    seeded = _seeded()
+    missing = {
+        skill: [r for r in rules if not satisfied(r, seeded)]
+        for skill, rules in declared_required().items()
+    }
+    missing = {k: v for k, v in missing.items() if v}
+    assert not missing, (
+        "skills hard-require rules the installer never seeds — a fresh install "
+        f"hard-stops at Step 0: {missing}"
+    )
+
+
+def test_review_close_resolves_the_default_branch_before_its_permission_guard():
+    """`Q-381`/`A15`: ordering, which no guard checked until this one.
+
+    `/review-close`'s Pre-flight rule list carries the `<default branch>` placeholder, so
+    the guard is itself one of the steps that needs the resolved name. Resolve after it and
+    the guard compares a placeholder against a concrete rule and hard-stops a correct
+    install. This phase placed the section after Pre-flight on its first cut, by analogy
+    with every other skill, and only `test_every_declared_required_rule_ships_in_the_template`
+    caught it — by the rule text differing, not by the ordering being wrong.
+
+    Phase 254 found this class by deleting `/document-work`'s only resolve instruction and
+    getting no test failure at all. Ordering is a property prose asserts and nothing
+    verifies; this asserts it.
+    """
+    text = text_of(SKILLS_DIR / "review-close" / "SKILL.md")
+    resolve = text.find("## Resolve the default branch")
+    preflight = text.find("## Pre-flight: Permission Guard")
+    assert resolve != -1, "the resolve section is gone or renamed"
+    assert preflight != -1, "the permission guard section is gone or renamed"
+    assert resolve < preflight, (
+        "the resolve instruction must PRECEDE the permission guard: Pre-flight's own "
+        "required-rule list carries the placeholder, so a guard that runs first compares "
+        "a placeholder against a concrete rule and hard-stops a correct install"
+    )
+
+
+def test_the_resolve_section_still_says_what_it_is_for():
+    """`Q-381`: the ordering test above compares two offsets and nothing else.
+
+    The round's guards lens emptied the section body, reversed its polarity ("On exit 1,
+    **fall back to `main`**"), replaced the bare invocation with the variable assignment
+    Rule A exists to forbid, and deleted the substitute instruction outright — all four
+    green, because a heading in the right place satisfied everything. That is precisely the
+    class the ordering test's own docstring cites: Phase 254 deleted `/document-work`'s only
+    resolve instruction and got no failure at all.
+
+    So pin the four things the section must actually DO. Each is a separate assertion, not
+    a phrase count, because N disconnected phrases are satisfiable by a sentence asserting
+    the opposite.
+    """
+    text = text_of(SKILLS_DIR / "review-close" / "SKILL.md")
+    start = text.find("## Resolve the default branch")
+    end = text.find("## Pre-flight: Permission Guard")
+    assert 0 <= start < end, "the resolve section is missing or out of order"
+    body = text[start:end]
+
+    assert "bash sysop/scripts/default_branch.sh" in body, (
+        "the section must name the command that resolves the branch")
+    assert "<default branch>" in body, (
+        "the section must name the placeholder it tells the reader to substitute")
+    # Polarity: an unresolvable branch STOPS. The reversal is the dangerous edit, because
+    # falling back to `main` is right on most consumers and wrong exactly where it matters.
+    assert "do not fall back" in body.lower(), (
+        "the refusal arm lost its polarity — an unresolvable default branch must stop the "
+        "close, not default to `main`")
+    # Rule A's whole point: bare invocation, never a variable. A rule does not match past a
+    # variable assignment, so the assigned form binds nothing.
+    assert carries(body, "not a variable to set"), (
+        "the section no longer says the placeholder is not a shell variable — the one thing "
+        "`_shared/main-push-guard.md` Rule A exists to prevent")
+    assert 'DEFAULT_BRANCH="$(' in body, (
+        "the section should show the assigned form it forbids, so a reader recognises it")
+
+
+# ── direction 2: seeded -> declared or justified ──
+
+def test_every_seeded_rule_is_named_by_a_skill_or_justified():
+    mentioned = mentioned_anywhere()
+    # `Q-381`: symmetric with `satisfied()`. A skill that names
+    # `Bash(git reset --hard origin/<default branch>)` HAS named the seeded
+    # `Bash(git reset --hard origin/main)` — install.sh writes the concrete branch into
+    # the template, so the two are the same rule at two stages of the same pipeline.
+    # Fixing only the forward direction leaves this one reporting the rule as an orphan
+    # nobody asked for, which is how a real grant ends up "justified" in a list instead
+    # of named by the step that needs it.
+    def _named(rule):
+        if rule in mentioned:
+            return True
+        return any(
+            DEFAULT_BRANCH_PLACEHOLDER in m and satisfied(m, [rule])
+            for m in mentioned
+        )
+
+    orphans = [
+        r for r in _seeded()
+        if not _named(r) and r not in SEEDED_WITHOUT_SKILL_MENTION
+    ]
+    assert not orphans, (
+        "seeded rules that no skill names and that carry no justification in "
+        f"SEEDED_WITHOUT_SKILL_MENTION: {orphans}"
+    )
+
+
+def test_justification_list_has_no_stale_entries():
+    """A justified-orphan entry that a skill now names, or that the template no
+    longer ships, is stale bookkeeping — the inventory must stay live."""
+    seeded, mentioned = set(_seeded()), mentioned_anywhere()
+    stale = [
+        r for r in SEEDED_WITHOUT_SKILL_MENTION
+        if r not in seeded or r in mentioned
+    ]
+    assert not stale, f"stale SEEDED_WITHOUT_SKILL_MENTION entries: {stale}"
+
+
+def test_every_justification_names_something_concrete():
+    """A length floor alone passes on 42 characters of filler. Require a real
+    referent — a script path, a skill, or a phase."""
+    for rule, reason in SEEDED_WITHOUT_SKILL_MENTION.items():
+        assert len(reason.strip()) > 40, f"{rule} carries no real justification"
+        assert any(
+            tok in reason for tok in (".py", ".sh", "/", "Phase")
+        ), f"{rule}'s justification names no script, skill, or phase: {reason!r}"
+
+
+# ── direction 3: read-only git must not be required ──
+
+def test_no_skill_requires_a_read_only_git_verb():
+    """The `/sitrep` regression: it required `git log`, `git status`,
+    `git branch`, `git rev-parse` and `git rev-list`, none of which ship, and
+    ended its block with "Do not proceed"."""
+    offenders = {}
+    for skill, rules in declared_required().items():
+        for rule in rules:
+            inner = _inner(rule)
+            if inner is None:
+                continue
+            exact = inner[:-2] if inner.endswith((":*", " *")) else inner
+            # Normalise to the first two tokens so a flag cannot smuggle a
+            # banned verb past the check (`Bash(git log --oneline:*)`) — except
+            # for the verbs that have a real write form, where only the bare
+            # spelling is banned.
+            verb = " ".join(exact.split()[:2])
+            banned = exact in READ_ONLY_GIT_VERBS if verb in WRITE_CAPABLE_SPELLINGS \
+                else verb in READ_ONLY_GIT_VERBS
+            if banned:
+                offenders.setdefault(skill, []).append(rule)
+    assert not offenders, (
+        "read-only git verbs declared as required rules — the harness "
+        f"auto-approves these in every mode: {offenders}"
+    )
+
+
+# ── direction 4: the mode check exists and is reachable from the skills ──
+
+def _guard_live_text():
+    """The guard's prose with HTML comments and blockquoted lines removed.
+
+    Both are ways to disable an instruction while leaving its words in the file
+    — the class that let a commented-out guard satisfy a Phase-151 test.
+    """
+    text = re.sub(r"<!--.*?-->", "", GUARD.read_text(), flags=re.S)
+    return "\n".join(
+        ln for ln in text.splitlines() if not ln.lstrip().startswith(">")
+    )
+
+
+def _algorithm_step(n):
+    """The live text of numbered Algorithm step `n`, up to the next step."""
+    body = _guard_live_text()
+    body = body[body.index("## Algorithm"):]
+    m = re.search(rf"^{n}\. (.*?)(?=^{n + 1}\. |^## )", body, re.S | re.M)
+    return " ".join(m.group(1).split()) if m else None
+
+
+def test_guard_step_3_reads_default_mode_and_proceeds_under_bypass():
+    """Upstream #205: the guard stated its precondition and never tested it.
+
+    Asserted on step 3's own text rather than the whole file, so a sentence
+    kept elsewhere as a historical note cannot stand in for a live instruction.
+    """
+    step = _algorithm_step(3)
+    assert step, "Algorithm step 3 is missing, commented out, or blockquoted"
+    assert re.search(r"\*\*Read `permissions\.defaultMode`\*\*", step), (
+        "step 3 no longer *reads* permissions.defaultMode (an 'Ignore …' or "
+        "'Re-read permissions.allow' rewrite lands here)"
+    )
+    assert "bypassPermissions" in step
+    assert "is **inert**" in step and "not inert" not in step, (
+        "step 3 no longer states the allow-list is inert under bypassPermissions"
+    )
+    assert "Do not stop." in step, "step 3's verdict is no longer proceed-not-halt"
+    for halting in ("stop with a clean error", "hard-stop", "halt the run"):
+        assert halting not in step, f"step 3 now halts ({halting!r})"
+
+
+def test_guard_step_4_accepts_a_broader_allow_rule():
+    """A consumer running `Bash(git:*)` must not be told every git rule is
+    missing. Pinned on step 4's text so an inverted rewrite ("satisfied ONLY by
+    an exact string match, and never by a broader allow-rule…") fails."""
+    step = _algorithm_step(4)
+    assert step, "Algorithm step 4 is missing, commented out, or blockquoted"
+    assert "satisfied by an **exact string match**, or by a **broader allow-rule that already covers it**" in step, (
+        "step 4 no longer tolerates a broader-but-equivalent consumer rule"
+    )
+    assert "`Bash(git:*)`" in step and "satisfy a requirement" in step
+
+
+# The sanctioned escape wording. Pinned as one phrase so a skill cannot satisfy
+# the check by *naming* the mode check while negating it ("the guard's step 3
+# mode check does NOT apply to this skill").
+MODE_CHECK_ESCAPE = "unless the guard's step 3 mode check applies"
+
+
+def test_hard_stopping_skills_point_at_the_mode_check():
+    """A skill that can hard-stop must name the escape, or #205 recurs one skill
+    at a time. Whitespace is collapsed before both checks: `/report-issues`
+    hard-wraps `Do not\nproceed.` and escaped this test entirely until Phase
+    152's review caught it."""
+    offenders = []
+    for name, text in runner_texts(SKILLS_DIR).items():
+        body = _preflight_body(text)
+        if body is None:
+            continue
+        flat = " ".join(body.split())
+        if "Do not proceed" not in flat:
+            continue
+        if MODE_CHECK_ESCAPE not in flat:
+            offenders.append(name)
+    assert not offenders, (
+        "skills whose pre-flight hard-stops without pointing at the guard's "
+        f"bypassPermissions mode check: {offenders}"
+    )
+
+
+def test_no_skill_cites_a_stale_guard_step_number():
+    """The Algorithm renumbered in Phase 152 (the error message moved 4 -> 5).
+    `/report-issues` kept citing step 4, which after the renumber names the
+    satisfaction check rather than the error."""
+    stale = []
+    for path in sorted(SKILLS_DIR.rglob("*.md")):
+        if path == GUARD:
+            continue
+        flat = " ".join(path.read_text().split())
+        if re.search(r"§ Algorithm step [1-4]\b", flat):
+            stale.append(path.parent.name)
+    assert not stale, f"skills citing a pre-Phase-152 guard step number: {stale}"
+
+
+def test_workflow_illustrative_allowlist_is_a_subset_of_the_template():
+    """§ 8.2a calls its JSON block an illustrative subset. It is allowed to be
+    incomplete; it is not allowed to name a rule the template does not ship —
+    that is how the stale `Bash(git worktree list)` survived there."""
+    text = WORKFLOW.read_text()
+    m = re.search(r"### 8\.2a.*?```json\n(.*?)\n```", text, re.S)
+    assert m, "§ 8.2a illustrative settings.json block not found"
+    illustrative = set(re.findall(r'"(Bash\([^"]*\))"', m.group(1)))
+    assert len(illustrative) > 15, "§ 8.2a block under-parsed"
+    seeded = set(_seeded())
+    assert illustrative <= seeded, (
+        "§ 8.2a names rules the template does not ship: "
+        f"{sorted(illustrative - seeded)}"
+    )
+
+
+def test_workflow_no_longer_claims_git_add_is_a_conscious_omission():
+    """The omission's stated reason ("the auto-mode classifier passes these")
+    is false under `dontAsk`, and the rule now ships."""
+    text = WORKFLOW.read_text()
+    m = re.search(r"\*\*Conscious omissions\*\*.*?(?=\n\n\*\*|\n\n### )", text, re.S)
+    assert m, "§ 8.2a Conscious omissions block not found"
+    block = m.group(0)
+    for rule in ("`Bash(git add:*)`", "`Bash(git branch -D:*)`"):
+        bullets = [
+            ln for ln in block.splitlines()
+            if ln.lstrip().startswith("- ") and rule in ln
+        ]
+        assert not bullets, (
+            f"{rule} is named in a conscious-omission bullet but ships in the "
+            f"template: {bullets}"
+        )
+
+
+# ── Q-412: a rule that stops being bound is deleted, not retained ──────────
+
+
+def test_the_unbound_claim_commit_rule_stays_deleted():
+    """Phase 269 (`Q-412`). `Bash(git commit -m claim:*)` was bound by nothing
+    after Phase 261 and 263 moved both commits inside `claim_task.sh
+    --commit-claim`, subsumed by nothing (there is no `Bash(git commit:*)`), and
+    headroom for nothing. Two skills carried a bullet explaining the keep and
+    `WORKFLOW.md` § 8.2a carried a row and its illustrative JSON block carried a
+    second copy; all five went with the rule.
+
+    Pinned because the entry sat open for two phases on the strength of a keep
+    argument that read as settled — nothing stops it being re-added by the same
+    reasoning."""
+    assert "Bash(git commit -m claim:*)" not in _seeded(), (
+        "the unbound claim-commit rule is back in the template; if a step binds "
+        "it again, say which step in the same commit"
+    )
+    # EVERY skill, not the two that happened to declare it. A review lens found
+    # this reading 2 of 19 rule-declaring skills, so re-declaring the rule in
+    # `/review-close` or `/auto-judge` would have survived.
+    offenders = [
+        name for name, text in runner_texts(SKILLS_DIR).items()
+        if "git commit -m claim" in text
+    ]
+    assert offenders == [], (
+        f"these skills declare the deleted claim-commit rule again: {offenders}"
+    )
+    # Scoped to DECLARATION sites — the illustrative JSON block and the table
+    # rows — not to any mention. The delete-rule's own worked example names the
+    # rule while documenting its removal, and a whole-file check forbids the
+    # record of the decision along with the decision's reversal. (Caught by this
+    # guard firing on the prose Phase 269 wrote three paragraphs earlier.)
+    text = WORKFLOW.read_text()
+    block = re.search(r"### 8\.2a.*?```json\n(.*?)\n```", text, re.S)
+    assert block, "§ 8.2a illustrative settings.json block not found"
+    assert "git commit -m claim" not in block.group(1), (
+        "WORKFLOW.md § 8.2a's settings block lists the deleted claim-commit rule again"
+    )
+    rows = [ln for ln in text.splitlines()
+            if ln.startswith("| `Bash(") and "git commit -m claim" in ln]
+    assert not rows, f"§ 8.2a has a table row for the deleted claim-commit rule: {rows}"
+
+
+def test_the_delete_rule_is_stated_with_all_three_keep_grounds():
+    """The DURABLE half of `Q-412`. The entry's complaint was not the dead rule —
+    it was that the next reader had to re-derive the disposition, because the
+    only thing written down was "removing a template rule never removes it from
+    an installed consumer", which reads as a general keep argument and is not one.
+
+    Each ground is pinned separately: a rule matching none of the three is
+    deleted, so dropping any one ground silently widens what may be kept."""
+    text = WORKFLOW.read_text()
+    m = re.search(r"\*\*When a rule stops being bound: delete it\.\*\*(.*?)(?=\n\*\*|\n### )",
+                  text, re.S)
+    assert m, "§ 8.2a's delete-rule is gone; `Q-412`'s decision is unrecorded again"
+    block = m.group(1)
+    for ground in ("Subsumed and bound elsewhere",
+                   "Deliberate operator headroom",
+                   "A twin of a rule that is bound"):
+        assert ground in block, f"the delete-rule dropped the keep-ground {ground!r}"
+    assert "worse than no rule" in block, (
+        "the delete-rule stopped citing Phase 152's finding, which is what makes "
+        "deletion the default rather than a preference"
+    )
+    assert "not a reason to leave the template asserting a binding that does not exist" in block, (
+        "the delete-rule stopped correcting the installed-consumer sentence — the "
+        "misreading it exists to close"
+    )
+    # A review lens found the first draft claiming all three grounds were visible
+    # "in the rows above". Only ground 1 is a row; 2 and 3 live in the bullets
+    # after the table. Pin the CORRECTED shape, or the convenient version returns.
+    assert "each visible in the rows above" not in block, (
+        "the delete-rule went back to claiming all three keep-grounds are table "
+        "rows; grounds 2 and 3 are bullets, and one of them has no row at all"
+    )
+
+
+def test_the_delete_rule_names_the_count_guard_that_enforces_it():
+    """A deletion moves the allow-list size, and the comment stating it lives in
+    `install.sh` while the guard deriving it lives in the test suite. Phase 269
+    hit this in its own commit; the next deletion should not have to."""
+    text = WORKFLOW.read_text()
+    m = re.search(r"\*\*Deleting a rule moves the count\*\*(.*?)(?=\n\*\*|\n### )", text, re.S)
+    assert m, "§ 8.2a no longer warns that a deletion moves the rule count"
+    assert "test_installer_rule_count_comments_track_the_template" in m.group(1), (
+        "the count warning stopped naming the guard that enforces it"
+    )

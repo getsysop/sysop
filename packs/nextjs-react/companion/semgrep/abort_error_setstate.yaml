@@ -1,0 +1,39 @@
+rules:
+  - id: abort-error-setstate
+    message: >
+      isAbortError() catch branch calls setState directly inside a useEffect
+      that uses a `let cancelled = false` guard. The AbortError fires from
+      cleanup (component unmounted or effect re-run), so an unguarded setState
+      here races the next mount/run. Either return immediately without
+      setState, or wrap in `if (!cancelled)`. The success path's
+      `if (!cancelled) setLoading(false)` already self-corrects on re-run, so
+      the AbortError branch can simply return. (Convention: "AbortError
+      loading state cleanup" — useEffect variant.)
+    severity: WARNING
+    languages: [typescript]
+    # Only fires when the catch lives inside a useEffect with a `cancelled`
+    # guard — the convention's callback variant (no useEffect) requires the
+    # setState, so we must scope this rule to useEffect contexts only.
+    patterns:
+      - pattern-inside: |
+          useEffect(() => {
+              ...
+              let cancelled = false;
+              ...
+          }, ...)
+      - pattern-either:
+          - pattern: |
+              if (isAbortError($ERR)) {
+                  $SETTER(...);
+                  return;
+              }
+          - pattern: |
+              if (isAbortError($ERR)) {
+                  $SETTER(...);
+                  return $RET;
+              }
+      - metavariable-regex:
+          metavariable: $SETTER
+          regex: "^set[A-Z]"
+    # paths: intentionally omitted. Path scoping is declared in the pack's
+    # checks.yml.fragment stub entry (see core/companion/semgrep/README.md).

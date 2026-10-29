@@ -1,0 +1,424 @@
+"""Pre-scan execution accounting (the executed / skipped / failed taxonomy).
+
+The deterministic pre-scan is the layer that is supposed to be
+model-independent and trustworthy, but its old summary line counted checks
+*selected*, not checks *executed* — a stage that skipped its precondition or
+crashed contributed nothing and changed nothing in the summary, so
+``0 findings from 13 checks`` was the exact output of a genuinely healthy run
+**and** of a run where nothing ran. This module records, per selected check,
+which of five terminal states it reached and renders a summary that
+distinguishes them.
+
+The design and provenance are recorded in ``tools/PRESCAN_ACCOUNTING_SPEC.md``,
+which is maintainer-side and not in the public tree; the finding that produced
+this module is stated here so nothing depends on reaching it (cross-harness
+comparison run 2026-07-19/20: five independent silent-skip paths, 5 of 25
+checks executing while the summary said ``890 findings from 25 checks``).
+
+Terminal states (§1 of the spec; the last two added by Phase 189):
+
+* ``executed``  — the tool/scan ran to completion over its inputs. A
+  zero-findings executed check is a real zero.
+* ``skipped``   — a precondition was absent; the tool never ran (or ran for
+  nothing). Reasons: ``paths-unresolved`` / ``tool-missing`` /
+  ``input-missing`` / ``not-installed`` / ``not-configured`` /
+  ``misconfigured``.
+* ``failed``    — the tool started and broke: nonzero exit with no parseable
+  output, timeout, non-JSON output, grep rc≥2, a caught exception.
+
+* ``degraded``   — the tool ran to completion but demonstrably over **less than
+  its declared inputs**: a file whose parse failed part-way, a discovery
+  shortfall. **A zero-findings degraded check is not a real zero.** (Phase 189,
+  internal tracker #362.)
+* ``unroutable`` — the check declares no executable form **this runner** can
+  use: no ``pattern``, no ``position_check``, and no id prefix that routes it to
+  another stage. Distinct from ``skipped``, whose precondition could become true
+  in another environment; an unroutable check will not execute here however the
+  environment changes. (Phase 189, internal tracker #239.)
+
+  **Not necessarily a registry-authoring defect — corrected by Phase 212**
+  (internal tracker #438). This state's own motivating example, GDP's
+  ``doc-parity-violation``, turned out to be a *deliberate catalogue stub* for a
+  check a live CI gate executes: routable, just not by this runner. So the
+  bucket means "this runner did not run it", which is an attribution claim and
+  true in both cases — not "somebody forgot to finish it", which is a motive
+  claim and false for the stub. The message at the emit site offers the third
+  reading; deliberately no schema flag suppresses it, because a check nothing
+  here executed is exactly what this taxonomy exists to keep visible.
+
+Cut line: *skipped = precondition absent; failed = attempted and died;
+degraded = attempted, survived, saw less than it claimed; unroutable = nothing
+to attempt.*
+Timeouts are ``failed`` (work was lost, not declined).
+
+**Do ``degraded`` and ``unroutable`` block? No — decided by Phase 189 and
+recorded here because the phase's brief named it an open question.** Only
+``failed`` is fatal (§4). The reasoning is not "they are less bad":
+
+* ``degraded`` — the shape §4 keys on is *the stage started and died*: zero
+  output, work lost, a gate that is armed and dead. A degraded stage produced
+  real findings over most of its inputs; calling that fatal conflates
+  *incomplete* with *dead*, and the common cause is the scanner's own language
+  support failing on **valid** source, which no consumer edit can fix. A gate
+  that cannot be made green is a gate that gets bypassed.
+* ``unroutable`` — this follows the existing, already-argued rule that a
+  *blocking* check which did not run is **loud but non-fatal** (see
+  ``blocking_failures`` and the spec on why gate-on-skipped cannot ship).
+
+What both get instead is what the defect actually was: attribution. They are
+counted separately in the header, rendered with their affected paths, and carry
+the same ``⚠`` as any other localized blocking check that did not really run.
+The failure being closed is *silence*, not permissiveness.
+"""
+from collections import namedtuple
+
+from _log import _sanitize_log
+
+
+EXECUTED = "executed"
+SKIPPED = "skipped"
+FAILED = "failed"
+DEGRADED = "degraded"        # ran, but over less than its declared inputs
+UNROUTABLE = "unroutable"    # declares no executable form; can never run
+
+# Grep determines its status but has no check id at the call site, so it hands
+# an Outcome back up to ``run_check`` (which owns the single per-check record
+# point). The tool-shelling stages (pyright/semgrep/eslint/pip-audit/coverage)
+# hold their ids and record directly, so they don't use this.
+Outcome = namedtuple("Outcome", ["status", "reason", "detail"])
+
+Counts = namedtuple("Counts", [
+    "executed", "skipped", "failed", "degraded", "unroutable",
+    "unaccounted", "selected",
+])
+
+_Record = namedtuple("_Record", ["status", "stage", "reason", "detail"])
+
+# Severity order for the upgrade rule in ``Accounting.record``. Only states that can
+# legitimately arrive *after* an earlier one appear here; ``skipped`` and ``unroutable``
+# are decided before any work happens, so they are never an upgrade target.
+_RANK = {EXECUTED: 0, DEGRADED: 1, FAILED: 2}
+
+
+def _outranks(new_status, old_status):
+    """True when ``new_status`` should replace ``old_status`` on a re-record.
+
+    Both states must be on the ladder. A ``.get(..., -1)`` default here would make
+    ``executed`` outrank a previously recorded ``skipped`` (0 > -1) and silently erase a
+    skip — the exact class this module exists to stop. Anything off the ladder keeps
+    record-once semantics: the first state wins.
+    """
+    if new_status not in _RANK or old_status not in _RANK:
+        return False
+    return _RANK[new_status] > _RANK[old_status]
+
+
+def is_placeholder_token(value):
+    """True when a scope entry is unsubstituted placeholder vocabulary.
+
+    Mirrors ``config.check_paths_by_id``'s strip test (an entry is a
+    placeholder when it contains an angle bracket, e.g. ``<api module>/``).
+    """
+    s = str(value)
+    return "<" in s or ">" in s
+
+
+# The overlay's disabling shape (`_shared/promotion-write-target.md`): a scope
+# entry naming nothing on disk, so the check never runs. Matched by containment,
+# as `/contribute-convention` matches it, because substitution builds it into
+# longer paths: `<api module>/routes/` mapped to the sentinel is
+# `__disabled_no_op__/routes/`.
+DISABLED_SENTINEL = "__disabled_no_op__"
+
+
+def is_disabling_sentinel(value):
+    """True when a scope entry carries the overlay's disabling sentinel."""
+    return DISABLED_SENTINEL in str(value)
+
+
+def check_is_localized(check):
+    """True when a check has at least one concrete (non-placeholder) scope entry.
+
+    A check with no ``paths:``/``critical_path:`` at all, or whose every scope
+    entry is an unsubstituted ``<placeholder>`` or the disabling sentinel, is NOT
+    localized — its gate is unarmed on this install (deliberately, for the
+    sentinel; Q-684), so a non-``executed`` state renders as a calm
+    "not yet configured" line rather than the dead-gate ⚠. The ⚠ must only ever
+    mean "this gate was armed and is now dead"; a warning that is on from the
+    first install forever just trains consumers to ignore it (spec §3).
+
+    Non-list scope fields contribute nothing (defensive): ``_validate_check``
+    already rejects a scalar ``paths:``/``critical_path:`` at parse time, but a
+    ``RunReport`` built directly (a test, a future caller) must never crash or
+    char-split a stray scalar into single-character "localized" globs.
+    """
+    def _entries(field):
+        v = check.get(field)
+        return v if isinstance(v, list) else []
+    entries = _entries("paths") + _entries("critical_path")
+    if not entries:
+        return False
+    return any(not is_placeholder_token(e) and not is_disabling_sentinel(e)
+               for e in entries)
+
+
+def stderr_excerpt(text, limit=200):
+    """One-line, ANSI-stripped, length-capped excerpt for a ``failed`` detail."""
+    if not text:
+        return "(no stderr)"
+    collapsed = " ".join(str(text).split())
+    return _sanitize_log(collapsed)[:limit]
+
+
+class RunReport:
+    """Accumulates the per-check terminal state across every pre-scan stage.
+
+    Construct from the *selected* check dicts (the mode-filtered set, or every
+    check under ``--update-baseline``). Each stage records its checks as it
+    runs; ``render`` turns the accumulated state into the summary block.
+    """
+
+    def __init__(self, selected_checks):
+        self._checks = list(selected_checks)
+        self._order = [c.get("id", "") for c in self._checks]
+        self._blocking = {
+            c.get("id", "") for c in self._checks if c.get("blocking") is True
+        }
+        self._localized = {
+            c.get("id", ""): check_is_localized(c) for c in self._checks
+        }
+        self._records = {}  # check_id -> _Record
+        # (check_id, file_line, message), in emission order. Deliberately a
+        # 3-tuple where `all_findings` is a 4-tuple: a waived finding never
+        # reaches the baseline at either end, so it has no identity to carry
+        # and inventing an empty one would imply it could be baselined.
+        self._waived = []
+
+    def record_waived(self, check_id, file_line, message):
+        """Record a finding suppressed by an inline ``no-check:`` marker.
+
+        Waiving is per *finding*, not per check, so it is deliberately NOT a
+        terminal state: the check still ran and is still ``executed``. The list
+        exists so a waiver can never be silent — the caller reprints each entry
+        with a ``[waived]`` tag (the ``[baseline]`` idiom) and ``render``
+        carries the count in the header.
+        """
+        self._waived.append((check_id, file_line, message))
+
+    def waived(self):
+        """``(check_id, file_line, message)`` for every inline-waived finding."""
+        return list(self._waived)
+
+    def record(self, check_ids, status, stage, reason=None, detail=None):
+        """Record ``status`` for each id in ``check_ids``.
+
+        Record-once semantics (spec §2): the first recorded state wins, except
+        that a state may be **upgraded** along ``executed -> degraded ->
+        failed`` — a stage that scanned and then crashed in post-processing is
+        failed, not clean, and one that scanned and then found part of its
+        input unparsed is degraded, not clean. Same-state re-records are
+        idempotent no-ops, and a downgrade is never applied.
+        """
+        for cid in check_ids:
+            existing = self._records.get(cid)
+            if existing is None or _outranks(status, existing.status):
+                self._records[cid] = _Record(status, stage, reason, detail)
+
+    def status_of(self, check_id):
+        rec = self._records.get(check_id)
+        return rec.status if rec else None
+
+    def counts(self):
+        """Return ``Counts(executed, skipped, failed, degraded, unroutable,
+        unaccounted, selected)``.
+
+        ``unaccounted`` is any selected check that reached no terminal state —
+        an accounting bug (a stage wired for dispatch but not for recording),
+        not a normal outcome.
+
+        A namedtuple rather than a plain tuple: this used to be a 5-tuple that
+        callers unpacked positionally, and adding two states mid-tuple would
+        have silently rebound every one of them. Existing callers that unpack
+        five names are the reason ``unaccounted`` and ``selected`` stay last.
+        """
+        tally = {st: 0 for st in (EXECUTED, SKIPPED, FAILED, DEGRADED, UNROUTABLE)}
+        unaccounted = 0
+        for cid in self._order:
+            st = self.status_of(cid)
+            if st in tally:
+                tally[st] += 1
+            else:
+                unaccounted += 1
+        return Counts(
+            tally[EXECUTED], tally[SKIPPED], tally[FAILED],
+            tally[DEGRADED], tally[UNROUTABLE],
+            unaccounted, len(self._order),
+        )
+
+    def blocking_failures(self):
+        """``(id, stage, reason, detail)`` for every blocking check in ``failed``.
+
+        A ``blocking: true`` check whose stage crashed produces zero findings
+        and would otherwise pass the gate silently — this is what the §4
+        ``failed``-is-fatal rule keys on. (A *skipped* blocking check is loud
+        but non-fatal — see the spec on why gate-on-skipped cannot ship.)
+        """
+        out = []
+        for cid in self._order:
+            if cid in self._blocking and self.status_of(cid) == FAILED:
+                rec = self._records[cid]
+                out.append((cid, rec.stage, rec.reason, rec.detail))
+        return out
+
+    def non_executed_ids(self):
+        """Check ids that PRODUCED NOTHING this run — skipped, failed, unroutable.
+
+        The baseline migration's only question is "could this check have
+        produced a finding?". A check that did not run produces none, so its
+        entries look identical to entries whose findings are gone, and migrating
+        against such a run would delete them. `--update-baseline` guarded only on
+        *failed* blocking checks and had the same hole until Phase 217, which
+        closed it by PRESERVING the entries of every check in this set (and in
+        `incomplete_ids`) rather than by refusing — refusing there would reject
+        a baseline write on every fresh install, where `skipped` is the normal
+        starting state.
+
+        **``degraded`` is deliberately NOT here, and the docstring used to say
+        so while the code did the opposite.** This returned everything that was
+        not ``executed``, which swept in the one non-executed state where the
+        stage ran and emitted findings — so a semgrep run degraded by an
+        unparseable file made the migration refuse outright, on a persistent
+        tree property, with the only escape being `--update-baseline`: the
+        command whose destruction of consumer rationale is the reason the
+        remedy routing was rewritten in the first place. Degraded checks are
+        handled by `incomplete_ids` instead, which holds their unmatched
+        entries without blocking everything else.
+        """
+        return {cid for cid in self._order
+                if self.status_of(cid) in (SKIPPED, FAILED, UNROUTABLE)}
+
+    def incomplete_ids(self):
+        """Check ids that ran but over less than their declared inputs.
+
+        A ``degraded`` stage emits real findings, so its entries CAN be
+        migrated — but an entry it did not match may simply be in the part that
+        was not scanned. Absence of evidence, so those are held rather than
+        dropped, while everything else proceeds.
+        """
+        return {cid for cid in self._order if self.status_of(cid) == DEGRADED}
+
+    def executed_ids(self):
+        """Check ids whose final state is ``executed`` — a zero from them is real.
+
+        The one set whose silence is evidence. ``render``'s "executed with 0
+        findings" line asks it per check; the stale-entry report
+        (`baseline.unmatched_entries`) asks it per baseline entry. Both read it
+        here so the two can never disagree about which checks ran. A
+        ``degraded`` check is deliberately absent: it may simply not have
+        reached the file an entry names.
+        """
+        return {cid for cid in self._order if self.status_of(cid) == EXECUTED}
+
+    def render(self, findings, *, mode, baseline_matched=0, new_blocking=0):
+        """Render the multi-line summary block (spec §3).
+
+        ``findings`` is the full finding list (baseline-matched included, as the
+        header count has always been); its check ids tell us which *executed*
+        checks produced zero findings — the line that separates a real zero
+        from a never-ran zero.
+        """
+        c = self.counts()
+        selected = c.selected
+        ids_with_findings = {f[0] for f in findings}
+
+        count_parts = [
+            f"{c.executed} executed",
+            f"{c.skipped} skipped",
+            f"{c.failed} failed",
+        ]
+        # Only when non-zero: the header is read every run, and two permanent
+        # `0 degraded / 0 unroutable` columns train the eye to skip it.
+        if c.degraded:
+            count_parts.append(f"{c.degraded} degraded")
+        if c.unroutable:
+            count_parts.append(f"{c.unroutable} unroutable")
+        if c.unaccounted:
+            count_parts.append(f"{c.unaccounted} unaccounted")
+        header = (
+            f"--- {len(findings)} finding(s) · checks: "
+            + " / ".join(count_parts)
+            + f" of {selected} selected "
+            f"(mode: {mode}; baseline-matched: {baseline_matched}; "
+            f"waived: {len(self._waived)}; "
+            f"new blocking: {new_blocking}) ---"
+        )
+        lines = [header]
+
+        # Non-executed detail lines, aggregated per (status, stage, reason,
+        # detail, armed). Everything the line prints is in the key: keyed without
+        # the detail, a group printed its first record's detail for every member,
+        # so a disabled check read as its unlocalized neighbour (Q-684); without
+        # `armed`, one armed gate put its ⚠ over unarmed members of its group.
+        # Insertion order preserves the record order; failed lines are emitted
+        # before skipped (severity-first).
+        groups = {}
+        for cid in self._order:
+            rec = self._records.get(cid)
+            if rec is None or rec.status == EXECUTED:
+                continue
+            armed = cid in self._blocking and bool(self._localized.get(cid))
+            key = (rec.status, rec.stage, rec.reason, rec.detail, armed)
+            groups.setdefault(key, []).append(cid)
+
+        for want in (FAILED, DEGRADED, UNROUTABLE, SKIPPED):
+            for (status, stage, reason, detail, armed), ids in groups.items():
+                if status != want:
+                    continue
+                noun = "check" if len(ids) == 1 else "checks"
+                detail = detail or reason or "no detail"
+                line = f"    {status}: {stage} ({len(ids)} {noun}) — {detail}"
+                # ⚠ only for a LOCALIZED blocking check that did not run — an
+                # armed gate gone dead. Placeholder-scoped blocking checks are
+                # unarmed and render calm (their detail already says so).
+                # ⚠ means "this gate was armed and is now dead". A `degraded` check
+                # DID run — it just saw less than it claimed — so it gets its own
+                # wording; using the dead-gate warning for it would make the loudest
+                # signal in the summary mean two different things.
+                if armed:
+                    line += ("  ⚠ BLOCKING CHECK RAN INCOMPLETE"
+                             if status == DEGRADED else
+                             "  ⚠ BLOCKING CHECK DID NOT RUN")
+                lines.append(line)
+
+        unaccounted_ids = [
+            cid for cid in self._order if self.status_of(cid) is None
+        ]
+        if unaccounted_ids:
+            lines.append(
+                f"    unaccounted: {len(unaccounted_ids)} "
+                f"check{'' if len(unaccounted_ids) == 1 else 's'} "
+                f"({', '.join(unaccounted_ids)}) — accounting bug, report upstream"
+            )
+
+        # executed-with-zero-findings, grouped by stage. Grep-stage ids render
+        # as a bare count (a localized 40-check grep registry would otherwise
+        # produce an unreadable enumerated line); tool-stage ids are enumerated
+        # so a per-check zero is distinguishable from a never-ran check.
+        zero_by_stage = {}
+        executed = self.executed_ids()
+        for cid in self._order:
+            if cid in executed and cid not in ids_with_findings:
+                zero_by_stage.setdefault(self._records[cid].stage, []).append(cid)
+        for stage, ids in zero_by_stage.items():
+            noun = "check" if len(ids) == 1 else "checks"
+            if stage == "grep":
+                lines.append(
+                    f"    executed with 0 findings: {len(ids)} grep {noun}"
+                )
+            else:
+                lines.append(
+                    f"    executed with 0 findings: {len(ids)} {stage} {noun} "
+                    f"({', '.join(ids)})"
+                )
+
+        return "\n".join(lines)

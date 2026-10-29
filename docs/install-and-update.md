@@ -1,0 +1,284 @@
+# Installing and updating Sysop
+
+The [README Quickstart](../README.md#quickstart) is the short version. This page is the full
+reference: both install paths, how updates reach an installed project, pinning to a release,
+required permissions, the repo layout, and how to back out. Consumer-side configuration — the
+overlay files, placeholder substitution, model roles — lives in
+[docs/configuration.md](./configuration.md); the authoritative process spec behind everything
+here is [WORKFLOW.md § 8](../core/companion/docs/WORKFLOW.md).
+
+## Two install paths
+
+Two install paths; they layer rather than conflict.
+
+- **Bash installer** — `bash install.sh <target> --packs python,postgres,nextjs-react`. Delivers project-side files (workflow docs, skills, scripts, git-hook templates, semgrep rules + fixtures, concatenated `convention_map.md` / `security_map.md` / `checks.yml`, **`.claude/settings.json` permission allow-list**, **`.claude/sysop.lock` install manifest**, **`sysop/SYSOP_ISSUES.md` friction log** — seeded fresh-install only, project-owned thereafter; see WORKFLOW.md § 8.2b for the seed-once-never-overwrite contract, and two **`.agents/skills/` symlinks** that register the review skills natively with the Codex CLI — see [§ Codex](#codex)) into the target project per WORKFLOW.md § 8.2. Everything Sysop delivers lands under one visible vendor dir, `sysop/` (Phase 128): `sysop/scripts/`, `sysop/docs/`, `sysop/SYSOP_ISSUES.md`. The only things outside it are `.claude/` (the harness contract), `.agents/skills/` (two Codex registration symlinks — [§ Codex](#codex)), `tasks/` (your backlog), and the `CLAUDE.md` / `.gitignore` appends. Applies by default with dirty-tree refusal (`--force` to override); use `--dry-run` to preview. Run without `--packs` for an interactive pack picker (it auto-detects your stack and offers the matching packs as the default); pass `--packs auto` to accept the detected set non-interactively, or `--packs ''` for core only. Requires bash 4+ **to run the installer** (it uses associative arrays); the companion scripts it installs run on bash 3.2, so stock macOS `/bin/bash` is fine for day-to-day runs. (Windows: run under WSL — Git Bash may work but its worktree/symlink support is flakier.) Git hooks are armed automatically as the final install step; pass `--no-arm-hooks` to opt out (templates still land in `sysop/scripts/hooks/`, run `sysop/scripts/install_hooks.sh` later). After install, commit the whole Sysop payload: `git add .claude/ sysop/ tasks/ CLAUDE.md .gitignore; git add .agents/ 2>/dev/null; git commit -m "chore: install Sysop"` (`.agents/` gets its own `git add` because it is conditional — `--no-codex-links`, or a target whose harness failed the symlink capability probe, has no such directory, and `git add` aborts its *whole* invocation on one unmatched pathspec, staging nothing) — a `git worktree` (what `/claim-task` creates) only sees *committed* files, so `sysop/` (the scripts and the workflow docs) must be in the tree or later hook/check steps break. Three of those paths are Sysop's **contract files**, worth knowing by name: `.claude/settings.json` is the workflow's contract with the agent harness, `.claude/sysop.lock` is the contract with future `--update` runs, and `sysop/SYSOP_ISSUES.md` is your project's queryable record of Sysop signal — pain points and wins alike (`/review-close` Step 7 appends both during cycle close-out; `/report-issues` files the friction worth sending upstream, and `/share-wins` shares the `[good]` wins as a comment on the Sysop repo's Wins discussion — both per-entry, with your review). Then, on whichever machine has the Sysop clone, add `export SYSOP_SRC=/absolute/path/to/sysop` to your shell rc (`~/.zshrc` / `~/.bashrc`) and re-source it — required by `sysop/scripts/sysop-update.sh` (the one-line update entry point; see "Updating an existing install" below).
+- **Claude Code plugin** — `/plugin marketplace add getsysop/sysop` then `/plugin install sysop@sysop` plus desired packs (e.g., `/plugin install sysop-python@sysop`). Delivers the slash commands with proper namespacing (`/sysop:claim-task`) — **and only the slash commands**: the scripts, checks, maps, and hooks those commands operate on arrive via the bash installer above, so a Claude Code consumer runs both paths (details in [§ Plugin path](#plugin-path-how-updates-work)).
+
+## Install modes: full and loop
+
+`--mode` chooses how much of Sysop lands. **`--mode loop`** — the recommended first install for an existing codebase — installs only the *convention loop*: the review/audit skills (`/codebase-review`, `/security-audit`, `/test-audit`) plus the give-back channel (`/report-issues`, `/contribute-convention`), the convention + security maps, and the compiled checks (`run_checks`, semgrep, the git-hook + CI templates) — into a repo whose owner keeps their own planning, branching, and merge workflow. The installer's **default** (no `--mode` flag) is **full** — the whole workflow (planning, task queue, worktrees, merge gate) — which is also the graduation target for a loop install (see "Switching modes" below). The `review_tasks.md` findings ledger the loop skills maintain is created on your first `/codebase-review` run, not written at install. This section is the reference for the flag; the day-one walkthrough — first review run, how promotion lands, growing into the full workflow — is [docs/loop-mode.md](./loop-mode.md).
+
+```bash
+bash install.sh <target> --packs python --mode loop
+```
+
+Loop mode drops the lifecycle: no `tasks/` queue, no per-task worktrees, no `/claim-task` or `/review-close` merge gate, no root `WORKFLOW.md`. It also leaves `sysop/SYSOP_ISSUES.md` lazy — created on your first friction capture, not at install — so a loop install's root footprint is just `.claude/`, the `sysop/` vendor dir, `.agents/skills/` (two symlinks — see [§ Codex](#codex)), a `CLAUDE.md`, and a one-line `.gitignore` append (`sysop/runtime/` — the gitignored home of the audit skills' deferral scratch, `sysop/runtime/pending-docs/`). Enforcement is the checks the computer runs, not a Sysop merge gate: promoted mechanical rules compile into `checks.yml` / semgrep (run by the shipped CI template) or into the pre-commit hook's own check slots (armed automatically at install; re-arm with `sysop/scripts/install_hooks.sh` after edits), and you merge however you already merge.
+
+The audit skills read several sections of your project's `CLAUDE.md`, and three of them must exist — `## Scope mapping`, `## Map coverage exclusions`, `## Security-critical always-include files` — so the installer ensures those three are present: it creates `CLAUDE.md` with commented stubs if the file is absent, or appends only the sections you don't already have (never rewriting your content).
+
+**Verify the install in one command** — `bash sysop/scripts/self_check.sh` (either mode) reports the lock + install mode, whether every path the lock lists is still on disk, bash version, whether a python3 with PyYAML is reachable (the check runner's one dependency), which git hooks are armed, and which optional scanners (semgrep, pip-audit, pyright) will actually run. Exit 0 means the hard prereqs are all present.
+
+It also **fails** on an armed hook still pointing into the pre-`sysop/` vendor layout (Phase 309). A hook armed before the Phase-128 move keeps a `scripts/<name>` path that no longer exists. What that does depends on how the hook was written, and the quiet shape is the one worth catching: a hook that guards on the file's presence and skips, or tails its call with `|| true`, now passes every commit while checking nothing — indistinguishable from a repo with no hook armed. (Sysop's own shipped `pre-commit` examples take the loud branch instead and block the commit, so this is a class with two ends, not one.) **The remedy is the one the check prints: repoint that hook at `sysop/scripts/<name>`.** It is deliberately not "re-arm": the probe reads *every* armed hook, including hooks that are entirely yours, and `install_hooks.sh` touches only three names (`pre-commit`, `pre-merge-commit`, `pre-push`), of which it ships templates for **two** — so re-arming fixes nothing for any other hook, and for the two it does write it would replace your customized hook with Sysop's blocking-nothing skeleton (backed up to `<name>.bak.<timestamp>`, but still not what you asked for). The third, `pre-push`, is the case Phase 309 changed: armed but template-less, it is now **named** rather than skipped in silence.
+
+**Switching modes.** The mode is recorded in `.claude/sysop.lock`, and `--update` re-applies it. To grow a loop install into the full workflow, run `bash install.sh <target> --update --mode full` — purely additive (it adds the lifecycle skills, scripts, and the `tasks/` scaffold). The other direction (full → loop) is `bash sysop/scripts/sysop-update.sh --mode loop` (preview with `--dry-run`). It removes the lifecycle paths and the full-mode allow rules and hooks in `.claude/settings.json`, naming each one. Like any `--update`, it keeps an edit to a managed file loop mode still ships. It keeps `tasks/index.yml`, your task bodies, the `.project.*` overlays and `substitutions.project.yml`. It never edits `CLAUDE.md`; it lists the sections there that only lifecycle skills read. It refuses while a claim is live (a lock file, or a task at `in_progress`). A fresh `--mode loop` reinstall is not the route: a fresh install overwrites every managed path it ships, including one you edited. [loop-mode.md](./loop-mode.md) has the details and says which shape each mode fits.
+
+## What the git hooks do
+
+The installer arms two hooks. Both ship as **skeletons that block nothing on day one** — every check in the shipped files is a commented-out example a project fills in as its own conventions are promoted; until then, commits and merges pass untouched.
+
+- **`pre-commit`** — a two-tier convention-check frame: blocking checks reject the commit on match, advisory checks warn and allow it. The shipped file defines the frame only (staged-file collection, per-language filters, the B*/A* slots); worked examples live in the Sysop repo under [`core/companion/git-hooks/examples/`](https://github.com/getsysop/sysop/tree/main/core/companion/git-hooks/examples). Escape hatch: `PRE_COMMIT_ADVISORY_ONLY=1 git commit …` downgrades blocking checks to warnings for that commit.
+- **`pre-merge-commit`** — runs your project's test/build commands before a merge lands on the protected branch (the repository's default branch, resolved as the lifecycle scripts resolve it; set `PROTECTED_BRANCH` in the hook or export `SYSOP_PROTECTED_BRANCH` to gate another — if it cannot resolve, it gates `main` and says so on every merge) and fires nowhere else; merges to other branches are untouched. Also a skeleton until you fill in the commands. It deliberately does **not** source `.env` — secrets reach tests through fixtures, not hook-time exports. Bypass: `git merge --no-verify`.
+
+Armed copies live in `.git/hooks/` (untracked — git's design, the one surface a revert can't reach); the tracked templates live in `sysop/scripts/hooks/`. `--no-arm-hooks` skips arming at install time, `bash sysop/scripts/install_hooks.sh` arms later, and removal is two `rm` commands covered in [Backing out](#backing-out). Worktrees need no install of their own — they share the one hooks directory — and nothing in the lifecycle arms hooks behind your back.
+
+If your repo sets `core.hooksPath`, git reads hooks from there and ignores `.git/hooks/` entirely. Sysop leaves that directory alone: arming skips with a note in both `install.sh` and `install_hooks.sh`, and the armed-hook divergence check reports the arrangement rather than prescribing a re-arm that would do nothing. Copy `sysop/scripts/hooks/*` in yourself if you want the templates there.
+
+## Updating an existing install
+
+Once installed, a project absorbs upstream Sysop changes by running one command from its own repo root (full design and rationale in WORKFLOW.md § 8.2b):
+
+```bash
+bash sysop/scripts/sysop-update.sh           # apply
+bash sysop/scripts/sysop-update.sh --dry-run # preview (writes nothing)
+bash sysop/scripts/sysop-update.sh --force   # skip the pre-update snapshot
+```
+
+The shim resolves the consumer root via `git rev-parse --show-toplevel` and the Sysop source via `$SYSOP_SRC` (set once in your shell rc — see the post-install bullet above), then hands off to `bash $SYSOP_SRC/install.sh <consumer-root> --update`. All flags forward verbatim. It is itself a managed path, so improvements to the wrapper flow through the same channel as everything else.
+
+The underlying `--update` mode snapshots any dirty managed paths into a `Sysop: pre-update snapshot` commit, overwrites managed files with this checkout's version, refreshes the lock, and leaves the update uncommitted so you review and commit intentionally; `git diff <snapshot-hash>..HEAD` shows exactly what Sysop changed. If Sysop's reference repo has the previously-installed commit, a pre-overwrite divergence check warns about committed local edits in managed paths; a post-overwrite delta table flags files with significant deletions for follow-up review (see WORKFLOW.md § 8.2b for the warn-then-diff design). `--update` deliberately does **not** auto-arm git hooks (Phase 15 / ISSUE-0007) — `sysop/scripts/hooks/*` is refreshed from upstream unless you have edited a hook (an edited hook is kept — see *Hook templates* below), and `.git/hooks/*` is left untouched so you re-arm deliberately; an armed-hook divergence check at the end of the run flags any `sysop/scripts/hooks/<base>` that differs from `.git/hooks/<base>`. Re-arm with `bash sysop/scripts/install_hooks.sh` after reconciling.
+
+**Land the update on `origin`'s default branch before your next `/review-close`.** That close's reviewers each work in a checkout the harness forks from `origin/<default branch>`, not from your tree, and they run the Sysop scripts they find there; Step 2b checks first and stops with this remedy rather than spawning reviewers that cannot run. Push the update commit, or, under a `pr` merge policy, merge its PR yourself.
+
+Without `--ref`, an update copies your Sysop clone's **working tree** while the lock records its HEAD — identical only when that clone is clean, and the run warns when it is not (Phase 306). To install a committed tree, pass `--ref <tag-or-commit>` (works on fresh installs and `--update` alike): `bash sysop/scripts/sysop-update.sh --ref <tag-or-commit>` installs from that rev's tree and records its commit in the lock. `--ref` accepts any rev your Sysop clone can resolve — a release tag or a commit SHA — and a SHA is the pin to use when no usable release tag is published. See [SECURITY.md](../SECURITY.md) § "How updates reach you — and how to pin".
+
+Two additional modes (also invoked via `bash <path-to-sysop-clone>/install.sh`, since neither runs from a routine update cadence):
+
+- `bash install.sh <target> --adopt --packs <list>` — one-time backfill for installs that pre-date the lock mechanism. Writes + commits `.claude/sysop.lock` so future `--update` runs work.
+- `bash install.sh <target> --check --source <path-to-sysop-clone>` — read-only: reports how many upstream commits affect installable content, without writing anything.
+
+The lower-level invocation `bash <sysop-src>/install.sh <consumer-root> --update [flags]` is what the shim wraps; reach for it directly when you need a Sysop source other than `$SYSOP_SRC` (e.g., a different branch or worktree) or are running outside a consumer git working tree.
+
+### Preserving consumer-modified scripts and hooks (Phase 24b)
+
+For managed scripts and hook templates — where "append" isn't the right shape (you can't add `errors="replace"` to a Python `open()` from a sibling file) — Phase 24b preserves consumer-modified files automatically. Scope is intentionally narrow: `sysop/scripts/*` (depth-1) and `sysop/scripts/hooks/*` (depth-2). Skills, workflow docs, semgrep rules, and tasks-scaffold templates are explicitly out of scope (silent prompt-forks accumulate divergence with no upstream pressure to reconcile; for those, use CLAUDE.md prose or pack-level extensions).
+
+When you've hand-edited a managed script and committed, the next `bash sysop/scripts/sysop-update.sh` reports:
+
+```
+── preserved managed paths (Phase 24b) ──
+
+  ↻  sysop/scripts/archive_review_tasks.py   (consumer-modified; --accept-upstream to overwrite)
+  ↻  sysop/scripts/hooks/pre-commit          (consumer-modified; --accept-upstream to overwrite)
+
+  preserved: 2 managed path(s) preserved due to consumer modification.
+  Re-run with --accept-upstream <relpath> (repeatable) or --accept-upstream-list <file> to override.
+```
+
+The preserved files are NOT touched by the overwrite; the rest of the pipeline runs as normal. Two-pass workflow when you want some of them updated:
+
+```bash
+# 1. First run: see what's preserved.
+bash sysop/scripts/sysop-update.sh
+
+# 2. Inspect the upstream-vs-consumer diff per preserved path:
+#    git -C $SYSOP_SRC log --oneline -p <old_commit>..HEAD -- core/companion/scripts/<file>
+#    git log --oneline -p -- sysop/scripts/<file>
+
+# 3. Take upstream for the subset you want (repeatable, or pass a list file):
+bash sysop/scripts/sysop-update.sh --accept-upstream sysop/scripts/archive_review_tasks.py
+# or
+echo "sysop/scripts/archive_review_tasks.py" > /tmp/accept.txt
+echo "sysop/scripts/hooks/pre-merge-commit" >> /tmp/accept.txt
+bash sysop/scripts/sysop-update.sh --accept-upstream-list /tmp/accept.txt
+```
+
+The list-file form ignores `#`-comments and blank lines; stale entries (paths that were not actually consumer-modified) surface as a `note: accept-upstream: <relpath> not in preserved set; ignored` line after the pipeline so they don't accumulate silently.
+
+**Fail-closed posture.** If the shadow worktree can't be reconstructed (Sysop source missing the OLD commit, pre-bash-installer anchor, etc.), `--update` in non-`--force` mode aborts, rather than overwrite your customizations, when a managed path has uncommitted changes. The error names the three escape hatches: fetching the lock's commit by SHA (`git fetch origin <sha>`; most common — the commit may simply be missing locally, and a plain `git fetch` cannot restore a force-pushed one), `--accept-upstream <path>` (take upstream per file), or `--force` (skip preservation entirely). With a clean tree it proceeds instead, prints `⚠  ancestor unreachable — committed-edit detection skipped`, and overwrites any *committed* edit to an in-scope script or hook — recover those from git history. See WORKFLOW.md § 8.2c for the full contract.
+
+**Hook templates.** `sysop/scripts/hooks/pre-commit` and `sysop/scripts/hooks/pre-merge-commit` are in scope, so consumer-customized hook *bodies* survive `--update` automatically — closing the gap Phase 15 left open (Phase 15 protected `.git/hooks/<base>` armed copies but the upstream pipeline still overwrote the `sysop/scripts/hooks/<base>` templates). Re-arming after reconciling remains a Phase 15 contract: `bash sysop/scripts/install_hooks.sh` after the update.
+
+### Plugin path: how updates work
+
+The plugin path delivers slash commands only — and only from the **core** plugin. Inspecting the manifests: `core/.claude-plugin/plugin.json` exposes `./skills/` (the lifecycle slash commands like `/sysop:claim-task`, plus the `pr-*` GitHub family — currently `/sysop:pr-dependabot`. Note it is not the only skill that shells out to `gh`: the give-back family (`/report-issues`, `/contribute-convention`, `/share-wins`), `/release`, `/review-close` under `pr` merge policy, and `/onboard` all invoke `gh` too — worth knowing if you audit what can touch GitHub); every pack plugin (`sysop-python`, `sysop-postgres`, etc.) declares only a `dependencies` list (always including `sysop`; some packs — currently `sysop-postgres`, `sysop-beancount`, `sysop-mcp-server`, `sysop-pandas`, `sysop-streamlit` — also depend on `sysop-python` because their content layers on the python pack: a `companion/checks.yml.fragment` using python-pack-declared placeholders, or, for `sysop-beancount`, convention/security maps that overlay the python pack's baseline) and ships no `skills` / `commands` / `agents` / `hooks` payload of its own. The actual pack value (`convention_map.md`, `security_map.md`, `checks.yml.fragment`, semgrep rules) lives under `companion/` and is referenced by zero plugin manifests. That content reaches a consumer project *only* through the bash installer. A plugin-only install is useful for trying the slash commands out, but a real consumer always runs the bash installer as well so the skills have config to read.
+
+Recommended setup for consumers who want both paths:
+
+1. **Turn on auto-update for the Sysop marketplace.** Third-party marketplaces have auto-update **off** by default in Claude Code. We recommend enabling it for Sysop: toggle via `/plugin` → Marketplaces tab → Sysop → Auto-update, or set `"autoUpdate": true` for Sysop under `extraKnownMarketplaces` in `~/.claude/settings.json`. With auto-update on, Claude Code refreshes the marketplace and pulls the latest commit of every installed Sysop plugin at the start of each session — no other action needed for slash-command updates.
+2. **There is no `/plugin update` command.** Updates apply at session start when auto-update is on. To force a check mid-session: `/plugin marketplace update Sysop` refreshes the marketplace's plugin list (catches new packs appearing upstream — e.g., `sysop-flutter` once that pack is populated); follow with `/plugin install <plugin>@sysop` per already-installed plugin to pull the latest commit.
+3. **Pinning the plugin path.** Every Sysop `plugin.json` deliberately omits the `version` field, so Claude Code tracks each commit (auto-update on every commit). This is a conscious choice: adding a `version` would *freeze* plugin updates until a manual bump, and Claude Code offers no consumer-side version pin (`install sysop@x.y.z` isn't a thing), so a version field would cost frequent updates without buying a pin. To hold the plugin path at a known state, turn off auto-update for the Sysop marketplace (above) and update deliberately. For a **hard pin to a reviewed rev**, use the bash path — `bash install.sh <target> --ref <tag-or-commit>` (or `bash sysop/scripts/sysop-update.sh --ref <tag-or-commit>`) installs from that rev instead of HEAD; any rev resolves, so a commit SHA works when no usable release tag is published. See [SECURITY.md](../SECURITY.md) § "How updates reach you — and how to pin".
+4. **Reset / recovery.** Installed plugins live at `~/.claude/plugins/cache/`. To force a clean re-pull: `/plugin uninstall <plugin>@sysop` then `/plugin install <plugin>@sysop`.
+
+**Reconciling plugin + bash-installer updates.** When upstream Sysop ships a change, both sides typically move in the same commit: a skill body edit (plugin path) often comes with a matching convention-map or checks.yml change (bash-installer path). The two paths update independently — plugin auto-updates at the next session start; bash-installer changes require an explicit `bash install.sh <target> --update`. Run `--update` whenever you notice a Sysop plugin auto-updated to a new commit; the `--update` snapshot diff + post-overwrite delta table (WORKFLOW.md § 8.2b) show what changed in your project tree.
+
+## Codex
+
+Sysop registers its two review skills with the [Codex CLI](https://developers.openai.com/codex/) by creating two relative symlinks at install time, in **both** install modes:
+
+```
+.agents/skills/codebase-review -> ../../.claude/skills/codebase-review
+.agents/skills/security-audit  -> ../../.claude/skills/security-audit
+```
+
+They are links, not copies: there is exactly one source of truth per skill, so an `--update` that refreshes a skill body is visible through the link immediately and there is no second file to drift. A Codex session discovers them natively — an ordinary request like "run a security audit" selects the installed workflow with no filename, path, or kickoff prompt — and they also expose the `$codebase-review` / `$security-audit` selectors, which no instruction-file prose can provide. That selection behavior was measured against a loop-mode install; full mode links the same two directories at the same paths, so the registered set is expected to be identical — expected, not measured. Claude Code reads `.claude/skills/` directly and isn't documented to scan `.agents/`; if a future version does follow the links, it lands on the same skill bodies it already has.
+
+**If a path is already there and isn't ours, the install stops.** A pre-existing `.agents/skills/codebase-review` of your own would quietly capture ordinary Codex requests while the install reported success, so Sysop refuses rather than clobber or silently skip. The same applies if `.agents` is a file rather than a directory, or if Sysop can't write into it. Refusal happens before anything is written, so the tree is exactly as you left it. Move your entry aside and re-run, or re-run with `--no-codex-links`. Everything else is untouched — your root `AGENTS.md`, your own `.agents/skills/` entries: Sysop owns those two directory entries and nothing more.
+
+**Opting out is sticky.** `--no-codex-links` skips them and records the choice in `.claude/sysop.lock`, so the plain one-line `bash sysop/scripts/sysop-update.sh` honors it forever after with no retyped flag. `--codex-links` turns them back on. If you opt out, drop `.agents/` from the documented install commit line — there will be nothing there to add, and `git add` fails on a pathspec that matches nothing. Opting out on an install that already has the links removes them — but only while they are still *exactly* Sysop's links; if you repointed one, Sysop leaves it for you — the `--update` sweep says so out loud (`⚠ keep:`); a plain re-install opt-out skips it silently.
+
+**Filesystems that can't symlink.** Once you confirm the plan, the installer probes your filesystem with a throwaway relative symlink before creating anything. If that fails (some Windows mounts, exotic filesystems), it says so loudly, skips the links, and **continues** — the rest of the install lands normally. You lose native Codex discovery, not Sysop. One consequence to know: `.agents/` is then never created, so drop it from the install commit line above — `git add` aborts the whole invocation on a path that matches nothing, staging none of the rest.
+
+**Know where Codex's default sandbox stops the loop.** Under Codex's default `workspace-write` sandbox, a review round runs and writes its findings to `review_tasks.md`, but the *commit* step is denied (`git add` fails on `.git/index.lock`) — the loop stops one step short of closing, and you commit by hand. The loop closes end-to-end only under `danger-full-access`, which is appropriate **only in an already-isolated environment** (a container or throwaway clone) — never as a casual default; sandbox and approval policy are your trust boundary, and Sysop deliberately does not write a Codex profile for you. Also honestly: the symlink registration above is measured, but a full acceptance run of the shipped mechanism on a fresh install is still open — treat Codex support as one measured step, not a track record (the [README's portability paragraph](https://github.com/getsysop/sysop#readme) is the fuller statement).
+
+The manual alternative is a routing block in your root `AGENTS.md`. This is the block that was actually tested end to end, so use it as-is rather than a paraphrase — the last paragraph is load-bearing (a review skill that skips the deterministic pre-scan, or can't resolve its `_shared/*.md` partials, silently produces a fraction of the findings):
+
+```markdown
+<!-- sysop:codex-loop:start -->
+## Sysop loop-mode routing
+
+When the user asks to review the codebase, read
+`.claude/skills/codebase-review/SKILL.md` completely and execute that workflow.
+
+When the user asks for a security audit, read
+`.claude/skills/security-audit/SKILL.md` completely and execute that workflow.
+
+For either workflow, resolve `_shared/*.md` references under
+`.claude/skills/`, use `bash sysop/scripts/run_checks.sh` for its deterministic
+pre-scan, preserve the scope sections in `CLAUDE.md`, write durable findings to
+`review_tasks.md`, and follow normal Codex sandbox and approval requirements.
+<!-- sysop:codex-loop:end -->
+```
+
+If a non-empty `AGENTS.override.md` exists at your repo root, that is the file Codex reads — put the block there instead.
+
+**You own that block** — Sysop does not write, update, or remove it. Re-check its paths after a Sysop update, and delete it when backing out. (It routes but does not register, so it gets you neither the `$`-selectors nor native discovery; it also competes for the combined project-instruction budget. That is why the symlinks are the default.)
+
+## Required permissions
+
+The bash installer writes `<target>/.claude/settings.json` with a scoped allow-list for every Bash command the Sysop skills invoke (git merges, worktrees, branch deletes, pushes, scripts in `sysop/scripts/`). This file matters most under Claude Code's `dontAsk` permission mode, which auto-denies any call not covered by an allow-rule — without it, skills like `/review-close` halt mid-merge with no prompt when the harness blocks `git merge --ff-only`. Under the interactive modes the same gaps cost you a prompt rather than a halt. `dontAsk` also denies every file edit no rule covers, inside the project too. The list seeds a rule for each Sysop record a skill writes with a file tool: `tasks/index.yml` and the task bodies in `tasks/open/`, `review_tasks.md`, `sysop/SYSOP_ISSUES.md`, the give-back staging directory, named paths under `sysop/runtime/` (never its `locks/`), and the documents `/review-close` writes (`PROJECT_STATUS.md`, `CHANGELOG.md`, `UI_Iterations.md`). It also seeds one read rule, for the plugin cache a plugin install's `/review-close` reads its step files from. Everything else a skill edits is denied under `dontAsk` — your own code, the `.claude/*.project.*` overlays, `CLAUDE.md`, and any path outside the project — so run the skills that edit those in another mode. The rules bind only when Claude Code is started at the project root: started in a subdirectory, none of them applies. Know what you're granting: the full-mode list pre-authorizes the lifecycle git flow, including `git push origin` and `git push --force-with-lease` (the worktree close path), plus `git add` (the review skills stage paths built at runtime) — the installer says this out loud at install time, and the file is yours to trim (delete any rule you don't want; the affected skill just prompts instead, or reports the gap and stops). **The allow-list is already tiered by mode:** a `--mode loop` install ships a small check subset (no push, merge, or rebase grants, no hooks; its git write grants are `git add`, the `docs:` commit, and `git worktree add`/`remove` for placing review agents off the default branch; its file-edit rules are the give-back two, `review_tasks.md`, `sysop/runtime/audit-scope.txt` and `sysop/runtime/pending-docs/`). The installer merges with any existing `settings.json` rather than overwriting (set-union on `permissions.allow`); the one exception is `--mode loop` from a full install, which removes the full-mode rules the loop set lacks and names each. See WORKFLOW.md § 8.2a for the rule-by-skill table and the conscious omissions (no `Bash(git *)`, no `git push --force` without lease).
+
+## Repo layout
+
+The Sysop repo itself:
+
+```
+sysop/
+├── .claude-plugin/marketplace.json    # Claude Code plugin discovery
+├── core/                              # always-required
+│   ├── .claude-plugin/plugin.json
+│   ├── skills/                        # lifecycle skills + pr-* GitHub family
+│   └── companion/                     # installer-delivered files
+│       ├── scripts/                   # claim_task, run_checks, etc.
+│       ├── git-hooks/                 # pre-commit, pre-merge (+ examples/)
+│       ├── docs/                      # WORKFLOW.md, WORKFLOW_GUIDE.md
+│       ├── convention_map.md          # core conventions (bash, skills)
+│       ├── security_map.md            # core OWASP map
+│       └── semgrep/                   # README + universal authoring guide
+└── packs/                             # opt-in
+    ├── python/                        # populated (convention_map, security_map,
+    │                                  #   checks.yml.fragment, 3 semgrep rules,
+    │                                  #   shared_cli.py)
+    ├── postgres/                      # populated (convention_map, security_map,
+    │                                  #   checks.yml.fragment, 2 semgrep rules)
+    ├── nextjs-react/                  # populated (convention_map, security_map,
+    │                                  #   checks.yml.fragment, 5 semgrep rules)
+    ├── llm/                           # populated (convention_map, security_map,
+    │                                  #   checks.yml.fragment, 1 semgrep rule)
+    ├── beancount/                     # populated (convention_map, security_map;
+    │                                  #   overlays the python pack)
+    ├── streamlit/                     # placeholder (manifest only)
+    ├── pandas/                        # placeholder
+    ├── kotlin/                        # placeholder
+    ├── swift-ios/                     # placeholder
+    ├── flutter/                       # placeholder
+    └── mcp-server/                    # placeholder
+```
+
+The legacy `.claude/` directory has been fully migrated: `convention_map.md` (Phase 2E), `security_map.md` (Phase 2F), `checks.yml` (Phase 2G), and `semgrep/` (Phase 2H) are all distributed into the appropriate packs.
+
+## Backing out
+
+Everything Sysop writes is a tracked file plus one set of git hooks, so reversing it — a single task claim, or the whole tool — is a clean git operation.
+
+### Reversing a task claim
+
+`/claim-task` *claims* by doing three things: it flips the task to `in_progress` in `tasks/index.yml`, takes a lock at `sysop/runtime/locks/<TASK-ID>.lock` (under the main repo), and creates a worktree on a feature branch. (It then goes on to orchestrate the work — plan, independent review, classification, execute — but only these three are what an un-claim reverses.) To reverse all three, run the un-claim flag from the **main checkout** (not from inside the task's worktree):
+
+```bash
+bash sysop/scripts/claim_task.sh --release <TASK-ID>
+#   --delete-branch   also drop the feature branch
+#   --force           discard uncommitted work in the worktree (otherwise a dirty
+#                     worktree aborts the release with everything left intact)
+```
+
+It reads the branch and worktree from the lock, so you supply only the task ID. It removes the worktree (never the main worktree), flips the task's `status:` back to `open`, deletes the lock, runs `validate_tasks.py`, and prints — but does not run — the commit:
+
+```bash
+git add tasks/index.yml && git commit -m "chore: release <TASK-ID>"
+```
+
+The status flip goes through a PyYAML round-trip, never a hand-edit, so the queue stays validator-clean. It resolves an interpreter that can read your queue before it gives up — the project venv first (`.venv/bin/python3`, then `venv/bin/python3`, anchored on the **main** checkout so a run from a worktree or a subdirectory still finds it), then whatever `python3` is on PATH — so you do not need to activate anything, and a PEP-668 host where PyYAML can only live in a venv is a normal host rather than a broken one. Only when *nothing* available can `import yaml` does `--release` stop **before touching anything** and print the manual reversal — the same steps by hand:
+
+```bash
+git worktree remove <worktree-path>        # add --force if it has uncommitted work you're discarding
+git branch -D <feature-branch>             # optional — drop the branch too
+rm sysop/runtime/locks/<TASK-ID>.lock      # release the lock
+# then flip that task's `status:` from in_progress back to open in tasks/index.yml
+python3 sysop/scripts/validate_tasks.py    # confirm the queue is consistent. Exits 2 if no
+                                           # interpreter here can import yaml — which is the
+                                           # state that printed this recipe. Fix it first:
+                                           #   python3 -m venv .venv && .venv/bin/pip install pyyaml
+                                           # then re-run this line; the script finds that venv itself.
+git commit -am "chore: release <TASK-ID>"
+```
+
+Hand-editing `status:` is normally off-limits (`tasks/README.md` rule 2) precisely because it can desync the lock — but doing it in the *same pass* as the lock removal (exactly what `--release` automates) is the sanctioned reversal, and `validate_tasks.py` confirms nothing is left dangling.
+
+One thing `--release` deliberately leaves behind: if the claim had been parked, the park record stays in `sysop/runtime/parked/`. It outlives the claim on purpose — it is the record of *why* the work stopped. **Both claim paths park there, and they leave different things.** `/auto-build` archives the plan and the verdict. `/claim-task` writes a **pointer**: the reason, the branch, which artifacts were present, and the `--resume <RUN_ID>` line that re-enters the run — a pointer rather than a copy because its artifacts already live in the main checkout under `sysop/runtime/claim/`, where they survive `git worktree remove`. And the re-entrant is the **same** claimant resuming that run id, not the next claimant picking the work up. It is gitignored, so it costs you nothing in the tree.
+
+### Reversing a review-batch claim
+
+A review batch is a real claim too (Phase 156) — `batch_work.sh` writes `sysop/runtime/locks/BATCH-<N>.lock` alongside the worktree, which is what stops `/next-task`, `/sitrep` and the collision advisories from handing the same batch to someone else. Its reversal is the batch-side twin of `--release`, also run from the **main checkout**:
+
+```bash
+bash sysop/scripts/batch_work.sh --release <BATCH-NUMBER>
+#   --force   required if any task in the batch range is already checked off `- [x]`
+```
+
+It removes the worktree, reverts the batch header, its `[/]` boxes and the statistics row in `review_tasks.md`, commits that on `main`, and releases the lock — in that order, so an early exit still leaves the file and the lock agreeing with each other. Note the asymmetry with the task path: `claim_task.sh --release` refuses a `BATCH-*` id outright and points here, because a batch's claim state lives in `review_tasks.md` rather than `tasks/index.yml`.
+
+### Removing Sysop from your project
+
+Sysop's whole payload is the set you committed as `chore: install Sysop` — the `sysop/` vendor dir (scripts, docs, the friction log), plus the `.claude/` merge, the two `.agents/skills/` links, `tasks/`, and the `CLAUDE.md` / `.gitignore` appends (the exact per-file managed-path list is recorded in `.claude/sysop.lock`'s `managed_paths`; see WORKFLOW.md § 8.2b). Because it is all tracked:
+
+- **Revert the install commit** if nothing has touched the payload since — e.g. a fresh install you're immediately undoing: `git revert <install-commit>`. Once you've actually *used* Sysop, later cycles have committed to `tasks/index.yml`, so a revert conflicts there — fall back to deleting the paths instead.
+- **Delete the managed paths.** Everything Sysop owns lives under `sysop/`, so removing it is `git rm -r sysop`, then commit — nothing of yours is mingled in there to pick apart (Phase 128; the pre-namespace flat `scripts/` layout is why older docs warned about selective removal). Sysop also *merges* into any existing `.claude/`, so revert that merge using `managed_paths` in `.claude/sysop.lock` as the source of truth rather than deleting `.claude/` wholesale. `tasks/` stays — it holds both Sysop's scaffold (`schema.md`, `README.md`) and your own planning content (`vision.md`, `decisions.md`, the queue); keep or prune it as you like.
+- **Remove the two Codex links** (if you have them — see [§ Codex](#codex)). Check each one is still Sysop's before deleting, because a link you repointed is your data, not ours:
+
+  ```bash
+  for s in codebase-review security-audit; do
+    l=".agents/skills/$s"
+    if [ -L "$l" ] && [ "$(readlink "$l")" = "../../.claude/skills/$s" ]; then
+      git rm -f --quiet -- "$l" 2>/dev/null || rm -f -- "$l"
+    else
+      echo "skipping $l — not Sysop's link, yours to handle"
+    fi
+  done
+  ```
+
+  Delete the *links*, never `.agents/` or `.agents/skills/` recursively — those directories may hold your own entries. Avoid a trailing slash on the link itself (`rm -rf .agents/skills/codebase-review/`): on macOS that deletes the real skill through the link, while GNU `rm` refuses. If removing the links leaves the parents empty, leaving the empty dirs behind is fine; they may not be ours to delete. If you added the manual `AGENTS.md` block instead, remove that block too.
+- **Disarm the git hooks** — the one untracked, unrecoverable surface. `install.sh` copies Sysop's two hooks into `.git/hooks/` (which git never tracks): `rm -f .git/hooks/pre-commit .git/hooks/pre-merge-commit`. Remove only hooks Sysop armed — if you had your own, `install_hooks.sh` backed them up alongside as `*.bak.<timestamp>`.
+- **Delete the recorded PR heads** (`§ Merge policy: pr` only). Each `/review-close` records its merged PR's head as a local ref under `refs/sysop/merged-pr-heads/`, so the next close and `/sitrep` can tell the claim flips that close landed from a branch's own work. If one of those PRs' squash is reverted on `main`, delete that PR's ref (`git update-ref -d refs/sysop/merged-pr-heads/<N>`), because a recorded head reads as landed until it is removed. Refs are never tracked or pushed, so no revert reaches them: `git for-each-ref --format='%(refname)' refs/sysop/ | xargs -n 1 git update-ref -d`.
+- **Plugin users:** also `/plugin uninstall <plugin>@sysop` per installed Sysop plugin.
+
+Outside the repo, the only traces are the optional `SYSOP_SRC` line in your shell rc and the Claude Code plugin cache — remove those if you added them.

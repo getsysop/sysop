@@ -1,0 +1,1327 @@
+"""The runner/reference split's authority mechanism, over `/review-close` Step 3.
+
+Built by Phase 275 to the shape specified in `tools/CONTEXT_THINNING_SPEC.md`
+(maintainer-side; never ships). Four layers, and the roster check that keeps the
+declared population from shrinking as a side effect:
+
+  (a) a whole-block verbatim pin over the step, canonicalised
+  (b) contradiction screens, scoped to the step's own section
+  (c) per-rule subject x predicate class predicates that survive a regeneration
+  (d) a fail-closed extractor, with a test that it fails closed
+
+The canon helpers are IMPORTED from `test_adversarial_review_gate` rather than
+restated. A second copy would drift from the one whose semantics this module's
+whole fence analysis depends on, and the spec's § 3.5 fork was about exactly that.
+
+**`Q-457`, the fork, is settled here (Phase 291) and the answer is `_tagged`.**
+`_prose_only` renders by DELETION, which is right for a presence check over
+`_shared/adversarial-review.md` — a rule wrapped in a fence there is a quoted
+example and should read as gone. It is wrong for a pin over THIS file, where
+fenced blocks are the prescribed commands and blockquotes are notes to the
+operator: measured at the filing, `1a` is 70.6% fenced and `4c` is 35.2%
+blockquote with no column-0 fences at all, and two rules that change a verdict sat
+in `REFERENCE.md` § Blocked purely because a pin could not see into a fence.
+`_tagged` keeps every character and brackets the wrapper instead, so a rule inside
+one is pinned while moving a rule INTO one still reddens the pin. The two ways out
+the filing listed — drop the fence strip, or handle blockquotes separately — were
+both refused by measurement before this was built: with the strip dropped, a
+wrapper whose closer lands past the slice's END marker leaves the slice
+byte-identical and the pin GREEN over a fully commented-out step. That is Phase
+167's survivor, and `_anchor_is_wrapped` is what closes it.
+"""
+
+from __future__ import annotations
+
+import ast
+import re
+import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent))
+
+from _case_pins import case_pin_problems  # noqa: E402
+from _prose_guard_helpers import anchor  # noqa: E402
+import os
+import shlex
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+from skill_runner_text import text_of
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SKILL = REPO_ROOT / "core/skills/review-close/SKILL.md"
+REFERENCE = REPO_ROOT / "core/skills/review-close/REFERENCE.md"
+
+sys.path.insert(0, str(REPO_ROOT))
+from tests.test_adversarial_review_gate import (  # noqa: E402
+    NEUTERING_TAGS,
+    TAG_CLASSES,
+    _anchor_is_wrapped,
+    _block_canon,
+    _first_divergence,
+    _flat,
+    _indent_neutered,
+    _prose_only,
+    _tagged,
+    _unhandled_nesting,
+    _without,
+)
+
+# ---------------------------------------------------------------------------------------
+# Layer (d) — the extractor, fails closed on either marker
+# ---------------------------------------------------------------------------------------
+#
+# Fails closed because the alternative is fail-OPEN widening: a renamed end marker makes a
+# slicer return the rest of the file, and a pin compared against an over-wide slice either
+# fails confusingly or — worse — satisfies a required-pattern check out of the extra text.
+# That, not deletion, is what this layer uniquely owns: deletion is already caught by the
+# required-pattern checks below, which fire on the empty string.
+
+STEP_3_START = "## Step 3: Run Verification"
+STEP_3_END = "## Step 3c"  # id only: renaming 3c's TITLE is a legal edit to another step
+
+
+def _step_3_slice(text: str) -> str:
+    """Step 3's section, wrapper-TAGGED. Empty if either marker is gone or neutered.
+
+    Tagged rather than stripped (`Q-457`): the step's prescribed commands and its operator
+    notes are the operative content here, so they belong inside the pin rather than deleted
+    before it compares. See the module docstring.
+
+    **The anchor check is the half a no-strip policy cannot have.** Wrap the whole step in
+    `<!-- -->` or a fence with the closer placed PAST the `## Step 3c` marker and the text
+    between the two anchors is byte-identical — measured on this slicer and on
+    `adversarial-review.md`'s before this was written, and GREEN both times without it. With
+    it, the anchor itself lands inside an open region and the slice fails closed, which is
+    the same answer stripping gave and the one the pin still needs.
+    """
+    tagged = _tagged(text)
+    i = tagged.find(STEP_3_START)
+    if i == -1 or _anchor_is_wrapped(tagged, i):
+        return ""
+    j = tagged.find(STEP_3_END, i + len(STEP_3_START))
+    if j == -1 or _anchor_is_wrapped(tagged, j):
+        return ""
+    # Markdown's undelimited code form, judged over THIS step rather than the file: indenting
+    # one step barely moves a whole-file ratio. See `_indent_neutered`.
+    if _indent_neutered(tagged[i:j]):
+        return ""
+    return tagged[i:j]
+
+
+def _step_3_raw_slice(text: str) -> str:
+    """Step 3's section as it ships — no tags, no folds — for the contradiction screens.
+
+    **This split used to be load-bearing and is no longer, and the reason is worth stating
+    rather than leaving the old sentence in place.** Until Phase 291 the pin ran over
+    prose-only text, so a contradiction written into a shell comment inside a prescribed
+    command block reached no screen; the author-side battery planted exactly that and it
+    survived. `_tagged` keeps that text, so the screens would now see it either way.
+
+    What keeps the raw slice is narrower and mechanical: `SCREEN_ALLOWED` is pinned to whole
+    shipped SENTENCES and `_sentence_bounds` splits on `". "`, so a `[[fence]]` marker landing
+    mid-sentence would silently change which text an allow-list entry has to match. The
+    screens read the bytes a runner reads; the pin reads the rendering.
+    """
+    i = text.find(STEP_3_START)
+    if i == -1:
+        return ""
+    j = text.find(STEP_3_END, i + len(STEP_3_START))
+    if j == -1:
+        return ""
+    return text[i:j]
+
+
+def _step_3_raw_section() -> str:
+    section = _step_3_raw_slice(text_of(SKILL))
+    assert section, "Step 3's raw section does not resolve; the slicer fails closed"
+    return section
+
+
+def _step_3_section() -> str:
+    section = _step_3_slice(text_of(SKILL))
+    assert section, (
+        "Step 3's section does not resolve — either the step is gone, or one of "
+        f"{STEP_3_START!r} / {STEP_3_END!r} was renamed and this slicer needs revisiting. "
+        "It fails closed on purpose; do not widen it to 'rest of file'."
+    )
+    return section
+
+
+def test_the_step_3_slicer_fails_closed():
+    """Either marker renamed must yield nothing, not the rest of the file."""
+    text = text_of(SKILL)
+    assert _step_3_slice(text)
+    assert _step_3_slice(text.replace(STEP_3_START, "## Step 3: Verify")) == ""
+    assert _step_3_slice(text.replace("## Step 3c", "## Step 3x")) == ""
+
+
+def test_the_slicer_does_not_reach_past_its_own_step():
+    """The window stops at Step 3c. A pin that swallowed 3c would redden on 3c's edits."""
+    section = _step_3_section()
+    assert "Manual Smoke Gate" not in section
+    assert "Prepare Worktrees for Merge" not in section
+
+
+# ---------------------------------------------------------------------------------------
+# The roster — parsed from the SHIPPED file, pinned here as a set
+# ---------------------------------------------------------------------------------------
+#
+# `DECLARED_IDS` is the pinned half of a three-way identity: the roster bullets in
+# REFERENCE.md, the `## <id>` sections in REFERENCE.md, and this set must agree. That is
+# the Phase 262 partition shape rather than a count — a widened count says nothing about
+# WHICH rule left, and Phase 163's round showed a count can be widened silently and stay
+# green. Removing a rule here is an edit to a pinned constant, so it cannot happen as a
+# side effect of re-approving something else.
+
+# `RC-3-7` and `RC-3-8` are the two rules `REFERENCE.md` § Blocked used to carry: both meet
+# the § 2.2 bar, both change a verdict, and both live in a shell comment or a command inside
+# Step 3's fenced block, so until `Q-457` was settled neither could be declared under a pin
+# that deleted fenced text before comparing. They are the deliverable's own evidence — the
+# fork is only closed if the rules it blocked can now be declared.
+DECLARED_IDS = frozenset({
+    "RC-3-1", "RC-3-2", "RC-3-3", "RC-3-4", "RC-3-5", "RC-3-6", "RC-3-7", "RC-3-8",
+})
+
+_ROSTER_BULLET = re.compile(r"^- `(RC-[0-9a-z-]+)` — ", re.M)
+_SECTION_HEADING = re.compile(r"^## `(RC-[0-9a-z-]+)`\s*$", re.M)
+
+
+def _roster_ids() -> set[str]:
+    return set(_ROSTER_BULLET.findall(REFERENCE.read_text(encoding="utf-8")))
+
+
+def _section_body(rule_id: str) -> str:
+    """One rule's REFERENCE.md section body, so an empty section cannot pass as coverage."""
+    text = REFERENCE.read_text(encoding="utf-8")
+    m = re.search(rf"^## `{re.escape(rule_id)}`\s*$", text, re.M)
+    if not m:
+        return ""
+    nxt = re.search(r"^## ", text[m.end():], re.M)
+    return text[m.end(): m.end() + (nxt.start() if nxt else len(text))].strip()
+
+
+def _section_ids() -> set[str]:
+    return set(_SECTION_HEADING.findall(REFERENCE.read_text(encoding="utf-8")))
+
+
+# Subject patterns: what ties a rule id to runner text without a span extractor. Each must
+# match inside the pinned block, which is roster check (a).
+SUBJECT_PATTERNS: dict[str, str] = {
+    "RC-3-1": r"nothing here may be reported as having verified a branch",
+    "RC-3-2": r"A scope you could not compute must never silently narrow the gate",
+    "RC-3-3": r"A surface absent from the changed-file list is `skipped`, not `failed`",
+    "RC-3-4": r'"The diff" is this pass\'s changed-file list, never the run\'s',
+    "RC-3-5": r"The licence for this skip is the pass, not the diff",
+    "RC-3-6": r"The item-5 stop is about the run, not about this pass",
+    # Both of these resolve INSIDE the fenced command block, which is the whole point: under
+    # `_prose_only` neither matched anything, and `REFERENCE.md` § Blocked said so.
+    "RC-3-7": r"Three dots, always — two would\s+#?\s*render everything the base gained",
+    "RC-3-8": r'git diff --name-only origin/<default branch>\.\.\.HEAD\s+\\\s+\|\| echo "NO_ORIGIN_MAIN"',
+}
+
+# The TEXT each subject pattern must resolve to, pinned beside the pattern that finds it.
+#
+# This phase's round retired `RC-3-7` from the runner with the suite green, in three edits:
+# re-point its subject pattern at a different sentence of the same fenced block (51 literal
+# characters, unique — so `test_every_subject_pattern_is_specific` passed), delete the rule,
+# regenerate the block pin by the documented recipe. The roster, the `REFERENCE.md` section,
+# `DECLARED_IDS` and the screen were all untouched, so nothing else noticed. **A subject
+# pattern is a rule's only deletion detector, and re-pointing one looks like a pattern tweak
+# rather than a retirement.**
+#
+# Pinning what the pattern must MATCH closes that the only way prose can be closed: the
+# retirement now has to replace the rule's own words in a constant, so the diff says which
+# rule left instead of showing a regex being adjusted. It does not make retirement
+# impossible — `REFERENCE.md` § Declared limits says so, and now says how many edits it takes
+# — it makes it legible.
+SUBJECT_QUOTES: dict[str, str] = {
+    "RC-3-1": "nothing here may be reported as having verified a branch",
+    "RC-3-2": "A scope you could not compute must never silently narrow the gate",
+    "RC-3-3": "A surface absent from the changed-file list is `skipped`, not `failed`",
+    "RC-3-4": '"The diff" is this pass\'s changed-file list, never the run\'s',
+    "RC-3-5": "The licence for this skip is the pass, not the diff",
+    "RC-3-6": "The item-5 stop is about the run, not about this pass",
+    "RC-3-7": "Three dots, always \u2014 two would # render everything the base gained",
+    "RC-3-8": 'git diff --name-only origin/<default branch>...HEAD \\ || echo "NO_ORIGIN_MAIN"',
+}
+
+
+# ---------------------------------------------------------------------------------------
+# Layer (c) — subject x predicate classes, per rule
+# ---------------------------------------------------------------------------------------
+#
+# Composed rather than literal, because a first draft of the shipped exemplar used five
+# literal patterns and a reviewer walked every one of them with an ordinary rewording, all
+# green after a sanctioned regeneration. The subject half names WHICH rule is being
+# demoted; the predicate half names the DEMOTION CLASS. Both halves are needed: a demotion
+# with no subject is a sentence about something else, and a subject with no demotion is the
+# rule itself.
+
+_S3 = r"(?:Step 3|this pass|the pre-merge pass)"
+_POST = r"(?:4a-post|the post-merge (?:pass|gate))"
+
+# Each pattern carries a named `dem` group around the DEMOTION ITSELF. A screen that
+# ignores negation is over-strict in the direction that hides: the shipped step already
+# says "`4a-post` therefore does not inherit this skip" and "What does *not* license it is
+# the idea that a doc-only diff is harmless" — both of which a naive screen flags, which
+# would redden the step for the sentences that state the rules. So a hit requires the
+# demotion to be UN-negated within its own sentence.
+
+FORBIDDEN: list[tuple[str, str, str]] = [
+    # (rule id it defends, pattern with a `dem` group, why this rewording is a demotion)
+    (
+        "RC-3-1",
+        rf"{_S3}[^.]{{0,90}}(?P<dem>\b(?:verifies|validates|confirms)\s+"
+        r"(?:the\s+|each\s+|every\s+)?(?:branch|branches|work)\b)",
+        "promotes the pre-merge pass to a verdict on the work — the exact reading RC-3-1 "
+        "forbids, and the one the step's output makes tempting because it runs the same "
+        "command list 4a-post does.",
+    ),
+    (
+        "RC-3-1",
+        rf"(?:green|passing|success)[^.]{{0,60}}\bat {_S3}\b[^.]{{0,60}}"
+        r"(?P<dem>\bmeans\b[^.]{0,60}(?:verified|safe to merge|ready))",
+        "restates the verdict promotion as an inference about what green MEANS, leaving "
+        "the rule's own sentence intact while the conclusion it forbids is drawn next to "
+        "it.",
+    ),
+    (
+        "RC-3-2",
+        r"(?:NO_ORIGIN_MAIN|uncomputable|cannot be computed|could not be computed)"
+        r"[^.]{0,90}(?P<dem>\b(?:treat|treated|treats) (?:it |the list )?as (?:an? )?empty)",
+        "turns a scope that FAILED to compute into a scope that computed to nothing, which "
+        "fires every narrowing at maximum on exactly the setups the runner knows least "
+        "about. This is the inversion RC-3-2 exists to forbid.",
+    ),
+    (
+        "RC-3-3",
+        r"(?:surface|surfaces)[^.]{0,80}(?:absent|missing|not in the (?:changed-file )?list)"
+        r"[^.]{0,60}(?P<dem>\b(?:need not|no need to|without) (?:be )?"
+        r"(?:record|recorded|reporting|report))",
+        "drops the recording obligation, which is the half that makes the skip authorized "
+        "rather than improvised — a narrowed gate and a full gate then produce the same "
+        "report.",
+    ),
+    (
+        "RC-3-3",
+        r"(?P<dem>\b(?:you may|it is fine to|acceptable to) skip a surface)[^.]{0,60}"
+        r"(?:the list|changed-file list) (?:does )?touch",
+        "licenses the inverse the rule closes by name: a hand-made skip of a surface the "
+        "list DOES touch, which is the judgement call the surface gate replaced.",
+    ),
+    (
+        "RC-3-4",
+        rf"{_POST}[^.]{{0,80}}(?P<dem>\b(?:inherits|inherit|reuses|reuse)\b)[^.]{{0,60}}"
+        rf"(?:{_S3}|the earlier|the pre-merge)?[^.]{{0,40}}(?:skip|list|diff)",
+        "lets the post-merge gate decide on a pre-merge tree's contents, so the assembled "
+        "diff of every merged branch goes unverified. This is the single most natural "
+        "implementation error in the step, because 'the diff' reads like a property of the "
+        "run.",
+    ),
+    (
+        "RC-3-5",
+        r"doc-only[^.]{0,80}(?P<dem>\b(?:is|are) "
+        r"(?:harmless|safe|risk-free|inherently safe))",
+        "restores the justification RC-3-5 replaces. Harmlessness is the premise that makes "
+        "letting 4a-post inherit the skip look reasonable; the pass-scoped licence is what "
+        "stops it.",
+    ),
+    (
+        "RC-3-6",
+        r"item.?5[^.]{0,80}(?P<dem>\b(?:only|need only|is only) "
+        r"(?:reached|evaluated|considered))",
+        "restores the bare sequence in which item 4 fires first and item 5 is never "
+        "reached, which is how a consumer with no command list meets 'stop and ask' after "
+        "every branch has been merged.",
+    ),
+    (
+        "RC-3-7",
+        r"\btwo[- ]dots?\b[^.]{0,70}(?P<dem>\b(?:is fine|are fine|suffices|is equivalent"
+        r"|works too|same (?:as|thing)))",
+        "licenses the two-dot form, which does not fail — it silently returns a WRONG "
+        "changed-file list, rendering everything the base gained since the branch was cut as "
+        "though the branch deleted it. Every narrowing decision in this step reads that list, "
+        "so the corruption is upstream of the surface gate, the doc-only skip and the "
+        "`Unverified surfaces:` report at once.",
+    ),
+    (
+        "RC-3-8",
+        r"(?:no origin|missing (?:remote|origin)|origin is absent)[^.]{0,70}"
+        r"(?P<dem>\b(?:is fine|can be ignored|carry on|proceed normally|skip the gate))",
+        "waves through the setup `RC-3-2` exists for. The sentinel is what turns 'the scope "
+        "could not be computed' into a value the runner can branch on; without it the diff "
+        "alone exits 128 and a runner that shrugs at the failure gates on an empty list, "
+        "which fires every narrowing at maximum on exactly the consumers this skill knows "
+        "least about.",
+    ),
+]
+
+def _sentence_bounds(flat: str, at: int) -> tuple[int, int]:
+    """The sentence containing `at`, so negation is judged in its own clause."""
+    start = flat.rfind(". ", 0, at)
+    start = 0 if start == -1 else start + 2
+    end = flat.find(". ", at)
+    end = len(flat) if end == -1 else end
+    return start, end
+
+
+# Sentences in the SHIPPED step that a screen legitimately matches, because they STATE the
+# rule rather than demote it. Allow-listed EXACTLY.
+#
+# The first implementation suppressed a hit whenever a negation word appeared earlier in the
+# same sentence. A round measured that heuristic and walked **8 of 8** screens through it with
+# one ordinary prefix — "Never forget the reason: a doc-only diff is harmless and so the skip
+# is safe." Every screen went silent on a sentence that affirms the demotion. The heuristic
+# traded a handful of known false positives for a total bypass, which is the wrong trade.
+#
+# An allow-list cannot be walked that way, and it is self-maintaining: every entry is text
+# inside the verbatim pin, so changing a shipped sentence fails layer (a) first, and
+# `test_the_screen_allow_list_is_exactly_the_shipped_sentences` fails if the list drifts from
+# what the screens actually match.
+SCREEN_ALLOWED: tuple[str, ...] = (
+    "**Each pass scopes itself to its own tree, with one command.** Item 3's surface gate reads the list this prints at **both** passes; item 4's doc-only skip reads it at **this pass only**, because `4a-post` does not inherit it: ```bash # The changed-file list for THIS pass, read off stdout",
+    '**`4a-post` therefore does not inherit this skip**; see that step',
+    'What does *not* license it is the idea that a doc-only diff is harmless',
+)
+
+
+# A fence delimiter run, folded to one token before an allow-list comparison.
+#
+# `SCREEN_ALLOWED[0]` is a whole shipped sentence and `_sentence_bounds` splits on `". "`, so
+# the sentence it pins *contains* the block's ```` ```bash ```` delimiter. This phase's round
+# measured the consequence: switching to a four-backtick fence, to `~~~`, or simply dropping
+# the `bash` info string each made the entry stop matching and the screen fire — emitting
+# **"RC-3-4 contradicted"** over a presentational reformat. A false positive that names a
+# specific rule as violated is worse than a silent one: it sends the reader to look for a
+# demotion that is not there, and the honest response to two or three of those is to stop
+# believing the screen. The phase had already decoupled the allow-list from the tag MARKERS
+# (that is why the screens read the raw slice) and missed the delimiter itself.
+_FENCE_RUN = re.compile(r"(?:`{3,}|~{3,})\S*")
+
+
+def _screen_canon(text: str) -> str:
+    return _FENCE_RUN.sub("```", text)
+
+
+SCREEN_ALLOWED_CANON: frozenset[str] = frozenset(_screen_canon(s) for s in SCREEN_ALLOWED)
+
+
+def _screen_fires(pat: str, flat: str) -> bool:
+    """True when the demotion appears in a sentence that is not one of the shipped rule
+    statements."""
+    for m in re.finditer(pat, flat, re.I):
+        s, e = _sentence_bounds(flat, m.start())
+        if _screen_canon(flat[s:e].strip()) not in SCREEN_ALLOWED_CANON:
+            return True
+    return False
+
+
+def section_problems(section: str, raw: str | None = None) -> list[str]:
+    """Layers (a)-(c) over one section. Scoped to the section, never the file.
+
+    Section-scoped on the exemplar's own reasoning: neighbouring steps legitimately use
+    this vocabulary, so a file-wide screen would redden the step that warns about a
+    reading, for the sentence that warns about it.
+    """
+    problems: list[str] = []
+    # Screens read the RAW slice: not because the pin's slice is blind any more (it is not,
+    # since Phase 291), but because `SCREEN_ALLOWED` is pinned to whole shipped sentences and
+    # a `[[fence]]` marker landing mid-sentence would change what those entries must match.
+    flat_raw = _flat(section if raw is None else raw)
+
+    # (a) + (d): required subject patterns. These fire on the empty string, which is what
+    # actually catches deletion — layer (d) is about fail-OPEN widening, not this.
+    #
+    # Read over the slice with its NEUTERING regions dropped, which is this file's half of
+    # the `Q-457` policy. Comments and `<details>` hide text from every reader in every file,
+    # so a rule commented out must read as gone; fences and blockquotes are operative HERE
+    # and stay, which is what lets a rule living in a prescribed command block be declared
+    # at all. `_shared/adversarial-review.md` makes the opposite call for the same two
+    # classes, and that difference IS the fork the filing named.
+    visible = _flat(_without(section, NEUTERING_TAGS))
+    for rule_id, pat in SUBJECT_PATTERNS.items():
+        if not re.search(pat, visible):
+            problems.append(f"{rule_id} lost its subject pattern from the runner")
+
+    # (c): contradiction screens.
+    for rule_id, pat, why in FORBIDDEN:
+        if _screen_fires(pat, flat_raw):
+            problems.append(f"{rule_id} contradicted: {why}")
+
+    return problems
+
+
+# ---------------------------------------------------------------------------------------
+# Layer (a) — the whole-block verbatim pin
+# ---------------------------------------------------------------------------------------
+#
+# To re-approve a deliberate edit, regenerate this constant rather than hand-editing it.
+# Resolve the interpreter with `--git-common-dir`, NEVER `--show-toplevel`: the latter answers
+# "which worktree am I standing in", which is the primary only when the runner happens to be
+# standing there (Phase 234, `Q-020`/`Q-307`(b)) — and step 3 of the procedure puts you in a
+# worktree, which carries no `.venv` of its own. A first draft of this comment prescribed
+# `--show-toplevel` and exited 127 in exactly the case it claimed to have fixed, inside the
+# module that pins the rule forbidding it.
+#
+#     ( top=$(git rev-parse --show-cdup) && cd "./$top" && \
+#       "$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)/.venv/bin/python3" -c \
+#       "import sys; sys.path.insert(0,'.'); \
+#        import tests.test_review_close_reference_pins as P; \
+#        print(repr(P._block_canon(P._flat(P._step_3_section()))))" )
+#
+# The subshell first moves to the top of the checkout you are standing in (`--show-cdup`,
+# which is the worktree whose `tests/` module you mean to import), so the recipe runs from any
+# directory inside it; outside a repo, `git` fails and the subshell stops there. Phase 327
+# (`Q-592` line 17): the first recipe imported from `'.'` and gave `ModuleNotFoundError` when
+# run from `tests/`. `test_the_recipe_in_the_comment_runs_from_anywhere_in_the_checkout`
+# executes these lines, not a paraphrase of them.
+#
+# Paste the output below. The diff then carries the prose change and its re-approval together,
+# which is the whole mechanism. A REGENERATION IS THE RE-APPROVAL: name it in the commit
+# message. Nothing enforces that — see the spec's § 6 — so it is on you.
+#
+# **When a regeneration is caused by the CANONICALISER rather than by the prose, prove it
+# instead of reading it.** Phase 291's switch from `_prose_only` to `_tagged` moved this
+# constant by 674 characters (12,666 -> 13,340) and no reviewer can eyeball a 13k literal for
+# a changed word. The delta is provable in one expression, and it held exactly:
+#
+#     _block_canon(re.sub(r"\s+", " ", _without(NEW_PIN, TAG_CLASSES))) == OLD_PIN
+#
+# Dropping every tagged region from the new constant reproduced the old one **byte for
+# byte**, which says the whole delta is markers plus previously-stripped spans and that no
+# shipped word changed. `test_the_pin_reduces_to_the_stripped_rendering` keeps the
+# file-level half of that relationship live; the constant-to-constant half is a one-time
+# check a regenerating phase runs and records.
+#
+# Pinned VERBATIM, not by length. A first draft pinned the canonical LENGTH on the stated
+# grounds that a 12.6k literal would make "every innocent reflow produce an unreadable diff".
+# That was false and a round proved it in one command: `_block_canon(_flat(...))` makes reflow,
+# re-indentation and a `-`/`*` bullet swap byte-identical, so a verbatim pin produces NO diff on
+# an innocent edit. The length pin cost 8 of 8 length-preserving inversions surviving, including
+# "Do not push with failing checks." -> "You may push with failing checks" at 32 characters each.
+
+STEP_3_VERBATIM = (
+    '## Step 3: Run Verification [[quote]]**Before you skip, weaken, or reword any rule in this step, read `REFERENCE.md` § `RC-3-1` through § `RC-3-8`.** Those eight rules are declared load-bearing and pinned by a required check: each section names what its loss would change, which is the thing this step cannot tell you while you are running it. The rest of this skill is not covered — do not read the file\'s existence as coverage of anything outside Step 3.[[/quote]] **This is the pre-merge pass, and it can only verify the tree it runs on.** `HEAD` is still `main` here — Step 3b has not removed a worktree and Step 4a has not merged anything — so no approved branch\'s files are in this working tree and its new tests do not exist yet. What this pass verifies is *this* tree: `origin/<default branch>` plus whatever local-only commits `main` already carries. It is a fail-fast on the base, and it is the last point where stopping is free. **It is not a verdict on the work, and nothing here may be reported as having verified a branch** — that verdict is `4a-post`, which re-runs the same resolved list on the merge target once the branches are merged. **Each pass scopes itself to its own tree, with one command.** Item 3\'s surface gate reads the list this prints at **both** passes; item 4\'s doc-only skip reads it at **this pass only**, because `4a-post` does not inherit it: [[fence]]```bash # The changed-file list for THIS pass, read off stdout. Three dots, always — two would # render everything the base gained since a branch was cut as though the branch deleted # it (the Step 2a note). Run from the repo root. git rev-parse --verify origin/<default branch> >/dev/null 2>&1 \\ && git diff --name-only origin/<default branch>...HEAD \\ || echo "NO_ORIGIN_MAIN" ```[[/fence]] On this pass `HEAD` is `main`, so the list is main\'s local-only commits — the `open → in_progress` claim flips and any Step 1b `review_tasks.md` save — and that population is exactly what this pass is entitled to verify. At `4a-post` the identical command runs on the merge target and returns the whole assembled diff. **If it prints `NO_ORIGIN_MAIN`** (no `origin`, or a remote whose default branch is not `main` — verified: the diff alone exits 128 with `fatal: ambiguous argument`), there is no changed-file list: **gate nothing and skip nothing — run the full resolved list.** A scope you could not compute must never silently narrow the gate. **An empty list is a real outcome here, and it is the one to report rather than pass over.** On a `main` already level with `origin/<default branch>` this command prints nothing, so a `### Ratchet` snippet filtering it short-circuits on every filter and the pass reports green having executed nothing at all. That is *correct* — there is nothing on this tree the base has not already seen — but "green" and "ran nothing" must not read the same, which is why Step 8\'s `Verification:` line carries the reason, not just the verdict. Now discover the project\'s verification commands. Resolve in this order — stop at the first source that produces a command list: - **`<project>/CLAUDE.md` § "Pre-merge verification"** (preferred — the project owns its command list). Two shapes are supported: - **Split sub-headings (recommended).** If the section uses `### Always` and/or `### Ratchet (changed files only)` sub-headings, run them in that order: - **`### Always`** — full-tree commands run unconditionally (build, full test suite, project-level smoke tests). Bullet list; one command per bullet. **"Unconditionally" is a promise about `4a-post`**, the gate that speaks for the work: no diff-shape heuristic skips a list the consumer declared. *This* pass does drop it on the dominant cycle (item 4 below), because its green is not a verdict — and that asymmetry is the only thing standing between the word "always" and a section the dominant cycle never runs. - **`### Ratchet (changed files only)`** — project-supplied shell snippets in a single bash code block. Each snippet is expected to filter `git diff --name-only origin/<default branch>...HEAD` to its file-type of interest and invoke lint/typecheck against only the changed files. Run the block as-is from the repo root. A snippet whose filtered changed-file list is empty short-circuits and passes — that\'s project-side logic, not a Sysop rule. Treat the snippets as project-trusted input — they run with full agent shell privileges. If you didn\'t write them yourself, read the block before running it. - **Flat list (backward compatible).** If neither sub-heading exists, treat all bullets under `## Pre-merge verification` as the `### Always` list and skip the ratchet step. - **`package.json` `scripts.verify`** (if `package.json` is at the repo root or `<frontend>/`). If at repo root, run `npm run verify`. If at `<frontend>/`, run `(cd <frontend> && npm run verify)` from the repo root. - **Auto-detect from common surfaces** — each command gated on its own surface appearing in this pass\'s changed-file list (internal tracker #206). A surface being *present* says the project has one; it does not say this run *touched* one, and running a full frontend build for a diff of Python scripts is the cost that makes skipping tempting — and the skip is then a judgement this step never authorized, so it gets made silently. - `frontend/` exists with `package.json` → `cd frontend && npm run build && npm run test` — **only if** the changed-file list contains a path under `frontend/` - `pyproject.toml` exists with `pytest` declared in `[project.optional-dependencies]` (any extra) → `python -m pytest tests/` — **only if** the list contains a Python file - `Cargo.toml` exists → `cargo test --release` — **only if** the list contains a Rust file or `Cargo.toml` - Other detectable surfaces → run the platform-native test/build command, under the same rule: only if the list contains a file that surface owns. **A surface absent from the changed-file list is `skipped`, not `failed`.** Record it on Step 8\'s `Verification:` line (`skipped frontend — not in this run\'s changed files`). That is what makes the skip *authorized* rather than improvised. It does not license the inverse: do not decide by hand to skip a surface the list does touch. **Then report every changed code file that no detected surface claimed** — Step 8\'s `Unverified surfaces:` line. Surface-gating narrows the gate, so what it cannot account for has to become visible rather than disappear; a `.sql` migration or a `.go` service in a repo whose only detected surfaces are `frontend/` and `pytest` is verified by nothing, and that was true before this gate existed too. The fix is consumer-side and is one heading away: a `## Pre-merge verification` section is **never** surface-gated, because there the consumer said what to run. - **If the diff is doc-only** (no `.py` / `.ts` / `.tsx` / `.js` / `.jsx` / `.sql` / `.sh` / `.kt` / `.swift` / `.go` / `.rs` files changed — only `.md` / `.txt` / `.yaml` config / etc.): skip verification with a one-line note (`Step 3: skipped — diff is doc-only`). **"The diff" is this pass\'s changed-file list, never the run\'s.** The two passes compute it the same way on different trees, so each decides its own skip: `4a-post` is never skipped because Step 3 was, and Step 3\'s skip is not evidence about any branch. On the common cycle this pass *does* skip — a claim flip and a `review_tasks.md` save are the whole of main\'s local-only diff — which is why the pre-merge pass costs almost nothing and why nothing may be concluded from its green. Step 4 (push) still runs. **The licence for this skip is the pass, not the diff — and that distinction is the whole of it.** Step 3 is a fail-fast on the base whose green this step\'s opening already forbids reading as a verdict, so skipping it forfeits only the fail-fast. What does *not* license it is the idea that a doc-only diff is harmless. The extension test above classifies as documentation a great many files a build actually consumes — `pyproject.toml`, `tsconfig.json`, `.eslintrc.json`, `ruff.toml`, `package.json` and its lockfile, CI workflows, semgrep rules, `checks.yml` (not *every* such file: a `vite.config.ts` or `.eslintrc.js` is `.ts`/`.js` and counts as code) — so a diff that is doc-only by this test can regress lint, typecheck and build *directly*, and `### Always` is a full test suite, which can assert on prose as readily as on code. **`4a-post` therefore does not inherit this skip**; see that step. **It also never cancels a command item 3 armed.** Item 3 gates each auto-detected command on its own surface appearing in this list, and three of its four bullets can fire on a diff this test calls doc-only: a path under `frontend/` (`package.json`, `tsconfig.json`, a stylesheet), a `Cargo.toml` — which item 3 names *by name* while `.toml` is absent from the code set above — or any other surface\'s non-code manifest (`go.mod`, `Dockerfile`, `pubspec.yaml`). Where item 3 armed a command, run it. Item 4 decides only what item 3 left unarmed, plus a consumer-declared list under items 1–2. `### Ratchet` needs no decision either way: its snippets filter the changed-file list themselves and short-circuit when the filter comes back empty, which is project-side logic rather than a Sysop skip. - **If none of the above fire and the diff touches code**: stop and ask the user what to run. Do not invent commands. Do not run `pip install` or any state-mutating command during verification — verification is read-only. **The item-5 stop is about the run, not about this pass — resolve before you skip.** Item 4 decides whether to *run* the list; it does not decide whether the list had to exist. Taken in bare sequence the two collide on the dominant path: this pass\'s diff is doc-only, item 4 fires, and item 5 is never reached — so a consumer with no `## Pre-merge verification`, no `scripts.verify` and no detectable surface sails through Step 3 and hits "stop and ask the user what to run" at `4a-post`, **after every branch has been merged**, which is the one outcome this step exists to prevent. So run item 5 against the *run*: if no source produced a command list and **any** part of this cycle touches code — this pass\'s changed-file list, or `git diff --name-only <default branch>...refs/heads/<branch>` for any approved branch (the same per-branch read Step 3c makes) — stop and ask **here**, whether or not item 4 skipped the run. If any command fails, report the failure and **stop**. Do not push with failing checks. Stopping *here* is free — nothing has been merged, no worktree has been removed, no lock has been dropped — so fix the failure and re-run `/review-close` from the top. (`4a-post` has a stop of its own, and it is not free in the same way; its recovery is stated there per policy.) **Under `--prepare`:** a failing command halts the prepare (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 4). Item 5\'s ask and a silently denied command leave Step 3 not run, with the reason in the run directory, and the resume runs it (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 2). **Venv-aware invocation** (the consumer\'s own tooling — **not** `sysop/scripts/*.py`, which resolve venv PyYAML themselves and are always invoked with a bare `python3`; see WORKFLOW.md § 6.1). If a verification command fails with `exit 127` (command not found) or `ModuleNotFoundError` and the project has a `.venv/` directory at the repo root, re-run with `.venv/bin/<cmd>` (for explicit binaries like `.venv/bin/pytest`) or `PATH=.venv/bin:$PATH <cmd>` (for shell pipelines or tools that re-exec). Same pattern as Step 4d\'s pre-push hook venv prefix. The canonical fix is consumer-side — the project\'s `<project>/CLAUDE.md § Pre-merge verification` commands should be authored with `.venv/bin/` prefixes when they depend on venv-installed tools (see WORKFLOW.md § 6.1 venv-aware-invocation paragraph) — but the prefix-on-rerun pattern unblocks the cycle when the consumer\'s command list hasn\'t been venv-ified yet. **Boy-scout escalation (ratchet consequence).** A `### Ratchet` snippet invokes the project\'s lint/typecheck tool against the changed-file list, so if a file in the diff carries pre-existing findings — warnings or type errors not introduced in this review pass — the tool will report them and the gate will fail. That\'s intentional and not a Sysop-side rule: touching a file means cleaning it. Full-tree backlog cleanups stay as separate project-side tasks (e.g. `TECH-LINT-BACKLOG-FIX`, `TECH-TYPECHECK-BACKLOG-FIX` entries in `tasks/index.yml`), so the ratchet doesn\'t impose a clean-everything-first dependency on consumers with existing backlogs. **If a verification command is silently denied** (auto-mode classifier rejects a `npm` / `pytest` / `cargo` / project-specific invocation): prompt the user to run that command themselves via `!`-shell-escape in their prompt — the same pattern Step 4d uses for protected-branch pushes. Do NOT use `AskUserQuestion`; ask for the literal `!`-prefixed command. Step 0\'s permission guard cannot anticipate every project-specific verification command. (The `PermissionDenied` hook surfaces guidance for exactly three shapes — a push to `origin` of one of the two branch names the hook **hard-codes** (`main` or `master`, literally; it does not resolve the default branch), a `--delete` push of any branch, and `git commit` on a protected branch — and emits nothing for anything else, verification commands included, because their vocabulary varies too widely per consumer to enumerate. So this prose remains the load-bearing instruction here. **State the coverage as those three shapes, never as the steps that use them** — a step reference reads as a promise about everything the step runs, and Step 4d under `pr` policy runs `gh pr`, which the hook does not match.) [[quote]]**For new projects:** add a `## Pre-merge verification` section to your CLAUDE.md (template in WORKFLOW.md § 6.1) listing the exact commands this skill should run. That keeps verification deterministic across consumer projects with different stacks.[[/quote]] '
+)
+STEP_3_VERBATIM_LEN = len(STEP_3_VERBATIM)
+
+
+def test_the_step_3_block_matches_its_pin():
+    """Layer (a). Any edit to the surviving text fails until this is regenerated.
+
+    Verbatim, whitespace- and list-marker-normalised: rewrapping, reflowing, re-indenting and
+    a `-`/`*` bullet swap all pass; changing the words does not. That is the property a length
+    pin cannot give — a length pin passes every length-preserving inversion, and a round
+    measured 8 of 8 surviving before this was changed.
+    """
+    canon = _block_canon(_flat(_step_3_section()))
+    if canon != STEP_3_VERBATIM:
+        raise AssertionError(
+            "Step 3 no longer matches its pin "
+            f"({len(canon)} chars vs {len(STEP_3_VERBATIM)} pinned). "
+            + _first_divergence(canon, STEP_3_VERBATIM)
+            + " If the edit was deliberate, regenerate this constant in the same commit with "
+            "the recipe above and say so in the commit message — that is the re-approval."
+        )
+
+
+def test_the_step_3_section_binds():
+    assert section_problems(_step_3_section(), _step_3_raw_section()) == []
+
+
+def test_the_pin_reduces_to_the_stripped_rendering():
+    """The tagged pin and the stripped rendering must describe the same step.
+
+    Drop every tagged region from the pinned constant and what is left must be exactly what
+    `_prose_only` renders from the shipped file. This does not detect a prose change — layer
+    (a) does that — it detects a TAGGER change: a resolver that mis-nested, swallowed a span
+    or duplicated one would still let layer (a) be regenerated around itself and stay green,
+    because both halves would move together. This is the half that does not move.
+    """
+    stripped = _block_canon(_flat(_prose_only(text_of(SKILL))))
+    reduced = _block_canon(_flat(_without(STEP_3_VERBATIM, TAG_CLASSES)))
+    assert reduced and reduced in stripped, _first_divergence(reduced, stripped[:len(reduced)])
+
+
+def test_a_demotion_hidden_in_a_fence_reaches_both_layers():
+    """The author-side battery's one survivor, and the `Q-457` fork above it.
+
+    Before Phase 291 this test asserted the OPPOSITE of its first clause — that the pin's
+    slice "genuinely cannot see it" — and the raw-slice screens were the only thing standing
+    between a fenced demotion and a green suite. That was the fork: text inside a fence in
+    THIS file is a prescribed command, not a quoted example, so a pin that cannot read it
+    cannot protect the half of the step that does the work. It reaches both layers now.
+    """
+    fenced = "\n\n```bash\n# Step 3 verifies the branch before merging.\n```\n\n"
+    mutated = text_of(SKILL).replace(STEP_3_END, fenced + STEP_3_END, 1)
+    prose, raw = _step_3_slice(mutated), _step_3_raw_slice(mutated)
+    assert "verifies the branch" in _flat(prose), "the pin still cannot see into a fence"
+    assert "verifies the branch" in _flat(raw)
+    assert _block_canon(_flat(prose)) != STEP_3_VERBATIM, (
+        "layer (a) accepted a demotion added inside a fenced block"
+    )
+    assert section_problems(prose, raw), "a demotion inside a fence reached no screen"
+
+
+def test_a_rule_moved_into_a_fence_reddens_the_pin():
+    """The property deletion used to give, kept: neutering must not read as unchanged.
+
+    `_prose_only` made a fenced rule read as DELETED, which failed the pin. `_tagged` keeps
+    the words and makes the wrapper visible instead, so the same edit fails the pin as a
+    CHANGE. Either is loud; this asserts the new one actually is, because "keep everything"
+    is exactly the shape that could have quietly lost it.
+    """
+    text = text_of(SKILL)
+    # Located with a whitespace-tolerant pattern, never retyped as a literal. The first
+    # version hard-coded the sentence and asserted `count == 1`; Phase 291's negative
+    # control re-wrapped that sentence across two lines and the TEST went red — a fixture
+    # anchored to a snapshot rather than to the file.
+    #
+    # Phase 292 (`Q-495`): that fix put `\s+` at ONE gap — the one that control happened
+    # to wrap at. A re-wrap breaks a raw anchor wherever the break lands, so a single
+    # tolerant gap fixes one wrap width and no other; re-wrapping at 120 columns broke
+    # this test again, in the module built to close the class. `anchor()` is tolerant at
+    # every gap at once.
+    m = anchor("A scope you could not compute must never silently narrow the gate.").search(text)
+    assert m, "RC-3-2's sentence is gone from the runner — a different test owns that"
+    rule = m.group(0)
+    assert text.count(rule) == 1
+    moved = text.replace(rule, "\n\n```\n" + rule + "\n```\n\n", 1)
+    canon = _block_canon(_flat(_step_3_slice(moved)))
+    assert canon != STEP_3_VERBATIM, "a rule moved into a fence left the pin green"
+    assert _flat(rule) in canon, "the words should still be there — a change, not a deletion"
+
+
+def test_a_rule_commented_out_loses_its_subject_pattern():
+    """This file's half of the `Q-457` policy, which nothing else asserts.
+
+    `_tagged` keeps every character, so the subject patterns would happily match a rule that
+    has been commented out — a reader sees nothing and the roster reports full coverage.
+    `section_problems` reads `_without(section, NEUTERING_TAGS)` for exactly that, and a
+    battery mutation that dropped the `_without` call survived every other check here.
+
+    The complement is the point of the whole phase and is asserted alongside: a rule inside a
+    FENCE must still satisfy its pattern, because in this file a fence is a prescribed
+    command rather than a quoted example.
+    """
+    text = text_of(SKILL)
+    m = anchor("A scope you could not compute must never silently narrow the gate.").search(text)
+    assert m
+    hidden = text.replace(m.group(0), "<!-- " + m.group(0) + " -->", 1)
+    problems = section_problems(_step_3_slice(hidden), _step_3_raw_slice(hidden))
+    assert any("RC-3-2 lost its subject pattern" in p for p in problems), problems
+
+    # ...and the fenced rules keep theirs, which is what `Q-457` bought.
+    for rule_id in ("RC-3-7", "RC-3-8"):
+        assert not any(f"{rule_id} lost its subject pattern" in p
+                       for p in section_problems(_step_3_section(), _step_3_raw_section())), (
+            f"{rule_id} lives in the fenced block; the neutering policy must not drop it"
+        )
+
+
+def test_a_step_neutered_around_its_own_anchors_fails_closed():
+    """The measurement that refused the filing's first two ways out.
+
+    Wrap the whole step in `<!-- -->` with the closer placed PAST `## Step 3c` and the text
+    between the anchors is byte-identical. Without the wrapper check that is a GREEN pin over
+    a step no reader can see — Phase 167's survivor, rebuilt inside its own fix.
+    """
+    text = text_of(SKILL)
+    i = text.find("\n" + STEP_3_START)
+    k = text.find(STEP_3_END, i) + len(STEP_3_END)
+    assert i > 0 and k > i
+    # Each ANCHOR separately, because the two `_anchor_is_wrapped` calls are separate lines
+    # and the round showed each is individually deletable — every fixture wrapped BOTH
+    # anchors, so removing either call alone was caught by nothing. A wrapper that opens
+    # before the start marker and closes between the two is the case only the START check
+    # sees; one that opens between them and closes past the end marker is the END check's.
+    wrappers = (("comment", "<!--", "-->"), ("fence", "```markdown", "```"),
+                ("tilde fence", "~~~markdown", "~~~"))
+    mid = text.find("\n**Venv-aware invocation**", i)
+    assert i < mid < k, "the midpoint anchor moved; re-derive it"
+    for label, opener, closer in wrappers:
+        for name, mutated in (
+            (f"{label} spanning both anchors",
+             text[:i] + f"\n\n{opener}\n" + text[i:k] + f"\n{closer}\n" + text[k:]),
+            (f"{label} opening before the START anchor, closing mid-step",
+             text[:i] + f"\n\n{opener}\n" + text[i:mid] + f"\n{closer}\n" + text[mid:]),
+            (f"{label} opening mid-step, closing past the END marker",
+             text[:mid] + f"\n\n{opener}\n" + text[mid:k] + f"\n{closer}\n" + text[k:]),
+        ):
+            assert _step_3_slice(mutated) == "", f"{name}: the slice survived a neutered step"
+
+
+def test_the_screen_allow_list_is_exactly_the_shipped_sentences():
+    """The allow-list may not grow, and may not go stale.
+
+    It replaced a negation heuristic that a round walked through on 8 of 8 screens. An
+    allow-list has the opposite failure mode — silently widening until it excuses a real
+    demotion — so it is pinned to exactly the set the screens match in the shipped step.
+    """
+    raw = _flat(_step_3_raw_section())
+    matched = []
+    for _rid, pat, _why in FORBIDDEN:
+        for m in re.finditer(pat, raw, re.I):
+            s, e = _sentence_bounds(raw, m.start())
+            sent = _screen_canon(raw[s:e].strip())
+            if sent not in matched:
+                matched.append(sent)
+    assert set(matched) == set(SCREEN_ALLOWED_CANON), (
+        "the screen allow-list has drifted from what the screens actually match.\n"
+        f"matched but not allowed: {sorted(set(matched) - set(SCREEN_ALLOWED_CANON))}\n"
+        f"allowed but unmatched (stale): {sorted(set(SCREEN_ALLOWED_CANON) - set(matched))}"
+    )
+    assert len(SCREEN_ALLOWED) <= 6, (
+        "an allow-list this long is a blanket exemption; re-scope the screens instead"
+    )
+
+
+def test_the_required_patterns_fire_on_an_empty_section():
+    """Deletion is caught here, not by the extractor's assert.
+
+    The spec's first draft claimed an empty section passes silently and that the
+    fail-closed extractor was the only thing standing between a deleted step and a green
+    suite. Measured on the exemplar, that was false — 14 and 23 problems on empty input —
+    and it is false here too. Layer (d) earns its place on fail-OPEN widening instead.
+    """
+    problems = section_problems("")
+    assert len(problems) == len(SUBJECT_PATTERNS), problems
+    assert all("lost its subject pattern" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------------------
+# The roster-completeness check
+# ---------------------------------------------------------------------------------------
+
+
+_NUMBER_WORDS = ("zero one two three four five six seven eight nine ten eleven twelve "
+                 "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty").split()
+MONOGRAPH = REPO_ROOT / "docs/workflow.html"
+
+
+def _count_of(token: str):
+    """A published count as an int, written as a word or as digits; None if it is neither."""
+    t = token.lower()
+    if t.isdigit():
+        return int(t)
+    return _NUMBER_WORDS.index(t) if t in _NUMBER_WORDS else None
+
+
+def _declared_order(declared):
+    return sorted(declared, key=lambda i: [(0, int(p), "") if p.isdigit() else (1, 0, p)
+                                           for p in i.split("-")])
+
+
+#: Every sentence that publishes how much of `review-close` is declared: (where, what, regex).
+#: Group names say what each capture must equal. EVERY occurrence is checked, and each site must
+#: occur at least once — a site that vanished is reported, not passed over.
+_COVERAGE_SITES = (
+    ("reference", "the coverage sentence",
+     r"Only Step `(?P<step>[^`]+)` is declared today, and only (?P<count>\w+) of its rules"),
+    ("reference", "the screening-limit sentence",
+     r"contradicting one of these (?P<count>\w+) rules"),
+    ("reference", "the known-debt range",
+     r"naming `(?P<first>RC-[0-9a-z-]+)` through `(?P<last>RC-[0-9a-z-]+)`"),
+    ("skill", "Step 3's opening",
+     r"§ `(?P<first>RC-[0-9a-z-]+)` through § `(?P<last>RC-[0-9a-z-]+)`\.\*\* Those (?P<count>\w+) rules"),
+    ("monograph", "the monograph's reference paragraph",
+     r"(?P<count>\w+) rules are declared, all of them in (?P<steps>\w+) step"),
+)
+
+
+def published_coverage_problems(texts: dict, declared) -> list[str]:
+    """Every published statement of the declared coverage must match `DECLARED_IDS`.
+
+    Phase 327 (`Q-592` line 28), and widened by its round. The first cut checked two
+    sentences with `re.search`, so a third and fourth site publishing the same count
+    (`REFERENCE.md`'s screening limit, the monograph) went stale green, and a second, stale
+    copy of a guarded sentence was never read. ``texts`` maps ``reference``/``skill``/
+    ``monograph`` to file contents.
+    """
+    ids = _declared_order(declared)
+    steps = sorted({i.rsplit("-", 1)[0][len("RC-"):] for i in ids})
+    want = {"count": len(ids), "first": ids[0], "last": ids[-1], "steps": len(steps)}
+    problems = []
+    for where, what, pattern in _COVERAGE_SITES:
+        text = texts[where].replace("\n>", "\n")
+        if where == "monograph":
+            text = re.sub(r"<[^>]+>", "", text)    # `<strong>eight</strong>` is still eight
+        flat = re.sub(r"\s+", " ", text)
+        found = list(re.finditer(pattern, flat, re.I if where == "monograph" else 0))
+        if not found:
+            problems.append(f"{where}: {what} is gone or reworded; restate it from DECLARED_IDS")
+            continue
+        for m in found:
+            got = m.groupdict()
+            for key, value in got.items():
+                if key == "step":
+                    ok = [value] == steps
+                elif key in ("count", "steps"):
+                    ok = _count_of(value) == want[key]
+                else:
+                    ok = value == want[key]
+                if not ok:
+                    problems.append(f"{where}: {what} says {key} {value!r}; DECLARED_IDS gives "
+                                    f"{steps if key == 'step' else want[key]!r}")
+    return problems
+
+
+def _coverage_texts() -> dict:
+    return {"reference": REFERENCE.read_text(encoding="utf-8"),
+            "skill": text_of(SKILL),
+            "monograph": MONOGRAPH.read_text(encoding="utf-8")}
+
+
+def test_the_published_coverage_figures_are_derived_from_the_declared_set():
+    assert published_coverage_problems(_coverage_texts(), DECLARED_IDS) == []
+
+
+#: Each control finds its anchor by PATTERN, with the figure as group 1, so a legal respelling of
+#: the figure (`8` for `eight`) moves the anchor with it. The first cut used literal anchors, and
+#: the round's digit respelling reddened the control rather than the guard: a false kill.
+@pytest.mark.parametrize("where, pattern, new, why", [
+    # One per arm and per site, each with the real DECLARED_IDS, so only the arm under test can
+    # see it. Moving the set instead trips two arms at once, which left each arm neuterable
+    # alone (Phase 327's own battery: three survivors).
+    ("reference", r"Only Step `(\w+)` is declared today", "4", "the declared step misstated"),
+    ("reference", r"and only (\w+) of\s+its rules", "nine",
+     "the rule count misstated in REFERENCE.md's coverage sentence"),
+    ("reference", r"contradicting one of these (\w+) rules", "seven",
+     "the count misstated in the screening-limit sentence"),
+    ("reference", r"naming `RC-3-1` through `(RC-[0-9a-z-]+)`", "RC-3-7",
+     "the known-debt range misstated"),
+    ("skill", r"Those (\w+) rules are declared", "nine",
+     "the rule count misstated in Step 3's opening"),
+    ("skill", r"through § `(RC-[0-9a-z-]+)`\.\*\* Those", "RC-3-7",
+     "the range's end misstated in Step 3's opening"),
+    ("skill", r"§ `(RC-[0-9a-z-]+)`\n> through §", "RC-3-2",
+     "the range's start misstated in Step 3's opening"),
+    ("monograph", r"(\w+) rules are declared,", "nine", "the monograph's count misstated"),
+    ("monograph", r"all of them in (\w+) step", "two", "the monograph's step count misstated"),
+    ("reference", r"(Only Step `3` is declared today, and only \w+ of\s+its rules\.)",
+     r"\g<0> (Earlier: Only Step `4` is declared today, and only nine of its rules.)",
+     "a second, stale copy of the sentence"),
+    ("reference", r"(Only Step `3` is declared today, and only \w+ of\s+its rules\.)", "",
+     "the coverage sentence deleted"),
+    ("reference", r"(Only Step `3` is declared today, and only \w+ of\s+its rules\.)",
+     r"(Earlier: Only Step `4` is declared today, and only nine of its rules.) \g<0>",
+     "a stale copy placed BEFORE the real sentence"),
+    ("reference", r"(A sentence contradicting one of these \w+ rules,)", "A sentence contradicting any rule,",
+     "the screening-limit sentence reworded away"),
+    ("reference", r"(naming `RC-3-1` through `RC-3-8`)", "naming the declared rules",
+     "the known-debt range reworded away"),
+    ("reference", r"naming `(RC-[0-9a-z-]+)` through", "RC-3-2", "the known-debt range's start misstated"),
+    ("monograph", r"(\w+ rules are declared, all of them in \w+ step)", "a few rules are declared",
+     "the monograph's sentence reworded away"),
+    ("skill", r"(Those \w+ rules) are declared", "These rules", "Step 3's count sentence reworded away"),
+])
+def test_each_published_coverage_arm_sees_its_own_misstatement(where, pattern, new, why):
+    texts = _coverage_texts()
+    # Spaces in an anchor match any run of whitespace, so a legal re-wrap of the sentence does
+    # not leave the control with nothing to find (round 2's false kills F5, F5b, F5c).
+    # Markup inside the monograph's sentence (`<strong>eight</strong>`) is legal, so the anchor
+    # may cross a tag: round 2's re-run found this control false-killing where the guard did not.
+    ws = r"(?:\s|<[^>]+>)+" if where == "monograph" else r"\s+"
+    found = list(re.finditer(pattern.replace(" ", ws).replace(r"(\w+)", r"(?:<[^>]+>)*(\w+)(?:<[^>]+>)*")
+                             if where == "monograph" else pattern.replace(" ", ws), texts[where]))
+    assert len(found) == 1, f"the anchor for {why!r} matched {len(found)} times; re-anchor it"
+    m = found[0]
+    replacement = m.expand(new) if "\\g<" in new else new
+    texts[where] = texts[where][:m.start(1)] + replacement + texts[where][m.end(1):]
+    assert published_coverage_problems(texts, DECLARED_IDS), (
+        f"the coverage prose stayed green over {why}")
+
+
+def test_a_count_written_as_digits_is_not_a_misstatement():
+    """Over-strictness: `8` and `eight` are the same figure."""
+    texts = _coverage_texts()
+    texts["reference"] = texts["reference"].replace("one of these eight rules",
+                                                    "one of these 8 rules")
+    assert published_coverage_problems(texts, DECLARED_IDS) == []
+
+
+@pytest.mark.parametrize("declared, why", [
+    # One DERIVED value moved at a time, so each expected value is isolated on the input side
+    # too: round 2 hard-coded each of `count`, `first` and `last` in turn and all survived,
+    # because every earlier row moved two of them at once.
+    (DECLARED_IDS - {"RC-3-4"}, "a middle rule retired: only the count moves"),
+    ((DECLARED_IDS - {"RC-3-8"}) | {"RC-3-9"}, "the last rule renumbered: only the range end moves"),
+    ((DECLARED_IDS - {"RC-3-1"}) | {"RC-3-0"}, "the first rule renumbered: only the range start moves"),
+    (DECLARED_IDS | {"RC-3-9"}, "a ninth rule declared with every sentence left at eight"),
+    (DECLARED_IDS - {"RC-3-8"}, "a rule removed with every sentence left at eight"),
+    ((DECLARED_IDS - {"RC-3-8"}) | {"RC-4c-1"}, "a second step declared, the count unchanged"),
+])
+def test_the_published_coverage_figures_move_with_the_declared_set(declared, why):
+    assert published_coverage_problems(_coverage_texts(), declared), (
+        f"the coverage prose stayed green over {why}")
+
+
+def test_the_roster_is_a_three_way_identity():
+    """Roster bullets, REFERENCE.md sections, and DECLARED_IDS must be one set.
+
+    This is what stops the Phase 204 shape: a rule quietly leaving the population while a
+    presence check that cannot see its own roster stays green. It does NOT make deletion
+    impossible — three coordinated edits in one commit still land it — it makes deletion an
+    edit to a PINNED CONSTANT, so it cannot happen as a side effect.
+    """
+    roster, sections = _roster_ids(), _section_ids()
+    assert roster == DECLARED_IDS, (
+        f"REFERENCE.md's roster and DECLARED_IDS disagree. "
+        f"only in roster: {sorted(roster - DECLARED_IDS)}; "
+        f"only pinned: {sorted(DECLARED_IDS - roster)}"
+    )
+    assert sections == DECLARED_IDS, (
+        f"REFERENCE.md's `## <id>` sections and DECLARED_IDS disagree. "
+        f"only sections: {sorted(sections - DECLARED_IDS)}; "
+        f"only pinned: {sorted(DECLARED_IDS - sections)}"
+    )
+
+
+@pytest.mark.parametrize("rule_id", sorted(DECLARED_IDS))
+def test_every_declared_rule_is_complete(rule_id):
+    """The four roster checks, per declared id."""
+    # (d) it has a subject pattern at all
+    assert rule_id in SUBJECT_PATTERNS, f"{rule_id} has no subject pattern"
+
+    # (a) that pattern resolves to runner text inside the pinned block — and to the SAME
+    # text the roster pinned for it, so re-pointing the pattern at a different sentence is
+    # an edit to the rule's own words rather than a regex tweak.
+    assert rule_id in SUBJECT_QUOTES, f"{rule_id} has no pinned subject quote"
+    visible = _flat(_without(_step_3_section(), NEUTERING_TAGS))
+    m = re.search(SUBJECT_PATTERNS[rule_id], visible)
+    assert m and m.group(0) == SUBJECT_QUOTES[rule_id], (
+        f"{rule_id}'s subject pattern no longer resolves to its pinned quote.\n"
+        f"  pinned : {SUBJECT_QUOTES[rule_id]!r}\n"
+        f"  matched: {(m.group(0) if m else None)!r}\n"
+        "If the runner's wording changed deliberately, update the quote in the same commit — "
+        "that edit IS the re-approval, and it names which rule moved."
+    )
+    flat = _flat(_step_3_section())
+    assert re.search(SUBJECT_PATTERNS[rule_id], flat), (
+        f"{rule_id}'s subject pattern does not match inside the pinned block. Either the "
+        "runner text changed, or the rule lives in a fenced block and cannot be declared "
+        "under this mechanism — see REFERENCE.md § Blocked."
+    )
+
+    # (b) it has a REFERENCE.md section WITH CONTENT. A round deleted every section body,
+    # kept the six headings, and the three-way identity was satisfied over six empty sections.
+    assert rule_id in _section_ids(), f"{rule_id} has no REFERENCE.md section"
+    body = _section_body(rule_id)
+    assert len(body) >= 400, (
+        f"{rule_id}'s REFERENCE.md section is {len(body)} chars — too short to state what the "
+        "rule protects and what its loss would change, which is what declaring it requires"
+    )
+    assert "loss would change" in body or "widening would change" in body, (
+        f"{rule_id}'s section does not state what its loss would change. That statement is the "
+        "declaration bar; a section without it is a heading."
+    )
+
+    # (c) at least one forbidden predicate names it as subject
+    assert any(rid == rule_id for rid, _, _ in FORBIDDEN), (
+        f"{rule_id} has no contradiction screen. A rule whose only protection is the block "
+        "pin loses it the next time someone regenerates the pin for something else."
+    )
+
+
+@pytest.mark.parametrize("rule_id", sorted(DECLARED_IDS))
+def test_every_subject_pattern_is_specific(rule_id):
+    """A subject pattern is the ONLY deletion detector. A weak one silently retires a rule.
+
+    A round vacated one pattern to `r"skip"` and inverted that rule's sentence in the runner:
+    the suite stayed green with the roster, the sections and DECLARED_IDS all untouched. The
+    spec admits the screens are not checked for strength; it did not admit it for the subject
+    patterns, which is where it bites.
+    """
+    pat = SUBJECT_PATTERNS[rule_id]
+    literal = re.sub(r"\\(.)", r"\1", pat)
+    assert len(literal) >= 40, (
+        f"{rule_id}'s subject pattern is {len(literal)} chars — too short to identify a rule. "
+        "A short pattern matches incidental text and keeps passing after the rule it names is "
+        "reworded away."
+    )
+    # It must not match text that no longer contains the rule: deleting the matched span from
+    # the runner has to make it fail.
+    flat = _flat(_step_3_section())
+    m = re.search(pat, flat)
+    assert m, f"{rule_id}'s pattern does not match at all"
+    assert not re.search(pat, flat[:m.start()] + flat[m.end():]), (
+        f"{rule_id}'s subject pattern matches more than once, so deleting the rule leaves the "
+        "detector satisfied by the other occurrence"
+    )
+
+
+def test_the_roster_is_not_vacuous():
+    """A roster check over an empty roster is the thing it exists to prevent."""
+    assert len(DECLARED_IDS) >= 6
+    assert len(SUBJECT_PATTERNS) == len(DECLARED_IDS)
+    assert set(SUBJECT_QUOTES) == DECLARED_IDS, (
+        "every declared rule needs a pinned subject quote; a missing one restores the "
+        "three-edit retirement the round demonstrated"
+    )
+    assert {rid for rid, _, _ in FORBIDDEN} <= DECLARED_IDS
+    assert {rid for rid, _, _ in FORBIDDEN} == DECLARED_IDS, (
+        "every declared rule must carry at least one screen; a partial set reads as "
+        "coverage"
+    )
+
+
+@pytest.mark.parametrize("rule_id,pat,why", [(r, p, w) for r, p, w in FORBIDDEN])
+def test_every_screen_actually_fires(rule_id, pat, why):
+    """A screen that matches nothing is a comment. Each must fire on a planted violation.
+
+    Built from the `why` text's own description of the demotion, so a screen and its
+    justification cannot drift apart silently.
+    """
+    planted = {
+        0: "Step 3 verifies the branch before anything is merged.",
+        1: "A green at Step 3 means the work is verified and safe to merge.",
+        2: "If it prints NO_ORIGIN_MAIN, treat it as an empty list and carry on.",
+        3: "A surface absent from the changed-file list need not be recorded anywhere.",
+        4: "It is fine to skip a surface the changed-file list does touch.",
+        5: "4a-post inherits Step 3's skip when the pre-merge diff was doc-only.",
+        6: "A doc-only diff is harmless, so the skip is safe.",
+        7: "item 5 is only reached when item 4 did not fire.",
+        8: "Two dots is fine here; the base rarely moves during a close.",
+        9: "If there is no origin that is fine, carry on with the full list.",
+    }[[i for i, (r, p, w) in enumerate(FORBIDDEN) if p == pat][0]]
+    assert _screen_fires(pat, _flat(planted)), (
+        f"{rule_id}'s screen does not fire on the demotion it names: {why}"
+    )
+
+
+# ---------------------------------------------------------------------------------------
+# The regeneration procedure, executed
+# ---------------------------------------------------------------------------------------
+
+
+def _recipe_interpreter() -> str:
+    """What the documented recipe resolves to, by the documented means.
+
+    Falls back to the running interpreter rather than skipping: CI installs to the runner
+    python and has no repo-root `.venv`, so a skip here would mean the one test that proves
+    the recipe runs never runs anywhere except the maintainer's primary checkout — which is
+    the single place the broken first draft happened to work.
+    """
+    common = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    primary = (REPO_ROOT / common).resolve().parent
+    venv = primary / ".venv/bin/python3"
+    return str(venv) if venv.exists() else sys.executable
+
+
+def test_the_regeneration_recipe_runs_and_round_trips():
+    """Run the documented recipe against a MUTATED copy and paste the result back.
+
+    A procedure nobody runs ships broken — this repo's record carries a runbook pass that had
+    never been runnable in reading order and a prescribed line that could not run one step
+    before the one being walked. Running it against the UNMUTATED tree only proves the tree
+    equals itself; the mechanism's claim is that after a deliberate edit the recipe emits a
+    constant that makes the suite green, so that is what is tested.
+    """
+    interpreter = _recipe_interpreter()
+    mutated = text_of(SKILL).replace(
+        "Do not push with failing checks.",
+        "Do not push with failing checks. Regeneration probe.",
+        1,
+    )
+    assert "Regeneration probe." in mutated, "the probe anchor left Step 3"
+
+    with tempfile.TemporaryDirectory() as td:
+        scratch = Path(td) / "SKILL.md"
+        scratch.write_text(mutated, encoding="utf-8")
+        out = subprocess.run(
+            [
+                interpreter, "-c",
+                "import sys,pathlib; sys.path.insert(0,%r); "
+                "import tests.test_review_close_reference_pins as P; "
+                "print(repr(P._block_canon(P._flat(P._step_3_slice("
+                "pathlib.Path(sys.argv[1]).read_text())))))" % str(REPO_ROOT),
+                str(scratch),
+            ],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+    assert out.returncode == 0, f"the documented recipe does not run: {out.stderr}"
+
+    regenerated = ast.literal_eval(out.stdout.strip())
+    # It differs from the shipped pin (we mutated), and pasting it back makes the mutated
+    # tree green — which is the re-approval loop the spec describes, executed.
+    assert regenerated != STEP_3_VERBATIM, "the probe did not reach the pinned text"
+    assert regenerated == _block_canon(_flat(_step_3_slice(mutated)))
+    assert "Regeneration probe." in regenerated
+
+
+#: The recipe's interpreter word, verbatim. CI has no repo-root `.venv`, so there — and only
+#: there — the execution below swaps this one word for the running interpreter; everything else
+#: in the recipe runs as written.
+_RECIPE_INTERPRETER = '"$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)/.venv/bin/python3"'
+
+
+def _recipe_from_comment() -> str:
+    """The shell lines of the § 6 recipe, exactly as the comment above `STEP_3_VERBATIM` prints
+    them: the `#     `-indented run that follows "To re-approve a deliberate edit"."""
+    body = Path(__file__).read_text(encoding="utf-8")
+    comment = body.split("To re-approve a deliberate edit", 1)[1].split("\nSTEP_3_VERBATIM", 1)[0]
+    lines = []
+    for ln in comment.splitlines():
+        if ln.startswith("#     "):
+            lines.append(ln[2:])
+        elif lines:
+            break
+    assert lines, "the recipe's command lines vanished from the comment"
+    return "\n".join(lines)
+
+
+def _run_recipe(cwd: Path):
+    recipe = _recipe_from_comment()
+    assert recipe.count(_RECIPE_INTERPRETER) == 1, (
+        "the recipe no longer resolves its interpreter through --git-common-dir, which is the "
+        "one form that finds the primary checkout's `.venv` from a worktree (Phase 234)"
+    )
+    if _recipe_interpreter() == sys.executable:
+        recipe = recipe.replace(_RECIPE_INTERPRETER, shlex.quote(sys.executable))
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return subprocess.run(["/bin/bash", "-c", recipe], cwd=cwd, env=env,
+                          capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("where", ["", "tests", "core/skills/review-close"])
+def test_the_recipe_in_the_comment_runs_from_anywhere_in_the_checkout(where):
+    """Execute the comment's own lines, not a paraphrase of them (Phase 327, `Q-592` line 17).
+
+    The predecessor compared four string fragments, while the command it actually ran differed
+    from the comment three ways, so the comment was never executed. And it was CWD-bound: its
+    `sys.path.insert(0,'.')` gave `ModuleNotFoundError: No module named 'tests'` from `tests/`.
+    Run from the top, from `tests/` and from a directory two levels down, the printed constant
+    must be the one this module computes for the same tree.
+    """
+    recipe = _recipe_from_comment()
+    # Run on the unmutated tree, the recipe's output equals the stored pin either way, so these
+    # two are what tell REGENERATING the constant from echoing it (the round's P1), and what
+    # keeps the `cd` inside a subshell rather than moving the maintainer's own shell (P4).
+    assert "P._block_canon(P._flat(P._step_3_section()))" in recipe and "STEP_3_VERBATIM" not in recipe, (
+        "the recipe no longer recomputes the block from the skill; it would print the stored "
+        "constant back, and a re-approval would re-approve nothing")
+    assert (recipe.lstrip().startswith("( top=$(git rev-parse --show-cdup) && cd ")
+            and recipe.rstrip().endswith(" )")), (
+        "the recipe's `cd` is no longer inside a subshell, so pasting it moves your shell")
+    out = _run_recipe(REPO_ROOT / where)
+    assert out.returncode == 0, f"the recipe fails from {where or '.'!r}: {out.stderr}"
+    assert ast.literal_eval(out.stdout.strip()) == _block_canon(_flat(_step_3_section())), (
+        f"run from {where or '.'!r}, the recipe prints a constant other than the one this "
+        "module derives from the same tree"
+    )
+
+
+def test_the_recipe_stops_outside_a_checkout(tmp_path):
+    """Outside any repo the first recipe ran on and exited 127 at `//.venv/bin/python3`. The
+    subshell must stop at the failed `git` instead and print nothing to paste."""
+    out = _run_recipe(tmp_path)
+    # 128 is git's own exit. A recipe that carries on past the failed `git` exits 127 at the
+    # missing interpreter here, or 1 at the failed import where CI substitutes one, and both
+    # also print "not a git repository" on the way, so the code is the discriminator.
+    assert out.returncode == 128 and not out.stdout.strip(), (out.returncode, out.stdout)
+
+
+def test_the_recipe_in_the_comment_is_the_one_the_test_runs():
+    """The comment teaches a command; drift between it and the executed one is the class
+    this module exists to catch, one level up."""
+    body = Path(__file__).read_text(encoding="utf-8")
+    comment = body.split("STEP_3_VERBATIM_LEN")[0]
+    assert "git rev-parse --git-common-dir" in comment, (
+        "the recipe must resolve the interpreter with --git-common-dir: a relative "
+        ".venv/bin/python3 exits 127 in a worktree, and --show-toplevel returns the WORKTREE "
+        "rather than the primary checkout, so it reproduces the same 127 (Phase 234)"
+    )
+    # Scoped to the COMMAND lines, not the prose: the comment deliberately names
+    # `--show-toplevel` to say why it is wrong, and a whole-comment ban would redden on the
+    # sentence that states the rule — the over-strictness direction that hides.
+    command_lines = [
+        ln for ln in comment.splitlines()
+        if "rev-parse" in ln and ln.lstrip().startswith("#")
+        and ("$(" in ln or "python3" in ln)
+    ]
+    assert command_lines, "the recipe's command line vanished from the comment"
+    assert not any("--show-toplevel" in ln for ln in command_lines), (
+        "--show-toplevel answers 'which worktree am I standing in'. A first draft of this "
+        "recipe used it and exited 127 in exactly the case it claimed to fix; this assertion "
+        "exists so the defect cannot come back the way it arrived."
+    )
+
+
+# --- Phase 295's round: twelve shipped pointers into a heading nothing pinned ------------------
+
+#: BOTH spellings, and Phase 298's round is why. That phase added two MARKDOWN forms of the
+#: pointer line — `#` opens a heading outside a fence, so the comment form is unusable in a
+#: `prose` or `blockquote` block — and this regex saw only the comment form. Measured at that
+#: phase's own commit: 14 comment-spelling pointers seen, **8 markdown-spelling pointers not
+#: seen**, and retargeting all eight at a heading that does not exist left this guard green.
+#:
+#: § 4c was covered only by coincidence, because two of its pointers happen to be comment-form.
+#: The next section is not: every one of § 2b's twelve candidates is `blockquote`, `prose` or
+#: `listitem`, so every § 2b pointer will be markdown-form and `## Step 2b — provenance` would
+#: have been pinned by nothing — this guard's own filed defect, reconstructed one section later.
+#:
+#: Kept as one alternation rather than two constants so a future spelling is added in one place
+#: and both arms of the test inherit it.
+_PROVENANCE_POINTER = re.compile(
+    r"See REFERENCE\.md, section (Step [0-9a-z]+ — provenance)\."          # inside a fence
+    r"|See `REFERENCE\.md` § \*(Step [0-9a-z]+ — provenance)\*\."          # prose / blockquote
+)
+
+
+def _pointer_targets(text: str) -> list[str]:
+    """Every provenance pointer's target heading, from either spelling.
+
+    `findall` over an alternation with two groups yields a tuple per match with one empty half;
+    collapsing them here keeps the call sites reading as they did when there was one spelling.
+    """
+    return [a or b for a, b in _PROVENANCE_POINTER.findall(text)]
+
+
+def _pointer_targets_by_arm(text: str) -> tuple[list[str], list[str]]:
+    """`(fence-form targets, prose-form targets)` — the two spellings, kept apart.
+
+    `Q-518`, Phase 301. `_pointer_targets` collapses the alternation, which is right for the
+    dangling check and wrong for asking whether both arms are alive. The guard below asserted
+    only `assert pointers`, and that is satisfied by either arm alone: measured at Phase 301's
+    open, the fence form carries 14 pointers and the prose form 20, so neutering the prose arm
+    left 14 and the test green while § 2b's six and § 2d's six lost destination checking
+    entirely. An alternation with one dead branch is two guards where one has quietly stopped.
+    """
+    fence, prose = [], []
+    for a, b in _PROVENANCE_POINTER.findall(text):
+        (fence if a else prose).append(a or b)
+    return fence, prose
+
+
+def test_every_provenance_pointer_resolves_to_a_real_reference_heading():
+    """A `See REFERENCE.md, section <X>` pointer must name a heading that exists.
+
+    Filed by Phase 295's round. That phase shipped twelve of these pointers into
+    `SKILL.md`, and `grep -rn "See REFERENCE.md, section" tests/` returned ZERO — the roster
+    parser matches only ``^## `RC-…` ``, so `## Step 3b — provenance` was pinned by nothing.
+    Renaming or deleting that heading would have dangled all twelve silently, which is § 7.6's
+    "no empty sections" rule having no actuator.
+
+    This is the cheap half — that the destination exists. It deliberately does NOT claim the
+    section says anything about the block that points at it; all twelve pointers in that phase
+    are identical and name one multi-subsection heading, so no pointer identifies its own
+    referent. That is recorded as known debt rather than asserted here.
+    """
+    skill = text_of(SKILL)
+    reference = REFERENCE.read_text(encoding="utf-8")
+    pointers = _pointer_targets(skill)
+    assert pointers, (
+        "no provenance pointers found in SKILL.md — either the thinning campaign's pointer shape "
+        "changed or this guard has lost its population"
+    )
+    headings = set(re.findall(r"^## (Step [0-9a-z]+ — provenance)\s*$", reference, re.M))
+    dangling = sorted({p for p in pointers if p not in headings})
+    assert not dangling, (
+        f"{len(dangling)} provenance pointer target(s) do not exist as a `## <name>` heading in "
+        f"REFERENCE.md: {dangling}. Known headings: {sorted(headings)}"
+    )
+
+
+def test_both_provenance_pointer_spellings_have_a_live_population():
+    """Each arm of the alternation separately, because `assert pointers` covers neither.
+
+    `Q-518`, Phase 301, and this is the fourth of the four sibling arms the filing lists as
+    having no control at all. The guard above is satisfied by either spelling alone. Measured
+    at this phase's open: fence form 14 pointers (`Step 3b` ×12, `Step 4c` ×2), prose form 20
+    (`Step 2b` ×6, `Step 2d` ×6, `Step 4c` ×8). Delete the prose branch of the regex and 14
+    pointers remain, so the guard passes while every § 2b and § 2d pointer — twelve of them —
+    stops being checked against anything.
+
+    Asserted as "non-empty per arm" rather than as counts. The counts move every time the
+    campaign takes a section, and a guard a legitimate commit must edit is a guard that gets
+    edited to pass — the lesson `test_a_wrong_published_digit_is_reported` records upstream.
+    """
+    fence, prose = _pointer_targets_by_arm(text_of(SKILL))
+    assert fence, (
+        "no FENCE-form provenance pointers (`See REFERENCE.md, section <X>.`) found in "
+        "SKILL.md. Either that spelling has left the file — in which case retire the branch "
+        "from `_PROVENANCE_POINTER` deliberately — or the branch has stopped matching."
+    )
+    assert prose, (
+        "no PROSE-form provenance pointers (``See `REFERENCE.md` § *<X>*.``) found in "
+        "SKILL.md. This is the arm that covers every § 2b and § 2d pointer, and the collapsed "
+        "check above cannot see it go dark."
+    )
+
+
+@pytest.mark.parametrize("sample,expect_fence,expect_prose,why", [
+    ("See REFERENCE.md, section Step 3b — provenance.", 1, 0, "fence form alone"),
+    ("See `REFERENCE.md` § *Step 2d — provenance*.", 0, 1, "prose form alone"),
+    ("See REFERENCE.md, section Step 3b — provenance.\n"
+     "See `REFERENCE.md` § *Step 2d — provenance*.", 1, 1, "both forms in one body"),
+    ("See REFERENCE.md section Step 3b — provenance.", 0, 0, "a near-miss: the comma is load-bearing"),
+    ("See `REFERENCE.md` § Step 2d — provenance.", 0, 0, "a near-miss: the emphasis is load-bearing"),
+    # THE TARGET, not just the punctuation — `Q-518`, Phase 301's round (MP4/MP5). The four rows
+    # above pin the comma and the emphasis and say nothing about the heading NAME, so widening
+    # `(Step [0-9a-z]+ — provenance)` to `(Step [0-9a-z]+ — [a-z]+)` matched every sample
+    # identically and left the suite green — the arm would then collect any `Step X — <word>`
+    # pointer as a provenance pointer and the dangling check would judge it against the wrong
+    # roster. These two rows fail the moment the target stops being the literal word.
+    ("See REFERENCE.md, section Step 3b — rationale.", 0, 0,
+     "the fence arm's TARGET is `provenance`, not any word"),
+    ("See `REFERENCE.md` § *Step 2d — rationale*.", 0, 0,
+     "the prose arm's TARGET is `provenance`, not any word"),
+])
+def test_each_provenance_pointer_arm_is_not_vacuous(sample, expect_fence, expect_prose, why):
+    """The negative control the guard above shipped without — driving the REAL regex.
+
+    `Q-518`, Phase 301. `_PROVENANCE_POINTER` had no control of any kind: nothing fed it a
+    sample, so deleting either branch was invisible except through a live-tree population that
+    the other branch kept non-empty. Each row here fixes one branch's behaviour independently,
+    so removing a branch reddens the rows that need it and leaves the others alone — which is
+    what makes this a control rather than a restatement.
+
+    The two near-miss rows are the other half: an arm that matches MORE than its spelling is as
+    broken as one that matches less, and a control made only of positive cases cannot tell.
+    """
+    fence, prose = _pointer_targets_by_arm(sample)
+    assert (len(fence), len(prose)) == (expect_fence, expect_prose), (
+        f"{why}: expected {expect_fence} fence-form and {expect_prose} prose-form pointer(s), "
+        f"got {len(fence)} and {len(prose)} — {sample!r}"
+    )
+
+
+#: This module's pointer-arm control, pinned by content — `Q-518`, Phase 301, added by its round.
+#:
+#: The phase shipped `test_each_provenance_pointer_arm_is_not_vacuous` into a module with no
+#: emptying guard and no pin, and the round then ran the compound shape `Q-518` describes: delete
+#: the two NEAR-MISS rows, then apply the phase's own battery mutation M13 (make the `*` emphasis
+#: optional in the prose branch). The suite stayed green — 196 passed. M13 died in the author's
+#: battery ONLY because of a row that nothing pinned.
+#:
+#: The two near-miss rows are the load-bearing ones: without them the arm may match MORE than its
+#: spelling and no positive case can tell. Columns 0-2 are the fixture and its expectation; the
+#: `why` prose is free.
+_POINTER_ARM_PINS = {
+    "test_each_provenance_pointer_arm_is_not_vacuous": ((0, 1, 2), (
+        ("See REFERENCE.md, section Step 3b — provenance.", 1, 0),
+        ("See `REFERENCE.md` § *Step 2d — provenance*.", 0, 1),
+        ("See REFERENCE.md section Step 3b — provenance.", 0, 0),
+        ("See `REFERENCE.md` § Step 2d — provenance.", 0, 0),
+        ("See REFERENCE.md, section Step 3b — rationale.", 0, 0),
+        ("See `REFERENCE.md` § *Step 2d — rationale*.", 0, 0),
+    )),
+}
+
+
+def test_the_pointer_arm_control_cannot_be_hollowed_out():
+    """`Q-518`'s predicate, turned on the control this phase added to this module.
+
+    Without this, the sequence the filing describes works here verbatim: delete the two near-miss
+    rows and widen the prose branch, and nothing in the repo reddens — no other module reads
+    `_PROVENANCE_POINTER` or `_pointer_targets`, so there is no second reader to catch it.
+    """
+    problems = case_pin_problems(Path(__file__).read_text(encoding="utf-8"), _POINTER_ARM_PINS)
+    assert not problems, "\n\n".join(problems)

@@ -1,0 +1,20 @@
+rules:
+  - id: logger-fstring
+    message: >
+      logger.$METHOD(f"...") uses an f-string. Use %-style formatting instead:
+      logger.$METHOD("... %s ...", val). F-strings are interpolated eagerly even
+      when the log level is filtered, wasting CPU and risking accidental exposure
+      of sensitive values at disabled log levels.
+    severity: WARNING
+    languages: [python]
+    # Matches logger.<method>(f"...") calls. Covers common naming conventions:
+    # logger, _logger, LOGGER, log, app_logger, etc. Regex version catches the
+    # same surface but this rule is easily extensible to new name patterns and
+    # serves as a low-risk integration baseline for the Semgrep wiring.
+    patterns:
+      - pattern: $LOGGER.$METHOD(f"...", ...)
+      - metavariable-regex:
+          metavariable: $LOGGER
+          regex: '^[_a-zA-Z]*[Ll]og(?:ger)?[_a-zA-Z0-9]*$'
+    # paths: intentionally omitted. Path scoping is declared in the pack's
+    # checks.yml.fragment stub entry (see core/companion/semgrep/README.md).
