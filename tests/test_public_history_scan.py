@@ -941,3 +941,137 @@ def test_a_scanner_that_prints_no_summary_halts_rather_than_reading_zero(tmp_pat
         f"{p.stdout}{p.stderr}"
     )
     assert "no SUMMARY" in (p.stdout + p.stderr), f"{p.stdout}{p.stderr}"
+
+
+# ── Phase 435: the pull-request heads ────────────────────────────────────────
+# GitHub keeps `refs/pull/N/head` for every pull request and an owner cannot
+# delete one; a clone never fetches them. A history reset that leaves `main` at
+# one commit therefore reads `commits:1` here while every merged pull request's
+# head still serves the snapshot it carried. The scan now fetches
+# `+refs/pull/*/head` from `origin` before the walk and names the count on the
+# SUMMARY line.
+
+_GIT_ENV = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1"}
+
+
+def _pull_refs(stdout):
+    m = re.search(r"\bpull-refs:(\S+)", stdout)
+    return m.group(1) if m else None
+
+
+def _clone_with_origin(tmp_path, pull_head_leaks=0):
+    """A bare `origin` (local path, never a URL) with `main` at one clean commit
+    and `pull_head_leaks` commits reachable ONLY from `refs/pull/N/head`, each
+    authored by the private address; then a clone of it, taken the way the
+    runbook takes one -- `git clone`, which fetches no pull head."""
+    src = _repo(tmp_path, [CLEAN])
+    env = {**_GIT_ENV, "HOME": str(tmp_path)}
+
+    def git(where, *a, **kw):
+        return subprocess.run(["git", "-C", str(where), *a],
+                              env={**env, **kw.pop("extra", {})},
+                              check=True, capture_output=True, encoding="utf-8")
+    bare = tmp_path / "origin.git"
+    # `-b main`: a bare repo's HEAD follows init.defaultBranch, which is `master` on CI.
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)],
+                   env=env, check=True, capture_output=True)
+    git(src, "remote", "add", "origin", str(bare))
+    git(src, "push", "-q", "origin", "main")
+    for n in range(1, pull_head_leaks + 1):
+        git(src, "checkout", "-q", "--detach", "main")
+        (src / f"pr{n}.txt").write_text(f"pull head {n}\n", encoding="utf-8")
+        git(src, "add", "-A")
+        git(src, "commit", "-q", "--no-gpg-sign", "-m", f"pull head {n}", extra={
+            "GIT_AUTHOR_NAME": "x", "GIT_AUTHOR_EMAIL": PRIVATE,
+            "GIT_COMMITTER_NAME": "x", "GIT_COMMITTER_EMAIL": PRIVATE})
+        git(src, "push", "-q", "origin", f"HEAD:refs/pull/{n}/head")
+    git(src, "checkout", "-q", "main")
+    clone = tmp_path / "published"
+    subprocess.run(["git", "clone", "-q", str(bare), str(clone)],
+                   env=env, check=True, capture_output=True)
+    return clone
+
+
+def test_a_leak_reachable_only_from_a_pull_request_head_is_scanned(tmp_path):
+    """The Phase 432 blind spot, as a fixture with a known answer."""
+    _scan_available()
+    clone = _clone_with_origin(tmp_path, pull_head_leaks=2)
+    # Precondition: the clone does NOT see the pull heads, or the fetch proves nothing.
+    before = subprocess.run(["git", "-C", str(clone), "rev-list", "--count", "--all", "--tags"],
+                            capture_output=True, encoding="utf-8").stdout.strip()
+    assert before == "1", f"fixture is wrong: a plain clone already walks {before} commits"
+
+    p = _run_accept(clone, "# nothing adjudicated\n", tmp_path)
+
+    assert p.returncode == 1, (
+        f"a private address on a pull-request head passed the gate.\n{p.stdout}{p.stderr}")
+    assert p.stdout.count("** NEW header finding **") == 2, p.stdout
+    assert _pull_refs(p.stdout) == "2", p.stdout
+    assert re.search(r"\bcommits:3\b", p.stdout), p.stdout
+
+
+def test_a_clean_origin_with_no_pull_heads_reads_zero_not_unfetched(tmp_path):
+    _scan_available()
+    p = _run_accept(_clone_with_origin(tmp_path), "# nothing adjudicated\n", tmp_path)
+    assert p.returncode == 0, f"{p.stdout}{p.stderr}"
+    assert _pull_refs(p.stdout) == "0", p.stdout
+    assert "not fetched" not in p.stderr, p.stderr
+
+
+def test_a_dir_with_no_origin_says_unfetched_never_zero(tmp_path):
+    """A fixture, or a dir that is not a clone of the published repo: the
+    question was not asked, and the SUMMARY must say so in a word, not a `0`."""
+    _scan_available()
+    p = _run_accept(_repo(tmp_path, [CLEAN]), "# nothing adjudicated\n", tmp_path)
+    assert p.returncode == 0, f"{p.stdout}{p.stderr}"
+    assert _pull_refs(p.stdout) == "unfetched", p.stdout
+    assert "not fetched" in p.stderr, p.stderr
+
+
+def test_a_fetch_that_fails_refuses_rather_than_reading_the_walk_as_complete(tmp_path):
+    _scan_available()
+    clone = _repo(tmp_path, [CLEAN])
+    subprocess.run(["git", "-C", str(clone), "remote", "add", "origin",
+                    str(tmp_path / "no-such-origin.git")], check=True, capture_output=True)
+    p = _run_accept(clone, "# nothing adjudicated\n", tmp_path)
+    assert p.returncode == 2, f"rc={p.returncode}\n{p.stdout}{p.stderr}"
+    assert "could not fetch refs/pull/*/head" in p.stderr, p.stderr
+    assert "SUMMARY" not in p.stdout, p.stdout
+
+
+def test_an_ambient_GIT_DIR_does_not_redirect_the_fetch(tmp_path):
+    """`git -C` does not override GIT_DIR. Before the unset, every call read (and
+    the fetch wrote into) whatever repository the environment named: an ambient
+    clone gained the pull heads and the argument read `unfetched`."""
+    _scan_available()
+    target = _clone_with_origin(tmp_path, pull_head_leaks=1)
+    ambient = _repo(tmp_path / "elsewhere", [CLEAN])
+    acc = tmp_path / "accepted.txt"
+    acc.write_text("# nothing adjudicated\n", encoding="utf-8")
+    p = subprocess.run(
+        ["bash", str(SCAN), str(target)], capture_output=True, encoding="utf-8",
+        env={**os.environ, "ACCEPT_FILE": str(acc), "GIT_DIR": str(ambient / ".git")},
+    )
+    assert p.returncode == 1, f"the leak on the target's pull head was not found:\n{p.stdout}{p.stderr}"
+    assert _pull_refs(p.stdout) == "1", p.stdout
+    ambient_refs = subprocess.run(["git", "-C", str(ambient), "for-each-ref", "refs/pull/"],
+                                  capture_output=True, encoding="utf-8").stdout
+    assert ambient_refs == "", f"the fetch wrote into the ambient repository:\n{ambient_refs}"
+
+
+def test_a_reused_clone_prunes_a_head_origin_dropped_and_ignores_a_merge_ref(tmp_path):
+    _scan_available()
+    clone = _clone_with_origin(tmp_path, pull_head_leaks=1)
+    git = lambda *a: subprocess.run(["git", "-C", str(clone), *a], check=True,
+                                    capture_output=True, encoding="utf-8")
+    # First run fetches the one head; then origin drops it and the clone carries a stray merge ref.
+    p1 = _run_accept(clone, "# nothing adjudicated\n", tmp_path)
+    assert _pull_refs(p1.stdout) == "1", p1.stdout
+    subprocess.run(["git", "-C", str(tmp_path / "origin.git"), "update-ref", "-d", "refs/pull/1/head"],
+                   check=True, capture_output=True)
+    git("update-ref", "refs/pull/1/merge", "HEAD")
+    p2 = _run_accept(clone, "# nothing adjudicated\n", tmp_path)
+    assert p2.returncode == 0, f"{p2.stdout}{p2.stderr}"
+    assert _pull_refs(p2.stdout) == "0", p2.stdout

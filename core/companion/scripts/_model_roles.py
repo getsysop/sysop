@@ -643,7 +643,7 @@ def find_role_violations(
             if r.role is None:
                 out.append((rel, r, "pin has no governing `<!-- sysop:model-roles … -->` marker"))
             elif r.role not in roles:
-                out.append((rel, r, f"undefined role {r.role!r} (not in served_models.yml roles:)"))
+                out.append((rel, r, f"undefined role {r.role!r} (no `roles:` entry in served_models.yml or the local override)"))
             elif roles[r.role] not in served_set:
                 out.append((rel, r, f"role {r.role!r} -> {roles[r.role]!r} is not in served:"))
             elif r.kind == "inline" and roles[r.role] not in inline_set:

@@ -190,7 +190,8 @@ maintainer's working record and is not in the public tree.
   records in a receipt, and its longest inline programs became shipped scripts. By late October its
   core was half its size at the last snapshot before the split began, under a byte budget
   that replaced the old ratchet, and every arm the split's scoping ranked had moved or been measured
-  and left; whether to go further is an open decision. The close also learned to run with no one at
+  and left, and on 2026-10-29 the split stopped there, its core at 286,503 bytes and its byte budget kept
+  as a guard against the core growing back. The close also learned to run with no one at
   the keyboard: its prepare, its resume and its land each ran a headless night under `dontAsk` with
   no permission denied. The review rounds were resized by the kind of
   change rather than by whether it shipped behaviour and numbers, a model role can now carry an effort level, and the

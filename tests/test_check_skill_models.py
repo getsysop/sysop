@@ -226,3 +226,109 @@ def test_the_skipped_count_is_a_count_and_not_a_literal(tmp_path, capsys):
     assert "NOTES.md" in out.err and "OTHER.md" in out.err, (
         "the note names fewer files than it skipped"
     )
+
+
+# ── `Q-295` (Phase 441): the Fix line names the file a consumer's edit survives in ──────
+# It named served_models.yml, which every update replaces, so a consumer who followed it
+# lost the edit and met the same refusal on the next update.
+
+def _fix_lines(out: str) -> list[str]:
+    lines = out.splitlines()
+    i = next(n for n, ln in enumerate(lines) if ln.startswith("Fix:"))
+    return lines[i:]
+
+
+def test_the_fix_line_names_the_override_file_even_when_absent(tmp_path, capsys):
+    root = _skill(tmp_path, GOOD)
+    cfg = _cfg(tmp_path, "roles:\n  reasoning: opus\nserved:\n  - sonnet\n")
+    local = tmp_path / "served_models.local.yml"           # never created
+    assert c.main(["--root", str(root), "--config", str(cfg), "--local", str(local)]) == 1
+    fix = _fix_lines(capsys.readouterr().out)
+    assert fix[0].startswith(f"Fix: map the role under `roles:` in {local} (create it if absent)."), fix
+    assert f"{cfg} is Sysop's own mapping and every update replaces it" in fix[0], fix
+    # Round 1, lens B: each remedy prints for its own reason only.
+    assert not any(ln.lstrip().startswith(("An undefined role", "A pin with no role",
+                                            "A pin judged by its own literal")) for ln in fix), fix
+    assert "repoint the role in served_models.yml" not in "\n".join(fix), fix
+
+
+def test_an_undefined_role_gets_the_marker_remedy(tmp_path, capsys):
+    root = _skill(tmp_path, "---\nmodel: opus\n---\n<!-- sysop:model-roles frontmatter=bogus -->\n")
+    cfg = _cfg(tmp_path, CFG)
+    assert c.main(["--root", str(root), "--config", str(cfg)]) == 1
+    out = capsys.readouterr().out
+    assert "no `roles:` entry in served_models.yml or the local override" in out, out
+    assert any("in a skill of your own, remove the marker" in ln for ln in _fix_lines(out)), out
+    # Each remedy is printed for its own reason only.
+    assert "a marker governs every pin on its line" not in out, out
+    assert "A pin with no role" not in out, out
+
+
+def test_a_consumer_pin_on_a_marked_line_gets_the_move_it_remedy(tmp_path, capsys):
+    """`Q-700`'s shape: a consumer copies a Sysop-marked line and adds a pin of its own on it,
+    so the line's marker governs that pin and its literal is judged."""
+    cfg = _cfg(tmp_path, "roles:\n  executor: sonnet\nserved:\n  - sonnet\n")
+    root = _skill(tmp_path, 'spawn `model: "sonnet"` <!-- sysop:role=executor --> and my own `model: "best"`\n')
+    assert c.main(["--root", str(root), "--config", str(cfg), "--managed-only"]) == 1
+    out = capsys.readouterr().out
+    assert "INLINE pin holds the literal value 'best'" in out, out
+    fix = "\n".join(_fix_lines(out))
+    assert "a marker governs every pin on its line" in fix, fix
+    assert "Put a pin of your own on a line, in a file, that no Sysop marker governs." in fix, fix
+    assert "remove the marker" not in fix and "per-pin" not in fix, fix
+    # Round 1, lens A: a role remedy cannot clear a literal failure, and printing one beside
+    # it sent the consumer to an edit that left the refusal standing.
+    assert "map the role" not in fix and "For the INLINE failures" not in out, out
+    assert fix.startswith("Fix: A pin judged by its own literal"), fix
+
+
+def test_a_role_that_governs_an_inline_pin_still_gets_the_enum_remedy(tmp_path, capsys):
+    cfg = _cfg(tmp_path, "roles:\n  executor: best\nserved:\n  - best\n")
+    root = _skill(tmp_path, 'spawn `model: "sonnet"` <!-- sysop:role=executor -->\n')
+    assert c.main(["--root", str(root), "--config", str(cfg), "--managed-only"]) == 1
+    out = capsys.readouterr().out
+    assert "governs an INLINE pin" in out, out
+    assert "For the INLINE failures above" in out, out
+    assert "A pin judged by its own literal" not in out, out
+
+
+def test_in_a_sysop_source_tree_the_fix_names_the_shipped_mapping(tmp_path, capsys):
+    """Round 1, lens A: a maintainer's run named an override path relative to `core/`,
+    which no file there holds; in the source tree the shipped mapping is what to edit."""
+    core = tmp_path / "core"
+    root = _skill(core, GOOD)                               # core/skills/s/SKILL.md
+    (core / "companion" / ".claude").mkdir(parents=True)
+    cfg = core / "companion" / ".claude" / "served_models.yml"
+    cfg.write_text("roles:\n  reasoning: opus\nserved:\n  - sonnet\n")
+    assert c.main(["--root", str(root), "--config", str(cfg)]) == 1
+    fix = _fix_lines(capsys.readouterr().out)
+    assert fix[0].startswith(f"Fix: repoint the role in {cfg} (and update served:)"), fix
+    assert "served_models.local.yml" not in "\n".join(fix), fix
+
+
+def test_an_unroled_pin_gets_the_per_pin_marker_remedy(tmp_path, capsys):
+    root = _skill(tmp_path, "---\nmodel: opus\n---\n<!-- sysop:model-roles inline=reasoning -->\n")
+    cfg = _cfg(tmp_path, CFG)
+    assert c.main(["--root", str(root), "--config", str(cfg)]) == 1
+    out = capsys.readouterr().out
+    assert "pin has no governing" in out, out
+    assert any("give it a per-pin `<!-- sysop:role=… -->`" in ln for ln in _fix_lines(out)), out
+
+
+def test_ok_and_list_print_no_fix_line(tmp_path, capsys):
+    root = _skill(tmp_path, GOOD)
+    cfg = _cfg(tmp_path, CFG)
+    assert c.main(["--root", str(root), "--config", str(cfg)]) == 0
+    assert c.main(["--root", str(root), "--config", str(cfg), "--list"]) == 0
+    assert "Fix:" not in capsys.readouterr().out
+
+
+def test_an_effort_literal_gets_no_role_remedy(tmp_path, capsys):
+    """Round 1, lens B: an effort the enum rejects got the role remedy and the alias line,
+    neither of which can change a literal."""
+    cfg = _cfg(tmp_path, "roles:\n  executor: sonnet\nserved:\n  - sonnet\n")
+    root = _skill(tmp_path, 'spawn `model: "sonnet"`, `effort: "turbo"` <!-- sysop:role=executor -->\n')
+    assert c.main(["--root", str(root), "--config", str(cfg), "--managed-only"]) == 1
+    out = capsys.readouterr().out
+    assert "INLINE pin carries the effort 'turbo'" in out, out
+    assert "map the role" not in out and "For the INLINE failures" not in out, out

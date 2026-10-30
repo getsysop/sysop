@@ -49,6 +49,21 @@ a rule exists is usually a finding class that went missing when it did not.
 
 *Sections below this line are editor rationale for single rules, not declared rules.*
 
+## Step 2b — why the pip-audit stage picks a target and prints it
+
+A bare `pip-audit` audits the interpreter it is installed into. Installed as a uv tool, with pipx or
+by Homebrew, that is pip-audit's own environment, so the stage reported pip-audit's dependencies as
+the project's and missed the project's real advisories, with every line looking like an ordinary
+finding. The stage therefore audits a `uv.lock` when one exists, and otherwise the requirements files and
+the checks' own interpreter (named to pip-audit) together. Each alone missed a real layout: the
+files alone read "executed, 0 findings" for a project whose only requirements file lists dev tools,
+and the environment alone, under a Python that is not the project's, missed the files. The merge
+reports that Python's own packages as noise, which the runner is told to check; a miss in a
+security check is worse than noise. A lock's environment markers are stripped because pip-audit evaluates them against its own
+interpreter, which for a tool install is rarely the project's. Printing the target is the part a reader can check:
+a wrong target looks like a right one in the findings, and only the target line says which it was.
+The uv branch never falls back to the environment, because that fallback is the original defect.
+
 ## Step 9b — why the demotion commit is its own
 
 Step 9's promotion commit has already been made by the time 9b runs, so "folding" 9b's changes

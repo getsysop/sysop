@@ -87,7 +87,7 @@ PINS = {
     "codebase-review option iii step 3": "fc84f95e8c662dbd",
     "codebase-review 9b retire and demote": "6fd41dd6aa69f337",
     "codebase-review 9b steps 4-5": "f7c60985604fd918",
-    "security-audit 2b accounting": "6e51cb196527d131",
+    "security-audit 2b accounting": "825fb55971a0894a",
     "security-audit 5b reconciliation": "3cac4c1f1e69563c",
     "security-audit step 6 pre-scan": "decfecf67fd86e2b",
     "security-audit step 9 gate": "1010613ab10fe3ba",

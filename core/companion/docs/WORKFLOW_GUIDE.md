@@ -184,7 +184,7 @@ bash sysop/scripts/run_checks.sh --mode security
 - **LSP / typechecker** — `pyright` (Python) and `tsc --noEmit` (TypeScript). Findings get `pyright-*` or `tsc-*` IDs. Skipped if the binary is absent
 - **Semgrep AST** — rules from `.claude/semgrep/*.yaml` for patterns regex cannot express. Findings get `semgrep-*` IDs. Skipped if `semgrep` or `.claude/semgrep/` is absent
 - **ESLint** — JS/TS lint findings, emitted under a single `lint-*` catch-all ID. Skipped if ESLint is absent
-- **pip-audit** — known-vulnerability scan of installed Python dependencies. Findings get `pip-audit-*` IDs. Skipped if `pip-audit` is absent
+- **pip-audit** — known-vulnerability scan of the project's Python dependencies: a root `uv.lock` if there is one, otherwise each root `requirements*.txt` file and, when the interpreter running the checks has pip, that interpreter's environment, which is audited alone when there are no requirements files (with neither requirements nor pip, the stage fails with a hint). Findings get `pip-audit-*` IDs. Skipped if `pip-audit` is absent
 - **Coverage** — diff-coverage of *crown-jewel* paths via `diff-cover`. A check declares a `critical_path:` glob list; uncovered changed lines inside it become `coverage-*` findings. A `blocking: true` coverage check **hard-fails** and is deliberately carved out of the baseline — you can't `--update-baseline` your way past a crown-jewel coverage gap; the only legitimate escape is a coverage pragma at the report-producer layer. Skipped when no coverage report is present. See WORKFLOW.md §6.5.
 
 All six share the same finding shape, so baseline matching (`.claude/checks_baseline.txt`) and `--fail-on-blocking` apply uniformly — except coverage, which never baselines (above).

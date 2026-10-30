@@ -290,8 +290,12 @@ def main(argv: list[str] | None = None) -> int:
     print("  1. Tier rationale: wherever the per-tier reasoning is documented")
     print("     (served_models.yml comments, skill prose) still names the old")
     print("     tier. Update it.")
-    print("  2. served_models.yml: repoint the role (and update served:) so check_skill_models.py")
-    print("     stays green; add the replacement alias if not already listed.")
+    # `Q-295`'s class (Phase 441's round, lens B): this ships to consumers, whose
+    # served_models.yml every update replaces, so the edit belongs in the override there.
+    print("  2. The role mapping: repoint the role (and add the replacement alias to served:)")
+    print("     so check_skill_models.py stays green — in a consumer, in")
+    print("     .claude/served_models.local.yml (every update replaces .claude/served_models.yml);")
+    print("     in a Sysop source tree, in core/companion/.claude/served_models.yml.")
     print("  3. Downstream consumers that installed these skills via the bash")
     print("     installer keep their OWN copies — they pick up this migration on")
     print("     the next sysop-update.sh. A consumer's project-authored skills")

@@ -7,6 +7,60 @@ a check that now runs. Each entry is dated by the snapshot's publication and nam
 private development phases it carries. The per-phase journal those phases were recorded in is the
 maintainer's working record and is not in the public tree.
 
+## 2026-10-30 — v0.2.0, private phases 435–443
+
+- **`v0.2.0`, the first release tag.** This snapshot is tagged `v0.2.0`, with a GitHub Release
+  carrying this entry. On the bash path, `--ref` pins to it once the tag is fetched into your
+  clone; `SECURITY.md` § *How updates reach you — and how to pin* has the details. Rolling
+  `main` stays the default track.
+- **A batch claim's worktree reaches the claim commit every time.** The claim read the claim
+  commit through a pipe that could close early, and when it did the worktree was left at the
+  commit before the claim, with a warning that git could not read it. It now reads the commit
+  whole.
+- **The close's runner split stops here.** `/review-close`'s runner core is 286,503 bytes, with
+  twenty-four step files a close loads only when one is due. Nothing further moves out, and the
+  byte budget stays as a guard against the core growing back.
+- **A reviewer's scripts start in its own scratch directory.** A spawned reviewer's shell starts in
+  the spawner's checkout, under the spawner's credentials, so a fixture path that came out
+  wrong once aimed a reviewer's pushes at the real remote; they stopped only at authentication. The adversarial-review procedure now
+  has the spawner put four rules in every reviewer's prompt, for its scripts and its git commands:
+  begin by changing into the reviewer's private scratch directory, by its literal path, and make no
+  git write in its placed checkout, which shares the repository's refs and remotes; check arguments non-empty under `set -u` before any `git -C`, since an empty `-C`
+  is the current directory; set `GIT_TERMINAL_PROMPT=0`; and on finding the spawner's checkout
+  touched, stop and report, restoring nothing.
+- **An update says when it moved Sysop backwards, and a model-role refusal names the right file.**
+  When the clone `$SYSOP_SRC` names is checked out older than the installed commit, `--update`
+  now says it moved Sysop backwards and how to undo it. When it cannot tell (the clone lacks the
+  installed commit, as one from before a re-clone does; the two commits sit on different branches
+  or a shallow clone's cut history; or the source is not a git clone), it says so and what to
+  check. A refused model-role mapping's `Fix:` line now sends you to
+  `.claude/served_models.local.yml`, the file your edit survives in, instead of
+  `served_models.yml`, which every update replaces, and prints only the remedies that apply to
+  the pins that failed. Its headline no longer claims an override was skipped when you have none
+  or that the failing pins are valid; it says Sysop's skills are back at their shipped models
+  until the check passes.
+- **The pip-audit stage audits the project, not pip-audit.** A bare `pip-audit` audits the
+  interpreter it is installed into, so a pip-audit installed as a uv tool, with pipx or by Homebrew
+  reported its own packages as the project's and missed the project's real advisories. The stage
+  now audits a root `uv.lock` (through `uv export --locked`, with extras and every Python-version
+  and platform branch); otherwise each root `requirements*.txt` in its own run together with the
+  environment of the interpreter running the checks when it has pip; and it prints which. Where it
+  audits less than it set out to (conflicting extras or groups exported without them; a git, URL
+  or editable requirement, or a pin pip-audit skips such as a `+cpu` local version; or, with no
+  pip in the checks' interpreter, dependencies declared only in `pyproject.toml`) it names what it
+  left out and reports the stage `degraded`, not as a clean run. A uv project with no `uv` on `PATH` skips the audit,
+  and a stale `uv.lock` fails it; neither falls back to the environment. Reported by an external tester.
+- **The pages lead with the problem.** The README and the landing page now open by naming what
+  Sysop exists for — one builder producing more code than they can read line by line, with no
+  reviewers to add — before the convention loop that makes the approach distinctive; the README
+  points at the monograph's preface and the history page from the top, the landing page at the
+  preface. The monograph's overview gains a
+  short section, *What each part is trusted with*: judgment to a reasoning model, critique to an
+  independent agent, mechanical conditions to deterministic tools, risk to the human — where an
+  outcome can be checked, the workflow checks it rather than taking an agent's report of it.
+  README § Provenance dates the public history's restart and says why. Prompted by an outside
+  read of the public pages.
+
 ## 2026-10-29 — private phases 433–434, a new repository
 
 - **This repository was deleted and recreated.** The 2026-10-28 reset left `main` at one commit,

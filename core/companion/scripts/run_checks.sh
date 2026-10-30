@@ -33,7 +33,9 @@ VENV_BIN="${MAIN_REPO_ROOT}/.venv/bin"
 # probe it when `.venv/` is absent (Phase 133; matches install.sh's
 # pick_python_with_yaml order). Out-of-repo venvs (poetry default) are
 # covered separately: the pip-audit stage falls back to `python -m pip_audit`
-# via whichever interpreter runs the checks.
+# via whichever interpreter runs the checks, and with no uv.lock it audits
+# that interpreter's environment (when it has pip) beside any requirements
+# files.
 [[ ! -d "$VENV_BIN" ]] && VENV_BIN="${MAIN_REPO_ROOT}/venv/bin"
 # The tsc and ESLint stages DISCOVER their frontend directory and run its own
 # node_modules/.bin binary (run_checks/lint.py `_node_bin`), so any layout works

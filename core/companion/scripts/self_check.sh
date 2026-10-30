@@ -402,6 +402,11 @@ if command -v pip-audit >/dev/null 2>&1 \
 else
   info "pip-audit not found — dependency audit skips (pip install pip-audit)"
 fi
+# The pip-audit stage audits a root uv.lock through `uv export` and skips
+# rather than audit the environment when uv is missing.
+if [[ -f "$REPO_ROOT/uv.lock" ]] && ! command -v uv >/dev/null 2>&1; then
+  info "uv.lock present but uv not on PATH — dependency audit skips (install uv)"
+fi
 # pyright is found through the PATH run_checks.sh builds, so probe that PATH:
 # a frontend's node_modules/.bin, then a worktree's own venv, then the MAIN
 # checkout's venv (`.venv/bin`, else `venv/bin`), then the caller's PATH. This

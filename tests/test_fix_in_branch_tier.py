@@ -3003,10 +3003,21 @@ PINNED_SPANS.update({
         CLOSE, "Then, **stage the resolved file and gate it**", "### 4a-fix.", False),
 })
 
+# Phase 442 (`Q-718`): a reviewer's scripts start in its own scratch directory, its arguments are
+# checked before any `git -C`, it sets `GIT_TERMINAL_PROMPT=0`, and one that touched the spawner's
+# checkout stops and restores nothing. Phase 435's lens pushed from the main repo without them.
+PINNED_SPANS.update({
+    "adversarial-review reviewer scripts": (
+        REPO_ROOT / "core" / "skills" / "_shared" / "adversarial-review.md",
+        "**A reviewer's scripts start in its own scratch directory",
+        "**Worktree isolation, where the harness offers it.**", False),
+})
+
 PIN_HASHES = {
     "review-close 4a items 1-3": "4168df593b7c2d65",  # Phase 429's round (lens B): the stub says "follow it in full", since the arm holds the merge; (lens A): the stub names `git_check.py published`, item 1's cost is a merge commit; Phase 429 (`Q-409` P5): item 1's published answer, the stub, `steps/4a-published.md` and the one-line item 3, read spliced; first pin over the whole run (`test_squash_provenance.py` pins parts of items 1-2)
     "review-close 4a validator gate and skip": "4a572c4512efd9df",  # Phase 429's round (lens B): first pin; the validator gate, its exit split and the 4a-SKIP section
     "review-close 2b run alone": "ee6c18a1a78776b2",  # Phase 426 (`Q-713`); its round (lens B 3) names `||` and `$(…)`
+    "adversarial-review reviewer scripts": "72f8f60df3188e3e",  # Phase 442 (`Q-718`): first pin
     "adversarial-review dontAsk bullet": "4d1b774d91c9ddf9",  # Phase 426's round (battery run 3, S01): the reviewer runs each wrapper line alone; first pin
     "review-close 2b one call per file": "11a43909a0c3d666",  # Phase 426's round (both lenses): the do-not-mutate block's "you will write a loop" became one call per file; first pin, from the block's start (lens A Y02)
     "review-close 2b one call per entry": "8d21cf0676c6db52",  # Phase 426 (`Q-713`): the do-not-modify paragraph, now one call per entry; first pin
@@ -3293,7 +3304,7 @@ def test_the_decided_text_is_pinned(label: str) -> None:
         "333, 2026-09-25), or Step 4c's rotation and changelog contracts (Phase 337, 2026-09-27), or "
         "the collision grade `unknown` and its rank (Phase 339, 2026-09-27), or where /auto-build's plan and "
         "revised plan are written (Phase 344, 2026-09-28), or /claim-task's ask-and-fix (Phase 345, 2026-09-29), or the scope of /auto-build's named-task lane lift (Phase 356, 2026-09-30), or check 1's notes, the `pr` pre-existing-failure ask, `## After merge` and /sitrep's failed-task section (Phase 357, ruled 2026-09-30), or what /auto-build --unattended waives and its halt marker (Phase 361, 2026-10-06), or what a /review-close --dry-run runs (Phase 362, 2026-10-07), or the Step 4d split (Phase 365, 2026-10-08), or the --agent selection and the unattended land left off (Phase 366, 2026-10-08), or that an UNREADABLE record fails an /auto-build task (Phase 371, 2026-10-10), or the unattended land turned on (Phase 375, 2026-10-11), or the arm receipt and its pilot arm (Phase 388, 2026-10-19). The hash covers the span's words, its block structure, its first line's "
-        "indentation and the fence it sits in; a re-wrap or a list-marker swap keeps it. If the "
+        "indentation and the fence it sits in; a re-wrap or a swap among the `-`, `*` and `+` bullet markers keeps it (a numbered list does not). If the "
         "edit is a deliberate change to that rule, update the pin in the same commit "
         "(`_print_pins()`) and say so in the phase record; if it is not, it is the widening or "
         "reversal these pins exist to stop."

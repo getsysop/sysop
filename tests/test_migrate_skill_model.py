@@ -130,3 +130,15 @@ def test_an_undecodable_file_does_not_abort_a_migration(tmp_path, capsys):
     assert "NOTES.md" in capsys.readouterr().err, (
         "the skipped file was not disclosed"
     )
+
+
+def test_the_manual_steps_send_a_consumer_to_the_override_file(tmp_path, capsys):
+    """`Q-295`'s class (Phase 441's round, lens B): this script ships to consumers, and its
+    step 2 named served_models.yml, which every update replaces there."""
+    d = tmp_path / "skills" / "s"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nmodel: opus\n---\n")
+    assert m.main(["--from", "opus", "--to", "fable", "--root", str(tmp_path / "skills")]) == 0
+    out = capsys.readouterr().out
+    assert "in a consumer, in\n     .claude/served_models.local.yml" in out, out
+    assert "served_models.yml: repoint the role" not in out, out
