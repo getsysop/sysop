@@ -132,7 +132,11 @@ MARKER = re.compile(r"^<!-- sysop:arm=(\S+) -->[ \t]*$")
 #: and 2a's `exited` in the allow-rule inventory. Its round (lens A) lowered it to 287,120: the
 #: pre-scan stub's lead names only what loads its arm ("A non-zero exit, or no script to run",
 #: not "Any other outcome", which a killed run could be read as).
-CORE_BUDGET_BYTES = 287_120
+#: Phase 438 (`Q-409` closes at P5, Wade's ruling of 2026-10-29) lowered it to 286_503, the core's
+#: `wc -c` at `5a22f775`: Phase 433's citation scrub shrank the core by 617 bytes and left this
+#: constant where Phase 430 set it, against Wade's 2026-10-14 answer 2 (lower it to each phase's
+#: new size). The campaign stops here; the budget stays as a growth guard on the core.
+CORE_BUDGET_BYTES = 286_503
 
 GIT_ENV = {k: v for k, v in os.environ.items()
            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}

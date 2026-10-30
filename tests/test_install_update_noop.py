@@ -115,6 +115,7 @@ def test_an_update_from_an_unmoved_source_says_so_and_names_the_source(setup):
     assert _git(tgt, "status", "--porcelain") == "", out
     assert "there is nothing to commit" in out, out
     assert "The update is uncommitted" not in out, out
+    assert "BACKWARDS" not in out and "cannot tell forward from back" not in out, out
 
 
 def test_an_update_from_a_moved_source_still_reports_was_and_now(setup):
@@ -133,6 +134,8 @@ def test_an_update_from_a_moved_source_still_reports_was_and_now(setup):
     assert "already at" not in out, out
     assert "The update is uncommitted" in out, out
     assert "there is nothing to commit" not in out, out
+    # `Q-260`: a forward move with the installed commit in the clone says nothing more.
+    assert "BACKWARDS" not in out and "cannot tell forward from back" not in out, out
 
 
 def test_an_unmoved_ref_update_names_the_clone_not_the_temp_worktree(setup):
@@ -287,3 +290,131 @@ def test_an_unmoved_but_dirty_source_says_its_changes_were_copied(setup):
     out = res.stdout + res.stderr
     assert "already at" in out, out
     assert "its uncommitted changes WERE copied" in out, out
+
+
+# --- `Q-260` (Phase 441): an update that moves the install backwards says so -------------
+# A $SYSOP_SRC still naming an older clone after a re-clone installed that clone's tree at
+# exit 0, and `was:`/`now:` were the only tell. `Q-034` covers the clone that has not moved;
+# these cover the one that moves backwards. Direction is knowable only when the installed
+# commit is in the clone read; otherwise the closing lines say so conditionally, because a
+# forward update from a re-rooted clone lands in the same branch.
+
+def _advance(src, tgt):
+    """Commit once in *src*, update *tgt* to it and commit the target; return the new HEAD."""
+    p = src / "core" / "companion" / "scripts" / "self_check.sh"
+    p.write_text(p.read_text() + "\n# q260 newer\n")
+    _git(src, "commit", "-qam", "newer")
+    res = _install(src, tgt, "--update")
+    assert res.returncode == 0, res.stdout + res.stderr
+    _git(tgt, "add", "-A")
+    _git(tgt, "commit", "-qm", "updated")
+    return _git(src, "rev-parse", "HEAD")
+
+
+def test_an_update_from_an_older_checkout_of_the_same_clone_says_backwards(setup):
+    src, tgt = setup
+    newer = _advance(src, tgt)
+    _git(src, "checkout", "-q", "-B", "older", "HEAD~1")
+    res = _install(src, tgt, "--update")
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert "this update moved Sysop BACKWARDS" in out, out
+    assert f"is an ancestor of the installed {newer[:12]}" in out, out
+    assert any(ln.strip().startswith(f"• source read: {src} ") for ln in _lines(res)), out
+    assert f"--ref {newer[:12]}" in out, out
+
+
+def test_an_older_ref_is_a_note_not_a_warning(setup):
+    src, tgt = setup
+    newer = _advance(src, tgt)
+    res = _install(src, tgt, "--update", "--ref", "HEAD~1")
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert f"--ref HEAD~1 is older than the installed {newer[:12]}" in out, out
+    assert "BACKWARDS" not in out, out
+
+
+def test_an_update_from_a_clone_lacking_the_installed_commit_says_it_cannot_tell(setup, pristine,
+                                                                                  tmp_path):
+    """The filed shape: installed from a newer clone, $SYSOP_SRC still at one that lacks it."""
+    src, tgt = setup
+    newer = _advance(src, tgt)
+    stale = tmp_path / "stale"
+    subprocess.run(["git", "clone", "-q", str(pristine[0]), str(stale)], check=True,
+                   capture_output=True, env=_env())
+    res = _install(stale, tgt, "--update")
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert f"the installed {newer[:12]} is not in the source read ({stale})" in out, out
+    assert "point $SYSOP_SRC at the newer clone and re-run the update" in out, out
+    # The pre-overwrite block's by-SHA fetch remedy is qualified the same way.
+    assert "A clone OLDER than the one you last installed from lacks that commit too" in out, out
+    assert "point $SYSOP_SRC at the newer clone instead" in out, out
+    assert "BACKWARDS" not in out, out
+
+
+def test_a_forward_update_from_a_re_rooted_clone_claims_no_direction(setup, tmp_path):
+    """Control: every consumer's first update after the public repo's re-root lands in the
+    unreachable branch going FORWARD, so it must not be told it went backwards."""
+    src, tgt = setup
+    rooted = tmp_path / "rooted"
+    shutil.copytree(src, rooted, ignore=shutil.ignore_patterns(".git"))
+    p = rooted / "core" / "companion" / "scripts" / "self_check.sh"
+    p.write_text(p.read_text() + "\n# q260 re-rooted\n")
+    _git(rooted, "init", "-q", "-b", "main")
+    _identity(rooted)
+    _git(rooted, "add", "-A")
+    _git(rooted, "commit", "-qm", "root")
+    res = _install(rooted, tgt, "--update")
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert "cannot tell forward from back" in out, out
+    assert "BACKWARDS" not in out, out
+
+
+def test_an_update_to_a_sibling_branch_says_it_cannot_tell(setup):
+    """Round 1, lens A: the first cut read "not an ancestor" as forward, so a move to another
+    line of history, which drops the installed commit's changes, printed `was:`/`now:` alone."""
+    src, tgt = setup
+    newer = _advance(src, tgt)
+    _git(src, "checkout", "-q", "-B", "sibling", "HEAD~1")
+    p = src / "core" / "companion" / "docs" / "WORKFLOW.md"
+    p.write_text(p.read_text() + "\n<!-- q260 sibling -->\n")
+    _git(src, "commit", "-qam", "sibling")
+    res = _install(src, tgt, "--update")
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert f"neither {newer[:12]} (installed) nor" in out, out
+    assert "they are gone from this install" in out, out
+    assert "BACKWARDS" not in out, out
+
+
+def test_a_non_git_source_says_it_is_not_a_clone(setup, tmp_path):
+    """Round 1, lens A: a tarball-shaped source got the clone sentence, and \\$SYSOP_SRC advice
+    the shim would refuse."""
+    src, tgt = setup
+    flat = tmp_path / "flat"
+    shutil.copytree(src, flat, ignore=shutil.ignore_patterns(".git"))
+    res = _install(flat, tgt, "--update")
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert f"the source read ({flat}) is not a git clone" in out, out
+    assert "point $SYSOP_SRC at the newer clone and re-run" not in out, out
+    assert "point $SYSOP_SRC at the newer clone instead" not in out and " fetch origin " not in out, out
+
+
+def test_a_ref_from_a_clone_lacking_the_installed_commit_names_the_clone(setup, pristine,
+                                                                        tmp_path):
+    """Round 1, lens B: under `--ref` the source read is a temp worktree the EXIT trap deletes,
+    and nothing pinned that the unreachable note names the clone, or that it does not call the
+    pin older than a commit it cannot see."""
+    src, tgt = setup
+    newer = _advance(src, tgt)
+    stale = tmp_path / "stale"
+    subprocess.run(["git", "clone", "-q", str(pristine[0]), str(stale)], check=True,
+                   capture_output=True, env=_env())
+    res = _install(stale, tgt, "--update", "--ref", "HEAD")
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert f"the installed {newer[:12]} is not in the source read ({stale})" in out, out
+    assert "is older than the installed" not in out, out

@@ -3937,3 +3937,85 @@ def test_the_retraction_canary_states_its_bound_rather_than_implying_coverage():
     """
     novel = "Placement here is a matter of taste and the round stands without it."
     assert placement_retraction_problems(novel) == []
+
+
+# Phase 442 (`Q-718`): the reviewer-script rule's words are hash-pinned in
+# `test_fix_in_branch_tier.py`, and the pin follows the text wherever it goes. Its author battery
+# moved the rule to the file's end, and put a `### Retired` heading over it, and the pin stayed
+# green both times. Spawners are pointed at this section, so the rule must sit in its own text,
+# above its first subsection.
+REVIEWER_SCRIPTS_LEAD = "**A reviewer's scripts start in its own scratch directory"
+
+
+# Its round (the lens's S1 and S4b): a contradiction outside the pinned span, in the same section,
+# left everything green. A canary in the shape of `GOVERNOR_FORBIDDEN`, with the lens's survivors as
+# its regressions. DECLARED RESIDUAL: a contradiction in none of these shapes still passes.
+REVIEWER_SCRIPTS_FORBIDDEN: list[tuple[str, str]] = [
+    (r"(?:scratch[- ]directory|reviewer[- ]scripts?|`?cd`?[- ]first) rule(?: above)? is (?:only )?(?:a )?"
+     r"(?:recommendation|suggestion|optional|advisory|guidance)",
+     "demotes the rule to a preference"),
+    (r"(?:begins?|starts?|runs?) in (?:its|the) (?:placed|spawner's) checkout (?:is|are) "
+     r"(?:acceptable|fine|allowed|ok)",
+     "licenses the start the rule forbids"),
+    (r"`?git -C`? arguments? (?:needs?|requires?) no check",
+     "drops the non-empty check"),
+    (r"checked (?:only )?(?:when|where|if) (?:convenient|practical|needed|time allows)",
+     "makes the non-empty check optional"),
+    (r"(?:reviewer'?s? )?scripts? may start in",
+     "turns the start into a permission"),
+    (r"GIT_TERMINAL_PROMPT=0`? (?:is|are) (?:optional|unnecessary|not needed)",
+     "drops the prompt guard"),
+    (r"restores? (?:the tree|its changes|everything)(?:,)? (?:first|then report|before reporting)",
+     "inverts restore-nothing, which keeps the evidence"),
+]
+
+
+def reviewer_scripts_problems(section: str) -> list[str]:
+    problems = []
+    head = re.split(r"\n#{3,6}[ \t]", section, maxsplit=1)[0]
+    if head.count(REVIEWER_SCRIPTS_LEAD) != 1:
+        problems.append("reviewer-scripts: the rule is not once in the section's own text, above "
+                        "its first subsection")
+    flat = re.sub(r"\s+", " ", section)
+    for pat, why in REVIEWER_SCRIPTS_FORBIDDEN:
+        if re.search(pat, flat, re.I):
+            problems.append(f"reviewer-scripts: {why} ({pat})")
+    return problems
+
+
+def test_the_reviewer_script_rule_sits_in_the_spawn_section():
+    assert reviewer_scripts_problems(_multi_reviewer_section()) == []
+
+
+@pytest.mark.parametrize("move", ["to the end", "under a heading", "under a level-4 heading",
+                                  "under a tabbed heading"])
+def test_a_moved_reviewer_script_rule_is_caught(move):
+    section = _multi_reviewer_section()
+    start = section.index(REVIEWER_SCRIPTS_LEAD)
+    end = section.index("**Worktree isolation, where the harness offers it.**")
+    rule = section[start:end]
+    if move == "to the end":
+        mutated = section[:start] + section[end:] + "\n" + rule
+    else:
+        heading = {"under a heading": "### ", "under a level-4 heading": "#### ",
+                   "under a tabbed heading": "###\t"}[move]
+        mutated = section[:start] + heading + "Retired, kept for history\n\n" + section[start:]
+    assert reviewer_scripts_problems(mutated) != []
+
+
+# The lens's planted contradictions, verbatim, each placed where it walked past: before the
+# governor subsection, outside the pinned span.
+_REVIEWER_SCRIPTS_PLANTS = [
+    "The scratch-directory rule above is a recommendation; a reviewer that begins in its placed "
+    "checkout is acceptable, and `git -C` arguments need no check.",
+    "**A reviewer's scripts may start in its own scratch directory.** Where the reviewer's work "
+    "needs the checkout, it begins there instead, and `git -C` arguments are checked when convenient.",
+]
+
+
+@pytest.mark.parametrize("plant", _REVIEWER_SCRIPTS_PLANTS)
+def test_a_contradiction_beside_the_reviewer_script_rule_is_caught(plant):
+    section = _multi_reviewer_section()
+    gov = section.index("\n### How many reviewers")
+    mutated = section[:gov] + "\n\n" + plant + "\n" + section[gov:]
+    assert reviewer_scripts_problems(mutated) != []

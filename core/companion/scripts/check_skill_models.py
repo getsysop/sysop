@@ -424,9 +424,38 @@ def main(argv: list[str] | None = None) -> int:
         print(f"      inline-legal: {', '.join(inline_models) or '(none)'}\n")
         for rel, pin, reason in violations:
             print(f"  {rel}:{pin.lineno}  {reason}")
-        print("\nFix: repoint the role in served_models.yml (and update served:), "
-              "or add the missing `<!-- sysop:model-roles … -->` marker.")
-        if any("INLINE pin" in reason for _, _, reason in violations):
+        # `Q-295`: this named served_models.yml, which every update replaces, so a consumer
+        # who followed it lost the edit and met the refusal again. The override file is the
+        # remedy whether or not it exists yet. Each line prints for its own reason only: a
+        # role remedy beside a literal failure sent the consumer to an edit that could not
+        # clear it (Phase 441's round, lens A). In Sysop's own source tree the mapping is the
+        # shipped file itself, and the default override path names nothing there.
+        reasons = [reason for _, _, reason in violations]
+        companion = config_path.resolve().parent.parent
+        source_tree = companion.name == "companion" and (companion.parent / "skills").is_dir()
+        fixes = []
+        if any(r.startswith(("role ", "undefined role")) for r in reasons):
+            if source_tree:
+                fixes.append(f"repoint the role in {_rel(config_path)} (and update served:) — "
+                             f"in a Sysop source tree it is the shipped mapping.")
+            else:
+                fixes.append(f"map the role under `roles:` in {_rel(local_path)} (create it if "
+                             f"absent). {_rel(config_path)} is Sysop's own mapping and every "
+                             f"update replaces it.")
+        if any(r.startswith("undefined role") for r in reasons):
+            fixes.append("An undefined role is named by a `sysop:role=` or `sysop:model-roles` "
+                         "marker: define it under `roles:`, or, in a skill of your own, remove "
+                         "the marker.")
+        if any(r.startswith("pin has no governing") for r in reasons):
+            fixes.append("A pin with no role sits in a file carrying a `sysop:model-roles` "
+                         "marker: give it a per-pin `<!-- sysop:role=… -->`, or, in a skill of "
+                         "your own, remove the file marker.")
+        if any(r.startswith("INLINE pin") for r in reasons):
+            fixes.append("A pin judged by its own literal is one Sysop's markers govern: a marker "
+                         "governs every pin on its line, and a file marker every pin in the file. "
+                         "Put a pin of your own on a line, in a file, that no Sysop marker governs.")
+        print("\nFix: " + "\n     ".join(fixes))
+        if any("governs an INLINE pin" in reason for reason in reasons):
             print("     For the INLINE failures above, adding the value to `served:` does "
                   "NOT help — `served:` is Sysop's own sunset allowlist, not the harness's "
                   "enum. Map the role to an alias (e.g. `reasoning: fable`), or extend "

@@ -132,3 +132,14 @@ def test_the_resolvers_skipped_count_is_a_count(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "skipped 2 file(s)" in err, "the count is a literal, not a count"
     assert "NOTES.md" in err and "OTHER.md" in err
+
+
+def test_an_undefined_role_names_the_override_file(tmp_path, capsys):
+    """`Q-295`'s class (Phase 441's round, lens B): the remedy named served_models.yml, which
+    every update replaces in a consumer."""
+    p = _skill(tmp_path, SKILL.replace("frontmatter=reasoning", "frontmatter=bogus"))
+    cfg = _cfg(tmp_path, CFG_DEFAULT)
+    assert rs.main(["--root", str(p.parent.parent), "--config", str(cfg), "--apply"]) == 1
+    err = capsys.readouterr().err
+    assert "define the role under `roles:` in .claude/served_models.local.yml" in err, err
+    assert "add the role to served_models.yml" not in err, err

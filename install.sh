@@ -3895,7 +3895,14 @@ resolve_skill_models() {
       1)
         # The one real verdict: the checker read everything it needed and the
         # mapping is wrong. Refusing leaves every pin at its working value.
-        note "⚠ model-role mapping REFUSED (invalid mapping) — your override was NOT applied; skills are at Sysop's shipped defaults, which are valid:"
+        # `Q-295`: this said "your override was NOT applied; skills are at Sysop's shipped
+        # defaults, which are valid" — false with no override, and false for the pin that
+        # failed when it is the consumer's own (`Q-700`). install_skills has already copied
+        # Sysop's skills with their shipped pins, so an override an earlier update applied
+        # is undone here (Phase 441's round, lens A); the checker's lines say what to fix.
+        local _ovr=""
+        [[ -f "$localcfg" ]] && _ovr=" — $(rel "$localcfg") was NOT applied"
+        note "⚠ model-role mapping REFUSED (invalid mapping)${_ovr} — Sysop's skills are at their shipped models, and an override an earlier update applied is undone until the check passes; it names each failing pin and where to fix it:"
         printf '%s\n' "$_chk" | sed 's/^/    /'
         record "model-roles: refused (invalid mapping; see warning above)"
         return 0
@@ -5640,6 +5647,45 @@ migrate_parked_dir() {
   # still /auto-build's scratch home, not a leftover.
 }
 
+# `Q-260`: an `--update` from a $SYSOP_SRC that still names an OLDER clone (a
+# re-clone left the variable at the old path) installs that clone's tree, exit 0,
+# with `was:`/`now:` as the only tell. `Q-034` covers the clone that has not moved;
+# this covers the one that moves the install backwards. Direction is knowable only
+# when the installed commit is in the clone read and one commit descends from the
+# other; otherwise a conditional sentence, because every forward update from a
+# re-rooted clone lands there too. Only a forward move is silent: a sibling branch or
+# a shallow clone's cut history reads as neither (Phase 441's round, lens A).
+report_update_direction() {
+  local old="$1" new="$2" src="${SYSOP_SRC_CLONE:-$REPO_ROOT}"
+  # Equal commits are ancestors of each other; `Q-034`'s branch reports them, not this.
+  [[ "$old" == "$new" ]] && return 0
+  if ! git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    note "the source read ($src) is not a git clone, so this update cannot tell forward from back"
+    return 0
+  fi
+  if git -C "$REPO_ROOT" rev-parse --verify -q "${old}^{commit}" >/dev/null 2>&1; then
+    git -C "$REPO_ROOT" merge-base --is-ancestor "$old" "$new" 2>/dev/null && return 0
+    if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$new" "$old" 2>/dev/null; then
+      note "neither ${old:0:12} (installed) nor ${new:0:12} descends from the other in the source read ($src):"
+      note "another branch, or a shallow clone's cut history, so this update cannot tell forward from back."
+      note "If the installed commit's changes are not in ${new:0:12}, they are gone from this install: check out"
+      note "the line you want there (or pass --ref ${old:0:12}) and re-run the update"
+      return 0
+    fi
+    if [[ -n "$REF_OVERRIDE" ]]; then
+      note "--ref $REF_OVERRIDE is older than the installed ${old:0:12}: this update moved Sysop back to it"
+      return 0
+    fi
+    note "⚠ this update moved Sysop BACKWARDS: ${new:0:12} is an ancestor of the installed ${old:0:12}"
+    note "source read: $src — it holds the installed commit, but its checkout is older"
+    note "check out a newer commit there (or pass --ref ${old:0:12}) and re-run the update"
+  else
+    note "the installed ${old:0:12} is not in the source read ($src), so this update cannot tell forward from back"
+    note "if that clone is OLDER than the one you last installed from (\$SYSOP_SRC still at the path before a"
+    note "re-clone), this update moved Sysop backwards: point \$SYSOP_SRC at the newer clone and re-run the update"
+  fi
+}
+
 # ─── main ────────────────────────────────────────────────────
 main() {
   hdr "Sysop installer"
@@ -6180,9 +6226,16 @@ main() {
       note "to managed scripts can't be detected. The working tree is CLEAN for every managed"
       note "path (nothing uncommitted to preserve), so this update proceeds and overwrites"
       note "in-scope scripts from upstream."
-      note "If you COMMITTED edits to sysop/scripts/*, they are overwritten here — recover them from"
-      note "git history, or re-run after fetching the ancestor by SHA (host/GC permitting):"
-      note "  git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} fetch origin $old_commit && bash sysop/scripts/sysop-update.sh"
+      # A non-git source cannot fetch, and is no clone (Phase 441's round, lens A).
+      if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+        note "If you COMMITTED edits to sysop/scripts/*, they are overwritten here — recover them from"
+        note "git history, or re-run after fetching the ancestor by SHA (host/GC permitting):"
+        note "  git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} fetch origin $old_commit && bash sysop/scripts/sysop-update.sh"
+        note "A clone OLDER than the one you last installed from lacks that commit too (\$SYSOP_SRC still at the"
+        note "path before a re-clone): then point \$SYSOP_SRC at the newer clone instead — this update installs the older tree."
+      else
+        note "If you COMMITTED edits to sysop/scripts/*, they are overwritten here — recover them from git history."
+      fi
     else
       # Phase 24b fail-closed: in --update without --force, abort if we can't
       # compute per-file ancestors for the in-scope preservation set AND the
@@ -6459,6 +6512,7 @@ main() {
     else
       say "  was:  ${old_commit:0:12}"
       say "  now:  ${new_commit:0:12}"
+      report_update_direction "$old_commit" "$new_commit"
     fi
     if [[ "$MIGRATION_MODE" -eq 1 ]]; then
       say ""

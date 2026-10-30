@@ -1007,6 +1007,43 @@
             </p>
           </div>
         </div>
+        <h3 style="margin-top:36px;">What each part is trusted with</h3>
+        <p>
+          The design rule under all of it: <strong>where an outcome can be checked, the workflow checks it rather than
+          taking the agent's word for it.</strong> An agent reports completion in the same confident register whether or
+          not the work ran. This page's own record has author batteries reporting every mutation killed while an
+          independent battery found survivors (§ I, <em>What that doesn't buy</em>); the close step reads a task's
+          written test decision back against its actual diff rather than accepting it; a claim lock is written by a
+          script rather than by an agent, so it survives a run that failed to follow the orchestration. So
+          responsibilities are divided by what can verify them, and a claim about work gets a second source wherever
+          one is possible.
+        </p>
+        <dl class="glossary">
+          <div class="entry">
+            <dt>Interpret and judge</dt>
+            <dd>A reasoning model: reading a requirement, planning the change, deciding what a finding means. Probabilistic by nature, so it is never the only witness to its own output.</dd>
+          </div>
+          <div class="entry">
+            <dt>Produce the change</dt>
+            <dd>A coding agent, in its own worktree, against the conventions that match the files it touches.</dd>
+          </div>
+          <div class="entry">
+            <dt>Critique</dt>
+            <dd>An independent agent in a fresh context — adversarial review of the plan before code, of the change before merge — and never the agent that wrote it.</dd>
+          </div>
+          <div class="entry">
+            <dt>Observe a mechanical condition</dt>
+            <dd>A deterministic tool: the check registry, the language server, the diff-coverage gate, lock files and lifecycle markers written by scripts, and the git state itself. The same answer on every run, no model in the loop.</dd>
+          </div>
+          <div class="entry">
+            <dt>Accept a risk</dt>
+            <dd>The human — at the merge gate, at every promotion of a finding to a convention, and on any decision that is consequential or hard to reverse.</dd>
+          </div>
+        </dl>
+        <p>
+          What that buys is not correctness: nothing here guarantees generated code is right. It is that the human's
+          attention is spent where no tool can stand in for it, and that every other claim has somewhere to be checked.
+        </p>
       </div>
     </div>
   </div>
@@ -3283,6 +3320,12 @@
           rather than a schedule. The same weeks taught the close to run with
           no one at the keyboard: its prepare, its resume and its land each ran a headless night under Claude
           Code&rsquo;s <code>dontAsk</code> mode with no permission denied.
+        </p>
+        <p>
+          <strong>Addendum (2026-10-30) &mdash; the split stops here.</strong> The open decision above was
+          taken on 2026-10-29: nothing more moves out of the runner. Its core is 286,503 bytes, with
+          twenty-four step files beside it, and the byte budget stays as a guard against the core growing back
+          rather than a target to shrink toward.
         </p>
       </div>
     </div>

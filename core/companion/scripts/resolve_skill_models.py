@@ -147,8 +147,11 @@ def main(argv: list[str] | None = None) -> int:
         print("error: skill model pins reference roles the config does not define:", file=sys.stderr)
         for rel, lineno, why in bad:
             print(f"  {rel}:{lineno}  {why}", file=sys.stderr)
-        print("  Fix the skill marker or add the role to served_models.yml. Nothing written.",
-              file=sys.stderr)
+        # `Q-295`'s class (Phase 441's round, lens B): in a consumer every update replaces
+        # served_models.yml, so a role added there would not last.
+        print("  Fix the skill marker, or define the role under `roles:` in "
+              ".claude/served_models.local.yml (every update replaces served_models.yml). "
+              "Nothing written.", file=sys.stderr)
         return 1
 
     total = 0

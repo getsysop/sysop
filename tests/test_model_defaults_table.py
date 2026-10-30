@@ -525,6 +525,13 @@ def test_a_refused_override_is_not_shown_as_in_effect(tmp_path):
     (root / ".claude" / "served_models.local.yml").write_text("roles:\n  executor: best\n")
     out = _install(root, "--update", "--no-arm-hooks")
     assert "REFUSED" in out, "fixture: the mapping was not refused"
+    # `Q-295`: the headline names the override it did not apply, and the Fix line sends the
+    # consumer back to that file, not to served_models.yml, which the update replaces.
+    assert "REFUSED (invalid mapping) — <target>/.claude/served_models.local.yml was NOT applied" in out
+    # Round 1, lens A: the copy step has already put the shipped pins back.
+    assert "Sysop's skills are at their shipped models" in out
+    assert "Fix: map the role under `roles:` in .claude/served_models.local.yml" in out
+    assert "repoint the role in served_models.yml" not in out
     block = _table_block(out)
     assert "served_models.local.yml" not in block.splitlines()[0]
     assert _rows(block)["executor"][0] == load_roles_config(CONFIG)[0]["executor"]
@@ -595,6 +602,12 @@ def test_a_refusal_with_no_local_file_says_nothing_about_one(tmp_path):
     out = _install(root, "--update", "--no-arm-hooks")
     assert "REFUSED" in out, "fixture: the gate did not refuse"
     assert "served_models.local.yml is NOT in effect" not in out
+    # `Q-295`: with no override and the consumer's own pin failing, the headline claimed
+    # "your override was NOT applied" and "shipped defaults, which are valid".
+    headline = next(ln for ln in out.splitlines() if "REFUSED" in ln)
+    assert "your override" not in headline and "which are valid" not in headline, headline
+    assert "NOT applied" not in headline, headline
+    assert "in a skill of your own, remove the marker" in out
     assert out.rstrip().splitlines()[-1].startswith("Models: .claude/served_models.yml")
 
 

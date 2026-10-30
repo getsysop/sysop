@@ -1232,8 +1232,12 @@ _claim_batch_locked() {
   # The claim commit itself, not HEAD: a post-commit hook that commits moves
   # HEAD past it.
   local claim_tip="" wt_head="" ff_why="" ff_first=""
+  # Read whole, then cut to the first line: piped to `head -n 1` under `pipefail`, `head`
+  # can close the pipe before `rev-list` has written, and the SIGPIPE emptied the claim
+  # commit — the worktree stayed behind (seen on CI's arm64 runner with two commits).
   if [[ -n "$pre_tip" ]]; then
-    claim_tip="$(git -C "$MAIN_ROOT" rev-list --reverse --first-parent "${pre_tip}..HEAD" 2>/dev/null | head -n 1)" || claim_tip=""
+    claim_tip="$(git -C "$MAIN_ROOT" rev-list --reverse --first-parent "${pre_tip}..HEAD" 2>/dev/null)" || claim_tip=""
+    claim_tip="${claim_tip%%$'\n'*}"
   fi
   wt_head="$(git -C "$WORKTREE_DIR" rev-parse --verify --quiet HEAD 2>/dev/null)" || wt_head=""
   if [[ -z "$claim_tip" || -z "$wt_head" ]]; then

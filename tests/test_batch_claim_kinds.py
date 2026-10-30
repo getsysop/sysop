@@ -1283,6 +1283,25 @@ class TestClaimOrder:
         wt = Path(os.path.abspath(repo / ".." / "repo-batch-7"))
         assert _git(wt, "log", "-1", "--format=%s").stdout.strip() == "docs: claim Batch 7"
 
+    def test_the_claim_commit_is_read_whole_under_pipefail(self, tmp_path):
+        """Phase 443: `rev-list … | head -n 1` under `pipefail` lost the claim commit when
+        `head` closed the pipe before `rev-list` finished writing (SIGPIPE, exit 141), so the
+        worktree stayed at `seed`. CI's arm64 runner hit it with two commits; a post-commit
+        hook that adds 3,000 makes the output outrun the pipe buffer every time."""
+        repo = _repo(tmp_path / "repo")
+        self._hook(repo, "post-commit",
+                   'if [ ! -f .extra ]; then : > .extra; '
+                   'tip=$(git rev-parse HEAD); br=$(git symbolic-ref HEAD); '
+                   'i=0; while [ $i -lt 3000 ]; do '
+                   'printf "commit %s\\ncommitter t <t@t> 0 +0000\\ndata 1\\nx\\n" "$br"; '
+                   '[ $i -eq 0 ] && printf "from %s\\n" "$tip"; printf "\\n"; i=$((i+1)); '
+                   'done | git fast-import --quiet; fi\nexit 0\n')
+        r = self._claim_7(repo)
+        assert r.returncode == 0, r.stderr
+        assert int(_git(repo, "rev-list", "--count", "HEAD").stdout) > 3000, "the hook added nothing"
+        wt = Path(os.path.abspath(repo / ".." / "repo-batch-7"))
+        assert _git(wt, "log", "-1", "--format=%s").stdout.strip() == "docs: claim Batch 7", r.stderr
+
     def test_the_rm_remedy_runs_as_printed_under_a_spaced_root(self, tmp_path):
         """`Q-714`'s round (lens A, A1): unquoted, the printed `rm -rf` removed
         other directories and left the one it named."""

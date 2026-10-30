@@ -1169,10 +1169,20 @@ def test_the_recipe_in_the_comment_is_the_one_the_test_runs():
 #:
 #: Kept as one alternation rather than two constants so a future spelling is added in one place
 #: and both arms of the test inherit it.
+#:
+#: Phase 438 (`Q-514`, on Wade's answer of 2026-10-29): the step id takes a hyphen, and the prose
+#: arm reads the bare citation too. Both arms read `Step [0-9a-z]+`, so `Step 4a-fix` and
+#: `Step 4-pre` matched nothing, and the two 4-pre pointers were spelled ``REFERENCE.md` § *X*`` with
+#: no `See` in front. Measured at `5a22f775`: renaming `## Step 4-pre — provenance` left the
+#: whole suite green (15,123 passed). `Q-514` as filed described the opposite defect: it took
+#: the hyphenated class from `tools/phase295_split.py`'s `POINTER` and attributed it to this arm.
 _PROVENANCE_POINTER = re.compile(
-    r"See REFERENCE\.md, section (Step [0-9a-z]+ — provenance)\."          # inside a fence
-    r"|See `REFERENCE\.md` § \*(Step [0-9a-z]+ — provenance)\*\."          # prose / blockquote
+    r"See REFERENCE\.md, section (Step [0-9a-z-]+ — provenance)\."         # inside a fence
+    r"|(?:See )?`REFERENCE\.md` § \*(Step [0-9a-z-]+ — provenance)\*"      # prose / blockquote
 )
+
+#: The heading roster the pointers resolve against, with the same step-id class as the pointers.
+_PROVENANCE_HEADING = re.compile(r"^## (Step [0-9a-z-]+ — provenance)\s*$", re.M)
 
 
 def _pointer_targets(text: str) -> list[str]:
@@ -1221,12 +1231,39 @@ def test_every_provenance_pointer_resolves_to_a_real_reference_heading():
         "no provenance pointers found in SKILL.md — either the thinning campaign's pointer shape "
         "changed or this guard has lost its population"
     )
-    headings = set(re.findall(r"^## (Step [0-9a-z]+ — provenance)\s*$", reference, re.M))
+    headings = set(_PROVENANCE_HEADING.findall(reference))
     dangling = sorted({p for p in pointers if p not in headings})
     assert not dangling, (
         f"{len(dangling)} provenance pointer target(s) do not exist as a `## <name>` heading in "
         f"REFERENCE.md: {dangling}. Known headings: {sorted(headings)}"
     )
+
+
+def test_a_renamed_hyphenated_provenance_heading_dangles():
+    """Phase 438 (`Q-514`): rename each hyphenated heading a pointer names, and the check sees it.
+
+    Measured before the fix: renaming `## Step 4-pre — provenance` in `REFERENCE.md` left the
+    whole suite green, because neither arm of `_PROVENANCE_POINTER` read a hyphenated id and the
+    two 4-pre pointers used a spelling with no `See`. This plants that rename for every hyphenated
+    target the live runner text names, against the live reference.
+    """
+    pointers = set(_pointer_targets(text_of(SKILL)))
+    reference = REFERENCE.read_text(encoding="utf-8")
+    hyphenated = sorted(p for p in pointers if "-" in p.split(" — ")[0])
+    assert hyphenated, (
+        "no provenance pointer names a hyphenated step id, so this plant has no population. "
+        "Either the runner stopped citing `Step 4-pre`/`Step 4a-fix` provenance, or the "
+        "pointer arms stopped reading a hyphen."
+    )
+    for target in hyphenated:
+        # Located the way the roster reads a heading (trailing whitespace allowed), so a heading
+        # the roster accepts is never refused here.
+        found = list(re.finditer(rf"^## {re.escape(target)}(?=\s*$)", reference, re.M))
+        assert len(found) == 1, f"`## {target}` is not exactly one heading in REFERENCE.md"
+        assert target in _PROVENANCE_HEADING.findall(reference), f"`## {target}` is not in the roster"
+        renamed = reference[:found[0].end()] + "s" + reference[found[0].end():]
+        headings = set(_PROVENANCE_HEADING.findall(renamed))
+        assert target not in headings, f"renaming `## {target}` left it in the roster"
 
 
 def test_both_provenance_pointer_spellings_have_a_live_population():
@@ -1273,6 +1310,10 @@ def test_both_provenance_pointer_spellings_have_a_live_population():
      "the fence arm's TARGET is `provenance`, not any word"),
     ("See `REFERENCE.md` § *Step 2d — rationale*.", 0, 0,
      "the prose arm's TARGET is `provenance`, not any word"),
+    # Phase 438 (`Q-514`): a hyphenated step id in each arm, and the bare citation without `See`.
+    ("See REFERENCE.md, section Step 4a-fix — provenance.", 1, 0, "a hyphenated id, fence form"),
+    ("See `REFERENCE.md` § *Step 4-pre — provenance*.", 0, 1, "a hyphenated id, prose form"),
+    ("`REFERENCE.md` § *Step 4-pre — provenance* has why.", 0, 1, "the bare citation, no `See`"),
 ])
 def test_each_provenance_pointer_arm_is_not_vacuous(sample, expect_fence, expect_prose, why):
     """The negative control the guard above shipped without — driving the REAL regex.
@@ -1312,6 +1353,9 @@ _POINTER_ARM_PINS = {
         ("See `REFERENCE.md` § Step 2d — provenance.", 0, 0),
         ("See REFERENCE.md, section Step 3b — rationale.", 0, 0),
         ("See `REFERENCE.md` § *Step 2d — rationale*.", 0, 0),
+        ("See REFERENCE.md, section Step 4a-fix — provenance.", 1, 0),
+        ("See `REFERENCE.md` § *Step 4-pre — provenance*.", 0, 1),
+        ("`REFERENCE.md` § *Step 4-pre — provenance* has why.", 0, 1),
     )),
 }
 
