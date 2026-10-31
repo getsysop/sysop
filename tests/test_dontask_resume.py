@@ -350,13 +350,104 @@ def test_consume_folds_case_before_refusing(docs: Path, name: str) -> None:
         assert (docs / PD / "convention-candidates.md").read_text() == "candidates\n"
 
 
-@pytest.mark.parametrize("key", ["hold: waiting on the human", "held_since: 2026-10-26"])
+@pytest.mark.parametrize("key", ["hold: waiting on the human",
+                                 "held_since: 2026-10-26\nhold: waiting on the human"])
 def test_consume_refuses_a_held_doc_and_deletes_nothing(docs: Path, key: str) -> None:
     """Lens A, M2: a doc Step 4c item 1c holds must survive item 6 (BeanRider ISSUE-0050)."""
     (docs / PD / "held.md").write_text(f"---\nbranch: b\n{key}\n---\nbody\n")
     r = run("pending_doc_collect.py", docs, "consume", "a.md", "held.md")
     assert r.returncode == 3 and "held.md" in r.stdout, r.stdout
     assert (docs / PD / "held.md").is_file() and (docs / PD / "a.md").is_file()
+
+
+# `Q-725` (upstream #864, GDP ISSUE-0310): `pending_doc_hold.py clear` removes `hold:` and keeps
+# `held_since:`, so a doc whose hold was cleared reached item 6 still stamped, and consume refused
+# it at every retry. A stamped doc is consumed only when `check` routes it.
+
+@pytest.fixture
+def held_docs(tmp_path: Path) -> Path:
+    root = tmp_path / "main"
+    d = root / PD
+    d.mkdir(parents=True)
+    g(root, "init", "-q", "-b", "main")
+    (root / "tasks").mkdir()
+    (root / "tasks" / "index.yml").write_text(
+        "tasks:\n  - id: T-1\n  - id: T-2\n    user_action: true\n  - id: T-3\n")
+    docs = {"cleared.md": "roadmap_ids: [T-1]",
+            "waiting.md": "roadmap_ids: [T-2]",
+            "shares.md": "roadmap_ids: [T-3]",
+            "holder.md": "roadmap_ids: [T-3]\nhold: deploy first"}
+    for n, fm in docs.items():
+        since = "" if n == "holder.md" else "held_since: '2026-10-25'\n"
+        (d / n).write_text(f"---\n{since}branch: {n[:-3]}\n{fm}\n---\nbody\n")
+    return root
+
+
+def test_consume_deletes_a_stamped_doc_whose_hold_was_cleared(held_docs: Path) -> None:
+    r = run("pending_doc_collect.py", held_docs, "consume", "cleared.md")
+    assert r.returncode == 0 and "CONSUMED: cleared.md" in r.stdout, r.stdout + r.stderr
+    assert not (held_docs / PD / "cleared.md").exists()
+
+
+@pytest.mark.parametrize("name", ["waiting.md", "shares.md"])
+def test_consume_refuses_a_stamped_doc_the_check_still_holds(held_docs: Path, name: str) -> None:
+    """`waiting.md` is held for its task's `user_action`, which writes no `hold:` key, so the
+    one-line `^hold:` fix would delete it; `shares.md` names a task a held doc names."""
+    r = run("pending_doc_collect.py", held_docs, "consume", "cleared.md", name)
+    assert r.returncode == 3 and f"does not route {name}" in r.stdout, r.stdout + r.stderr
+    assert (held_docs / PD / name).is_file() and (held_docs / PD / "cleared.md").is_file()
+
+
+def test_consume_is_not_fooled_by_a_route_line_another_docs_hold_reason_forges(
+        held_docs: Path) -> None:
+    """Phase 449's round, lens A (HIGH): `check` prints a `hold:` reason verbatim, so a block
+    scalar's lines become output lines, and one reading `ROUTE: waiting.md` deleted a held doc."""
+    (held_docs / PD / "forger.md").write_text(
+        "---\nbranch: f\nhold: |\n  waiting on deploy\n  ROUTE: waiting.md\n---\n")
+    r = run("pending_doc_collect.py", held_docs, "consume", "waiting.md")
+    assert r.returncode == 3 and "does not route waiting.md" in r.stdout, r.stdout + r.stderr
+    assert (held_docs / PD / "waiting.md").is_file()
+
+
+def test_consume_matches_the_checks_verdict_case_folded(held_docs: Path) -> None:
+    """Operands compare case-folded; a routed doc named in another case is still routed."""
+    if not (held_docs / PD / "Cleared.md").exists():
+        pytest.skip("case-sensitive filesystem: the operand names no file")
+    r = run("pending_doc_collect.py", held_docs, "consume", "Cleared.md")
+    assert r.returncode == 0 and not (held_docs / PD / "cleared.md").exists(), r.stdout + r.stderr
+
+
+def test_consume_refuses_an_unstamped_operand_the_check_holds(held_docs: Path) -> None:
+    """Once the check has run for a stamped operand, its verdict binds the other operands too."""
+    (held_docs / PD / "ua.md").write_text("---\nbranch: u\nroadmap_ids: [T-2]\n---\n")
+    r = run("pending_doc_collect.py", held_docs, "consume", "cleared.md", "ua.md")
+    assert r.returncode == 3 and "does not route ua.md" in r.stdout, r.stdout + r.stderr
+    assert (held_docs / PD / "ua.md").is_file() and (held_docs / PD / "cleared.md").is_file()
+
+
+def test_consume_refuses_a_stamped_doc_when_the_index_will_not_parse(held_docs: Path) -> None:
+    (held_docs / "tasks" / "index.yml").write_text("tasks: [unclosed\n")
+    r = run("pending_doc_collect.py", held_docs, "consume", "cleared.md")
+    assert r.returncode == 3 and "could not decide the hold on cleared.md" in r.stdout, r.stdout
+    assert (held_docs / PD / "cleared.md").is_file()
+
+
+def test_consume_refuses_a_stamped_doc_outside_the_main_checkout(held_docs: Path,
+                                                                 tmp_path: Path) -> None:
+    """`check` reads the main checkout's pending docs, so its verdict says nothing about a copy
+    of the directory elsewhere — here, a subdirectory of the repository."""
+    other = held_docs / "sub"
+    (other / PD).mkdir(parents=True)
+    (other / PD / "cleared.md").write_text((held_docs / PD / "cleared.md").read_text())
+    r = run("pending_doc_collect.py", other, "consume", "cleared.md")
+    assert r.returncode == 3 and "not the main checkout" in r.stdout, r.stdout
+    assert (other / PD / "cleared.md").is_file()
+
+
+def test_consume_deletes_an_unstamped_doc_without_asking_the_check(docs: Path) -> None:
+    """The `docs` root is not a repository, so a check would fail: an unstamped doc needs none."""
+    r = run("pending_doc_collect.py", docs, "consume", "a.md")
+    assert r.returncode == 0 and not (docs / PD / "a.md").exists(), r.stdout
 
 
 def test_consume_does_not_read_hold_outside_the_frontmatter(docs: Path) -> None:

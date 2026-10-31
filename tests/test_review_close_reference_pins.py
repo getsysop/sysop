@@ -40,7 +40,8 @@ from pathlib import Path as _P
 sys.path.insert(0, str(_P(__file__).resolve().parent))
 
 from _case_pins import case_pin_problems  # noqa: E402
-from _prose_guard_helpers import anchor  # noqa: E402
+from _prose_guard_helpers import _fence_state, anchor, rewrapped  # noqa: E402
+import collections
 import os
 import shlex
 import subprocess
@@ -49,7 +50,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from skill_runner_text import text_of
+from skill_runner_text import SKILLS_DIR, skill_text, text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL = REPO_ROOT / "core/skills/review-close/SKILL.md"
@@ -1154,218 +1155,381 @@ def test_the_recipe_in_the_comment_is_the_one_the_test_runs():
     )
 
 
-# --- Phase 295's round: twelve shipped pointers into a heading nothing pinned ------------------
+# --- Every `REFERENCE.md` citation names one heading (`Q-719`, Phase 444) ---------------------
 
-#: BOTH spellings, and Phase 298's round is why. That phase added two MARKDOWN forms of the
-#: pointer line — `#` opens a heading outside a fence, so the comment form is unusable in a
-#: `prose` or `blockquote` block — and this regex saw only the comment form. Measured at that
-#: phase's own commit: 14 comment-spelling pointers seen, **8 markdown-spelling pointers not
-#: seen**, and retargeting all eight at a heading that does not exist left this guard green.
+#: The three spellings a runner uses to cite its `REFERENCE.md`, one named group each.
 #:
-#: § 4c was covered only by coincidence, because two of its pointers happen to be comment-form.
-#: The next section is not: every one of § 2b's twelve candidates is `blockquote`, `prose` or
-#: `listitem`, so every § 2b pointer will be markdown-form and `## Step 2b — provenance` would
-#: have been pinned by nothing — this guard's own filed defect, reconstructed one section later.
+#: This replaces Phase 295's provenance-pointer check, which collected only targets spelled
+#: `Step <id> — provenance` (Phase 298 added the prose spelling, Phase 438's `Q-514` the
+#: hyphenated id and the bare citation). Measured by Phase 438's round: five live citations name
+#: other headings (*A check that never started* among them) and four were in no test module, so
+#: renaming one reddened nothing; `## Step 6 and 4d-1 — provenance` was a heading no pointer could
+#: name; and a typo of `provenance` was never collected, so it passed. Any target is collected now.
 #:
-#: Kept as one alternation rather than two constants so a future spelling is added in one place
-#: and both arms of the test inherit it.
-#:
-#: Phase 438 (`Q-514`, on Wade's answer of 2026-10-29): the step id takes a hyphen, and the prose
-#: arm reads the bare citation too. Both arms read `Step [0-9a-z]+`, so `Step 4a-fix` and
-#: `Step 4-pre` matched nothing, and the two 4-pre pointers were spelled ``REFERENCE.md` § *X*`` with
-#: no `See` in front. Measured at `5a22f775`: renaming `## Step 4-pre — provenance` left the
-#: whole suite green (15,123 passed). `Q-514` as filed described the opposite defect: it took
-#: the hyphenated class from `tools/phase295_split.py`'s `POINTER` and attributed it to this arm.
-_PROVENANCE_POINTER = re.compile(
-    r"See REFERENCE\.md, section (Step [0-9a-z-]+ — provenance)\."         # inside a fence
-    r"|(?:See )?`REFERENCE\.md` § \*(Step [0-9a-z-]+ — provenance)\*"      # prose / blockquote
+#: `fence` is the comment form inside a fenced block, where `` ` `` would be literal and `#` opens
+#: no heading. `prose` is the markdown form, with or without `See`; its target may hold backticks
+#: (*Squash provenance: why each `pr` close records its PR head*) but never a `*`. `code` cites a
+#: heading that is itself code, `` ## `RC-3-1` ``, so its target keeps the backticks. Matched over
+#: `_flat_runner` text, so a rewrap never separates a citation from its target (`Q-495`).
+_CITATION = re.compile(
+    r"See REFERENCE\.md, section (?P<fence>[^\n]+?)\.(?=\s|$)"
+    r"|`REFERENCE\.md` § \*(?P<prose>[^*]{1,200})\*"
+    r"|`REFERENCE\.md` § (?P<code>`[^`]{1,200}`)"
 )
 
-#: The heading roster the pointers resolve against, with the same step-id class as the pointers.
-_PROVENANCE_HEADING = re.compile(r"^## (Step [0-9a-z-]+ — provenance)\s*$", re.M)
+#: A second target chained onto a citation: `` § `RC-3-1` through § `RC-3-8` ``. Phase 444's round
+#: found the second half of such a chain neither collected nor screened. Same groups as `_CITATION`.
+_CONTINUATION = re.compile(
+    r"(?:,| and| or| through)(?: and)? § "
+    r"(?:\*(?P<prose>[^*]{1,200})\*|(?P<code>`[^`]{1,200}`))"
+)
+
+#: A level-2 or level-3 heading. `####` is not a citation target, and `## ` inside a fence is code.
+_REFERENCE_HEADING = re.compile(r"(?:##|###) (\S.*?)\s*$")
+
+#: An HTML comment hides a heading from every reader, so a heading inside one does not exist.
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+
+#: The one way a runner names its `REFERENCE.md` without citing a section — the opening's pointer
+#: for an editor. Every other mention must be a citation, or it is a near-miss spelling.
+_NON_CITATION = "`REFERENCE.md`, beside this file, carries"
+
+#: A `.md` file name, for the near-miss screen, in any case. Measured at Phase 444: across every
+#: skill's runner text, no file name within edit distance 4 of `reference.md` is anything but
+#: `REFERENCE.md`.
+_MD_NAME = re.compile(r"[A-Za-z0-9_.-]+\.md\b", re.I)
+
+#: The skills with a `REFERENCE.md`. Their runners cite it; the others have nothing to cite.
+_REFERENCE_SKILLS = sorted(p.parent.name for p in SKILLS_DIR.glob("*/REFERENCE.md"))
+
+#: The skills whose runners cite their reference today, each a population floor.
+_CITING_SKILLS = ("claim-task", "review-close")
 
 
-def _pointer_targets(text: str) -> list[str]:
-    """Every provenance pointer's target heading, from either spelling.
+def _runner(skill: str) -> str:
+    """The text a skill's runner reads: `SKILL.md` with its step files spliced in.
 
-    `findall` over an alternation with two groups yields a tuple per match with one empty half;
-    collapsing them here keeps the call sites reading as they did when there was one spelling.
+    Every guard below reads through here. Six of `/review-close`'s citations live in step files,
+    and `test_the_runner_text_includes_the_step_files` holds that this reaches them.
     """
-    return [a or b for a, b in _PROVENANCE_POINTER.findall(text)]
+    return skill_text(SKILLS_DIR / skill)
 
 
-def _pointer_targets_by_arm(text: str) -> tuple[list[str], list[str]]:
-    """`(fence-form targets, prose-form targets)` — the two spellings, kept apart.
+def _reference(skill: str) -> str:
+    return (SKILLS_DIR / skill / "REFERENCE.md").read_text(encoding="utf-8")
 
-    `Q-518`, Phase 301. `_pointer_targets` collapses the alternation, which is right for the
-    dangling check and wrong for asking whether both arms are alive. The guard below asserted
-    only `assert pointers`, and that is satisfied by either arm alone: measured at Phase 301's
-    open, the fence form carries 14 pointers and the prose form 20, so neutering the prose arm
-    left 14 and the test green while § 2b's six and § 2d's six lost destination checking
-    entirely. An alternation with one dead branch is two guards where one has quietly stopped.
+
+def _flat_runner(text: str) -> str:
+    """Line breaks, a blockquote's continuation `>` and runs of blanks read as one space.
+
+    A soft line break renders as a space, so a citation rewrapped across lines, or across a
+    blockquote's lines, is the same citation (`Q-495`).
     """
-    fence, prose = [], []
-    for a, b in _PROVENANCE_POINTER.findall(text):
-        (fence if a else prose).append(a or b)
-    return fence, prose
+    text = re.sub(r"[ \t]*\n[ \t]*(?:>[ \t]*)*", " ", text)
+    return re.sub(r"[ \t ]+", " ", text)
 
 
-def test_every_provenance_pointer_resolves_to_a_real_reference_heading():
-    """A `See REFERENCE.md, section <X>` pointer must name a heading that exists.
+def _hit(m: re.Match) -> tuple[str, str, int, int]:
+    arm = m.lastgroup
+    assert arm, m  # exactly one named group takes part in every match of both regexes
+    return arm, m.group(arm), m.start(), m.end()
 
-    Filed by Phase 295's round. That phase shipped twelve of these pointers into
-    `SKILL.md`, and `grep -rn "See REFERENCE.md, section" tests/` returned ZERO — the roster
-    parser matches only ``^## `RC-…` ``, so `## Step 3b — provenance` was pinned by nothing.
-    Renaming or deleting that heading would have dangled all twelve silently, which is § 7.6's
-    "no empty sections" rule having no actuator.
 
-    This is the cheap half — that the destination exists. It deliberately does NOT claim the
-    section says anything about the block that points at it; all twelve pointers in that phase
-    are identical and name one multi-subsection heading, so no pointer identifies its own
-    referent. That is recorded as known debt rather than asserted here.
+def _citation_spans(text: str) -> list[tuple[str, str, int, int]]:
+    """`(spelling, target, start, end)` for every citation and every chained target, over flat text."""
+    flat = _flat_runner(text)
+    out = []
+    for m in _CITATION.finditer(flat):
+        out.append(_hit(m))
+        end = m.end()
+        while (c := _CONTINUATION.match(flat, end)):
+            out.append(_hit(c))
+            end = c.end()
+    return out
+
+
+def _citations(text: str) -> list[tuple[str, str]]:
+    """`(spelling, target)` for every citation, fenced or not: the `fence` spelling lives in one."""
+    return [(arm, target) for arm, target, _, _ in _citation_spans(text)]
+
+
+def _reference_headings(reference: str) -> collections.Counter:
+    """Every `##`/`###` heading outside a fence and a comment, counted: a cited one must occur once."""
+    reference = _HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), reference)
+    lines = reference.splitlines()
+    found = collections.Counter()
+    for i, fenced in _fence_state(lines):
+        m = None if fenced else _REFERENCE_HEADING.fullmatch(lines[i])
+        if m:
+            found[re.sub(r"\s+", " ", m.group(1))] += 1
+    return found
+
+
+def dangling_citations(runner: str, reference: str) -> list[str]:
+    """Each cited target that names no heading, or more than one."""
+    headings = _reference_headings(reference)
+    return [f"§ *{t}* names {headings[t]} heading(s) in REFERENCE.md, not one"
+            for t in sorted({t for _, t in _citations(runner)}) if headings[t] != 1]
+
+
+def _distance(a: str, b: str) -> int:
+    row = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        prev, row[0] = row[0], i
+        for j, cb in enumerate(b, 1):
+            prev, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, prev + (ca != cb))
+    return row[-1]
+
+
+def near_miss_mentions(runner: str) -> list[str]:
+    """Every mention of `REFERENCE.md` that is neither a citation nor `_NON_CITATION`.
+
+    A citation spelt any other way — in bold, without backticks, without the emphasis, without the
+    fence form's comma — is not collected, so `dangling_citations` cannot judge it. This is the
+    screen that keeps those from passing silently. A misspelt or miscased file name is caught by
+    distance, since it is not the literal the citation spellings match.
     """
-    skill = text_of(SKILL)
-    reference = REFERENCE.read_text(encoding="utf-8")
-    pointers = _pointer_targets(skill)
-    assert pointers, (
-        "no provenance pointers found in SKILL.md — either the thinning campaign's pointer shape "
-        "changed or this guard has lost its population"
+    flat = _flat_runner(runner)
+    cited = [(a, b) for _, _, a, b in _citation_spans(runner)]
+    problems = []
+    for m in _MD_NAME.finditer(flat):
+        name, at = m.group(0), m.start()
+        if _distance(name.lower(), "reference.md") > 2:
+            continue
+        if name == "REFERENCE.md" and (any(a <= at < b for a, b in cited)
+                                       or flat.startswith(_NON_CITATION, at - 1)):
+            continue
+        problems.append(f"not a citation spelling: {flat[max(0, at - 60):at + 80]!r}")
+    return problems
+
+
+def test_the_reference_skills_are_the_ones_this_guard_was_built_for():
+    """The parametrized guards below take their population from a glob; this holds its floor."""
+    assert "review-close" in _REFERENCE_SKILLS and len(_REFERENCE_SKILLS) >= 4, _REFERENCE_SKILLS
+
+
+@pytest.mark.parametrize("skill", _CITING_SKILLS)
+def test_each_citing_skill_still_cites_its_reference(skill):
+    assert _citations(_runner(skill)), (
+        f"no `REFERENCE.md` citation found in {skill}'s runner text: either it stopped citing its "
+        f"reference (drop it from `_CITING_SKILLS` deliberately) or the collector stopped matching"
     )
-    headings = set(_PROVENANCE_HEADING.findall(reference))
-    dangling = sorted({p for p in pointers if p not in headings})
-    assert not dangling, (
-        f"{len(dangling)} provenance pointer target(s) do not exist as a `## <name>` heading in "
-        f"REFERENCE.md: {dangling}. Known headings: {sorted(headings)}"
-    )
 
 
-def test_a_renamed_hyphenated_provenance_heading_dangles():
-    """Phase 438 (`Q-514`): rename each hyphenated heading a pointer names, and the check sees it.
+def test_the_runner_text_includes_the_step_files():
+    """The guards read the spliced runner, not `SKILL.md` alone (Phase 444's round, F-2).
 
-    Measured before the fix: renaming `## Step 4-pre — provenance` in `REFERENCE.md` left the
-    whole suite green, because neither arm of `_PROVENANCE_POINTER` read a hyphenated id and the
-    two 4-pre pointers used a spelling with no `See`. This plants that rename for every hyphenated
-    target the live runner text names, against the live reference.
+    Read through `SKILL.md` alone, they stayed green over a `provenence` typo planted in a step
+    file, because three of `/review-close`'s cited headings are cited from step files only.
     """
-    pointers = set(_pointer_targets(text_of(SKILL)))
-    reference = REFERENCE.read_text(encoding="utf-8")
-    hyphenated = sorted(p for p in pointers if "-" in p.split(" — ")[0])
-    assert hyphenated, (
-        "no provenance pointer names a hyphenated step id, so this plant has no population. "
-        "Either the runner stopped citing `Step 4-pre`/`Step 4a-fix` provenance, or the "
-        "pointer arms stopped reading a hyphen."
+    spliced = {t for _, t in _citations(_runner("review-close"))}
+    core = {t for _, t in _citations((SKILLS_DIR / "review-close" / "SKILL.md").read_text())}
+    assert spliced - core, (
+        "every heading /review-close cites is cited from SKILL.md itself, so nothing shows the "
+        "guards read the step files; either the step files stopped citing, or `_runner` stopped "
+        "splicing them"
     )
-    for target in hyphenated:
-        # Located the way the roster reads a heading (trailing whitespace allowed), so a heading
-        # the roster accepts is never refused here.
-        found = list(re.finditer(rf"^## {re.escape(target)}(?=\s*$)", reference, re.M))
-        assert len(found) == 1, f"`## {target}` is not exactly one heading in REFERENCE.md"
-        assert target in _PROVENANCE_HEADING.findall(reference), f"`## {target}` is not in the roster"
+
+
+@pytest.mark.parametrize("skill", _REFERENCE_SKILLS)
+def test_every_reference_citation_names_one_heading(skill):
+    """Each `REFERENCE.md` § *X* in the runner text names exactly one `##`/`###` heading.
+
+    Only the existence of the destination: no citation is checked against what the section says.
+    A citation into ANOTHER skill's reference, or from a shipped script, is out of reach
+    (`/auto-build` cites `/claim-task`'s with *its* `REFERENCE.md`, and has no reference of its
+    own to judge it against).
+    """
+    dangling = dangling_citations(_runner(skill), _reference(skill))
+    assert not dangling, f"{skill}: " + "; ".join(dangling)
+
+
+@pytest.mark.parametrize("skill", _REFERENCE_SKILLS)
+def test_every_reference_mention_is_a_citation_spelling(skill):
+    problems = near_miss_mentions(_runner(skill))
+    assert not problems, (
+        f"{skill}: a `REFERENCE.md` mention no citation spelling collects, so nothing checks "
+        f"where it points. Spell it as one of `_CITATION`'s arms, or, if it cites no section, "
+        f"add the phrase deliberately beside `_NON_CITATION`:\n" + "\n".join(problems)
+    )
+
+
+def test_review_close_has_a_live_population_per_spelling():
+    """Each arm separately, because a check satisfied by any arm cannot see one go dark (`Q-518`).
+
+    Asserted non-empty per arm, not as counts: the counts move whenever a section moves, and a
+    guard a legitimate commit must edit is a guard that gets edited to pass. The arms are read off
+    the regex, so a fourth arm is held here the moment it is added.
+    """
+    seen = collections.Counter(spelling for spelling, _ in _citations(_runner("review-close")))
+    missing = [arm for arm in _CITATION.groupindex if not seen[arm]]
+    assert not missing, (
+        f"no `{missing}` citations in /review-close's runner text. Either that spelling left the "
+        f"runner — retire its arm from `_CITATION` deliberately — or the arm stopped matching."
+    )
+
+
+@pytest.mark.parametrize("skill", _CITING_SKILLS)
+def test_renaming_any_cited_heading_dangles(skill):
+    """Rename each heading a citation names, one at a time, and the check reports it.
+
+    Before Phase 444 only provenance headings were collected, so renaming *A check that never
+    started* left the suite green. This plants that rename for every distinct cited target.
+    """
+    runner, reference = _runner(skill), _reference(skill)
+    for target in sorted({t for _, t in _citations(runner)}):
+        found = list(re.finditer(rf"^#{{2,3}} {re.escape(target)}(?=\s*$)", reference, re.M))
+        assert len(found) == 1, f"{skill}: `{target}` is not exactly one heading"
         renamed = reference[:found[0].end()] + "s" + reference[found[0].end():]
-        headings = set(_PROVENANCE_HEADING.findall(renamed))
-        assert target not in headings, f"renaming `## {target}` left it in the roster"
+        assert any(target in p for p in dangling_citations(runner, renamed)), (
+            f"{skill}: renaming the heading `{target}` left every citation of it resolving"
+        )
 
 
-def test_both_provenance_pointer_spellings_have_a_live_population():
-    """Each arm of the alternation separately, because `assert pointers` covers neither.
+@pytest.mark.parametrize("skill", _CITING_SKILLS)
+@pytest.mark.parametrize("width", [1, 72])
+def test_a_rewrap_collects_the_same_citations(skill, width):
+    """A rendering-identical rewrap of the runner text changes nothing this guard reads (`Q-495`).
 
-    `Q-518`, Phase 301, and this is the fourth of the four sibling arms the filing lists as
-    having no control at all. The guard above is satisfied by either spelling alone. Measured
-    at this phase's open: fence form 14 pointers (`Step 3b` ×12, `Step 4c` ×2), prose form 20
-    (`Step 2b` ×6, `Step 2d` ×6, `Step 4c` ×8). Delete the prose branch of the regex and 14
-    pointers remain, so the guard passes while every § 2b and § 2d pointer — twelve of them —
-    stops being checked against anything.
-
-    Asserted as "non-empty per arm" rather than as counts. The counts move every time the
-    campaign takes a section, and a guard a legitimate commit must edit is a guard that gets
-    edited to pass — the lesson `test_a_wrong_published_digit_is_reported` records upstream.
+    Phase 444's round measured the first cut over `/review-close` rewrapped at width 72: 24
+    citations collected and 7 screened, each with a message telling the editor to respell it.
     """
-    fence, prose = _pointer_targets_by_arm(text_of(SKILL))
-    assert fence, (
-        "no FENCE-form provenance pointers (`See REFERENCE.md, section <X>.`) found in "
-        "SKILL.md. Either that spelling has left the file — in which case retire the branch "
-        "from `_PROVENANCE_POINTER` deliberately — or the branch has stopped matching."
-    )
-    assert prose, (
-        "no PROSE-form provenance pointers (``See `REFERENCE.md` § *<X>*.``) found in "
-        "SKILL.md. This is the arm that covers every § 2b and § 2d pointer, and the collapsed "
-        "check above cannot see it go dark."
-    )
+    text = _runner(skill)
+    wrapped = rewrapped(text, width)
+    assert collections.Counter(_citations(wrapped)) == collections.Counter(_citations(text))
+    assert not near_miss_mentions(wrapped)
 
 
-@pytest.mark.parametrize("sample,expect_fence,expect_prose,why", [
-    ("See REFERENCE.md, section Step 3b — provenance.", 1, 0, "fence form alone"),
-    ("See `REFERENCE.md` § *Step 2d — provenance*.", 0, 1, "prose form alone"),
-    ("See REFERENCE.md, section Step 3b — provenance.\n"
-     "See `REFERENCE.md` § *Step 2d — provenance*.", 1, 1, "both forms in one body"),
-    ("See REFERENCE.md section Step 3b — provenance.", 0, 0, "a near-miss: the comma is load-bearing"),
-    ("See `REFERENCE.md` § Step 2d — provenance.", 0, 0, "a near-miss: the emphasis is load-bearing"),
-    # THE TARGET, not just the punctuation — `Q-518`, Phase 301's round (MP4/MP5). The four rows
-    # above pin the comma and the emphasis and say nothing about the heading NAME, so widening
-    # `(Step [0-9a-z]+ — provenance)` to `(Step [0-9a-z]+ — [a-z]+)` matched every sample
-    # identically and left the suite green — the arm would then collect any `Step X — <word>`
-    # pointer as a provenance pointer and the dangling check would judge it against the wrong
-    # roster. These two rows fail the moment the target stops being the literal word.
-    ("See REFERENCE.md, section Step 3b — rationale.", 0, 0,
-     "the fence arm's TARGET is `provenance`, not any word"),
-    ("See `REFERENCE.md` § *Step 2d — rationale*.", 0, 0,
-     "the prose arm's TARGET is `provenance`, not any word"),
-    # Phase 438 (`Q-514`): a hyphenated step id in each arm, and the bare citation without `See`.
-    ("See REFERENCE.md, section Step 4a-fix — provenance.", 1, 0, "a hyphenated id, fence form"),
-    ("See `REFERENCE.md` § *Step 4-pre — provenance*.", 0, 1, "a hyphenated id, prose form"),
-    ("`REFERENCE.md` § *Step 4-pre — provenance* has why.", 0, 1, "the bare citation, no `See`"),
+def test_the_fence_target_stops_at_its_own_period():
+    """The fence arm's target is lazy and ends at a period before a blank (Phase 444's round, F-8).
+
+    A greedy target, or one that ends at any period, collects the same COUNT on every row of the
+    control below, so only the target itself can tell.
+    """
+    assert _citations("See REFERENCE.md, section Step 3b — provenance. More text. And more.") == [
+        ("fence", "Step 3b — provenance")]
+    assert _citations("# See REFERENCE.md, section Why `shutil.rmtree` must not raise.") == [
+        ("fence", "Why `shutil.rmtree` must not raise")]
+
+
+@pytest.mark.parametrize("sample,collected,screened,why", [
+    ("See REFERENCE.md, section Step 3b — provenance.", 1, 0, "the fence spelling"),
+    ("See `REFERENCE.md` § *A check that never started*.", 1, 0, "prose, a non-provenance heading"),
+    ("`REFERENCE.md` § *Step 4-pre — provenance* has why.", 1, 0, "prose, the bare citation"),
+    ("read `REFERENCE.md` § `RC-3-1`", 1, 0, "the code spelling"),
+    ("`REFERENCE.md` § *Squash provenance: why each `pr` close records its PR head*.", 1, 0,
+     "a target holding backticks"),
+    ("`REFERENCE.md`, beside this file, carries the", 0, 0, "the one non-citation"),
+    # Rewraps render identically and must collect identically (`Q-495`, Phase 444's round F-5).
+    ("See `REFERENCE.md` § *Step 2b —\nprovenance*.", 1, 0, "an emphasis rewrapped across lines"),
+    ("See `REFERENCE.md`\n§ *Step 2b — provenance*.", 1, 0, "a break before the section sign"),
+    ("> See `REFERENCE.md` § *Step 2b —\n> provenance*.", 1, 0, "a blockquote's continuation"),
+    ("See `REFERENCE.md` § *Step 2b — provenance*.", 1, 0, "a no-break space"),
+    ("`REFERENCE.md`, beside this file,\ncarries the", 0, 0, "the non-citation rewrapped"),
+    # Chains: every target is collected (Phase 444's round, F-3).
+    ("read `REFERENCE.md` § `RC-3-1`\n> through § `RC-3-8`.", 2, 0, "a chain across a blockquote"),
+    ("`REFERENCE.md` § *A* and § *B*.", 2, 0, "a chain joined by `and`"),
+    # Phase 438's round's mutations P3 and P4, and the two punctuation near-misses the old
+    # control held: none of these is collected, so each must be screened.
+    ("See `REFERENCE.md` § **Step 2b — provenance**.", 0, 1, "P3: bold emphasis"),
+    ("See REFERENCE.md § *Step 2b — provenance*.", 0, 1, "P4: no backticks"),
+    ("See `REFERENCE.md` § Step 2d — provenance.", 0, 1, "no emphasis"),
+    ("See REFERENCE.md section Step 3b — provenance.", 0, 1, "the fence spelling without its comma"),
+    ("See `REFRENCE.md` § *Step 2b — provenance*.", 0, 1, "a misspelt file name"),
+    ("See `reference.md` § *Step 2b — provenance*.", 0, 1, "a miscased file name"),
+    ("See `REFERENCE.MD` § *Step 2b — provenance*.", 0, 1, "a miscased extension"),
 ])
-def test_each_provenance_pointer_arm_is_not_vacuous(sample, expect_fence, expect_prose, why):
-    """The negative control the guard above shipped without — driving the REAL regex.
+def test_each_citation_spelling_is_collected_or_screened(sample, collected, screened, why):
+    """The collector and the screen together, driven by the real regexes.
 
-    `Q-518`, Phase 301. `_PROVENANCE_POINTER` had no control of any kind: nothing fed it a
-    sample, so deleting either branch was invisible except through a live-tree population that
-    the other branch kept non-empty. Each row here fixes one branch's behaviour independently,
-    so removing a branch reddens the rows that need it and leaves the others alone — which is
-    what makes this a control rather than a restatement.
-
-    The two near-miss rows are the other half: an arm that matches MORE than its spelling is as
-    broken as one that matches less, and a control made only of positive cases cannot tell.
+    A spelling is either collected (and then judged by `dangling_citations`) or screened; a row
+    where both are zero is a mention neither sees, which is the defect `Q-719` filed.
     """
-    fence, prose = _pointer_targets_by_arm(sample)
-    assert (len(fence), len(prose)) == (expect_fence, expect_prose), (
-        f"{why}: expected {expect_fence} fence-form and {expect_prose} prose-form pointer(s), "
-        f"got {len(fence)} and {len(prose)} — {sample!r}"
-    )
+    got = (len(_citations(sample)), len(near_miss_mentions(sample)))
+    assert got == (collected, screened), f"{why}: expected {(collected, screened)}, got {got}"
 
 
-#: This module's pointer-arm control, pinned by content — `Q-518`, Phase 301, added by its round.
-#:
-#: The phase shipped `test_each_provenance_pointer_arm_is_not_vacuous` into a module with no
-#: emptying guard and no pin, and the round then ran the compound shape `Q-518` describes: delete
-#: the two NEAR-MISS rows, then apply the phase's own battery mutation M13 (make the `*` emphasis
-#: optional in the prose branch). The suite stayed green — 196 passed. M13 died in the author's
-#: battery ONLY because of a row that nothing pinned.
-#:
-#: The two near-miss rows are the load-bearing ones: without them the arm may match MORE than its
-#: spelling and no positive case can tell. Columns 0-2 are the fixture and its expectation; the
-#: `why` prose is free.
-_POINTER_ARM_PINS = {
-    "test_each_provenance_pointer_arm_is_not_vacuous": ((0, 1, 2), (
+_FIXTURE_REFERENCE = """\
+## Step 2b — provenance
+### A check that never started
+## Step 6 and 4d-1 — provenance
+## Step 4a's shared-append resolver — provenance
+## `RC-3-1`
+### What was ruled, and by whom
+### What was ruled, and by whom
+#### Too deep to cite
+```
+## A heading in a fence
+```
+<!--
+## A heading in a comment
+-->
+"""
+
+
+@pytest.mark.parametrize("citation,dangles,why", [
+    ("§ *Step 2b — provenance*", 0, "a level-2 heading"),
+    ("§ *A check that never started*", 0, "a level-3 heading"),
+    ("§ *Step 6 and 4d-1 — provenance*", 0, "P9: a heading the step-id class could not name"),
+    ("§ *Step 4a's shared-append resolver — provenance*", 0, "P9: the other one"),
+    ("§ `RC-3-1`", 0, "a code heading, backticks kept on both sides"),
+    ("§ *Step 2b – provenance*", 1, "P5: an en dash"),
+    ("§ *Step 2b — provenence*", 1, "P6: a misspelt `provenance`"),
+    ("§ *What was ruled, and by whom*", 1, "a heading that occurs more than once"),
+    ("§ *Too deep to cite*", 1, "a level-4 heading"),
+    ("§ *A heading in a fence*", 1, "a `##` line inside a fence"),
+    ("§ *A heading in a comment*", 1, "a `##` line inside an HTML comment (round F-1)"),
+])
+def test_each_citation_target_resolves_or_dangles(citation, dangles, why):
+    sample = "See `REFERENCE.md` " + citation + "."
+    assert len(_citations(sample)) == 1, f"{why}: the sample is not collected"
+    got = len(dangling_citations(sample, _FIXTURE_REFERENCE))
+    assert got == dangles, f"{why}: expected {dangles} dangling, got {got}"
+
+
+#: The two controls above, pinned by content (`Q-518`): delete the rows that would notice, widen an
+#: arm, and nothing else in the repo reddens, because no other module reads `_CITATION`. The
+#: negative rows are the load-bearing ones — an arm that matches MORE than its spelling is as
+#: broken as one that matches less, and no positive row can tell. The `why` column is free.
+_CITATION_CONTROL_PINS = {
+    "test_each_citation_spelling_is_collected_or_screened": ((0, 1, 2), (
         ("See REFERENCE.md, section Step 3b — provenance.", 1, 0),
-        ("See `REFERENCE.md` § *Step 2d — provenance*.", 0, 1),
-        ("See REFERENCE.md section Step 3b — provenance.", 0, 0),
-        ("See `REFERENCE.md` § Step 2d — provenance.", 0, 0),
-        ("See REFERENCE.md, section Step 3b — rationale.", 0, 0),
-        ("See `REFERENCE.md` § *Step 2d — rationale*.", 0, 0),
-        ("See REFERENCE.md, section Step 4a-fix — provenance.", 1, 0),
-        ("See `REFERENCE.md` § *Step 4-pre — provenance*.", 0, 1),
-        ("`REFERENCE.md` § *Step 4-pre — provenance* has why.", 0, 1),
+        ("See `REFERENCE.md` § *A check that never started*.", 1, 0),
+        ("`REFERENCE.md` § *Step 4-pre — provenance* has why.", 1, 0),
+        ("read `REFERENCE.md` § `RC-3-1`", 1, 0),
+        ("`REFERENCE.md` § *Squash provenance: why each `pr` close records its PR head*.", 1, 0),
+        ("`REFERENCE.md`, beside this file, carries the", 0, 0),
+        ("See `REFERENCE.md` § *Step 2b —\nprovenance*.", 1, 0),
+        ("See `REFERENCE.md`\n§ *Step 2b — provenance*.", 1, 0),
+        ("> See `REFERENCE.md` § *Step 2b —\n> provenance*.", 1, 0),
+        ("See `REFERENCE.md` § *Step 2b — provenance*.", 1, 0),
+        ("`REFERENCE.md`, beside this file,\ncarries the", 0, 0),
+        ("read `REFERENCE.md` § `RC-3-1`\n> through § `RC-3-8`.", 2, 0),
+        ("`REFERENCE.md` § *A* and § *B*.", 2, 0),
+        ("See `REFERENCE.md` § **Step 2b — provenance**.", 0, 1),
+        ("See REFERENCE.md § *Step 2b — provenance*.", 0, 1),
+        ("See `REFERENCE.md` § Step 2d — provenance.", 0, 1),
+        ("See REFERENCE.md section Step 3b — provenance.", 0, 1),
+        ("See `REFRENCE.md` § *Step 2b — provenance*.", 0, 1),
+        ("See `reference.md` § *Step 2b — provenance*.", 0, 1),
+        ("See `REFERENCE.MD` § *Step 2b — provenance*.", 0, 1),
+    )),
+    "test_each_citation_target_resolves_or_dangles": ((0, 1), (
+        ("§ *Step 2b — provenance*", 0),
+        ("§ *A check that never started*", 0),
+        ("§ *Step 6 and 4d-1 — provenance*", 0),
+        ("§ *Step 4a's shared-append resolver — provenance*", 0),
+        ("§ `RC-3-1`", 0),
+        ("§ *Step 2b – provenance*", 1),
+        ("§ *Step 2b — provenence*", 1),
+        ("§ *What was ruled, and by whom*", 1),
+        ("§ *Too deep to cite*", 1),
+        ("§ *A heading in a fence*", 1),
+        ("§ *A heading in a comment*", 1),
     )),
 }
 
 
-def test_the_pointer_arm_control_cannot_be_hollowed_out():
-    """`Q-518`'s predicate, turned on the control this phase added to this module.
-
-    Without this, the sequence the filing describes works here verbatim: delete the two near-miss
-    rows and widen the prose branch, and nothing in the repo reddens — no other module reads
-    `_PROVENANCE_POINTER` or `_pointer_targets`, so there is no second reader to catch it.
-    """
-    problems = case_pin_problems(Path(__file__).read_text(encoding="utf-8"), _POINTER_ARM_PINS)
+def test_the_citation_controls_cannot_be_hollowed_out():
+    problems = case_pin_problems(Path(__file__).read_text(encoding="utf-8"), _CITATION_CONTROL_PINS)
     assert not problems, "\n\n".join(problems)

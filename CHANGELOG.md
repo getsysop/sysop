@@ -7,6 +7,35 @@ a check that now runs. Each entry is dated by the snapshot's publication and nam
 private development phases it carries. The per-phase journal those phases were recorded in is the
 maintainer's working record and is not in the public tree.
 
+## 2026-10-31 — v0.2.1, private phases 444–450
+
+- **`v0.2.1`.** This snapshot is tagged `v0.2.1`, with a GitHub Release carrying this entry.
+  Every other change in this entry fixes a defect in shipped behaviour. `--ref` pins to it as it
+  does to `v0.2.0`, once the tag is fetched into your clone.
+- **A pending doc whose hold was cleared can be consumed.** `pending_doc_hold.py clear` removes a
+  doc's `hold:` and keeps the `held_since:` stamp, and `/review-close` Step 4c item 6 refused any
+  stamped doc, so the close after a hold was cleared consolidated the doc and then stopped before
+  committing, at every retry. `pending_doc_collect.py consume` now deletes a stamped doc only when
+  `pending_doc_hold.py check` routes it, and still refuses one held for its own `hold:`, for an
+  outstanding `user_action`, or for sharing a task with a held doc.
+- **Two pack semgrep rules now flag the unsafe value, not only a missing keyword.** The python
+  pack's `http-client-redirect` passed any `httpx.Client(follow_redirects=...)`, so
+  `follow_redirects=True` went unflagged; it now requires `follow_redirects=False`, and flags a
+  value held in a name too. The llm pack's `llm-cost-abuse` passed
+  `GenerateContentConfig(max_output_tokens=None)`; it now flags `None` as well as a missing
+  bound. If you edited your installed copies of either rule, an update replaces them with these.
+- **A close stops before it writes a branch's edit into a closed task.** When the merge target
+  closed a task (its body moved to `tasks/archive/`) while a branch was editing that body, git
+  carried the branch's edit into the closed copy with no conflict. `/review-close` Step 4a now
+  names each such body, and each one the target deleted, before it merges: a headless close stops,
+  and an attended one shows the diff and asks whether to merge it or skip the branch. Under
+  `direct`, the same check runs before the push merges a newer `origin/<default branch>`, where an
+  archive move from another clone's close can arrive (`git_check.py closed-tasks`).
+- **`validate_tasks.py` refuses a conflict marker in a task body** (Invariant 13). A body resolved
+  by hand during a close's rebase could be committed with its markers, because `--continue` runs
+  no `pre-commit`; Step 4a now runs the validator first, and it fails on any line starting with
+  seven or more `<` or `>` followed by a space or the line's end. Indent a marker a body quotes on purpose.
+
 ## 2026-10-30 — v0.2.0, private phases 435–443
 
 - **`v0.2.0`, the first release tag.** This snapshot is tagged `v0.2.0`, with a GitHub Release

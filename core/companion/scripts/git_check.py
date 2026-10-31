@@ -11,6 +11,7 @@
     python3 sysop/scripts/git_check.py lock            "<task id>"
     python3 sysop/scripts/git_check.py fork-has        "<default branch>" "<path>"
     python3 sysop/scripts/git_check.py published       "<branch>"
+    python3 sysop/scripts/git_check.py closed-tasks    "<ours ref>" "<theirs ref>"
 
 `_shared/main-push-guard.md` Rule A and the skills' fail-stops used to be
 `test "$(git …)" = "<branch>" || { echo …; exit 1; }`. Under `dontAsk` none of that binds a
@@ -18,7 +19,7 @@ rule: `test` binds none, and an `exit` or a `{ …; }` group is denied wherever 
 (`Q-710`, measured). This script is the whole check, so a step chains its write after it with
 `&&` and the check and the write stay one call.
 
-Each prints one line. Exit 0 `OK: …` (the check holds), 1 `STOP: …` (it does not: do not
+Each prints one line (`closed-tasks` prints its findings first). Exit 0 `OK: …` (the check holds), 1 `STOP: …` (it does not: do not
 write), 2 `STOP: …` (it could not be measured, or a usage error: do not write), 3 `STOP: …`
 (an operand is empty or still holds a `<placeholder>`, or `ancestor` was given a short name).
 A branch is compared as `refs/heads/<branch>`, never by its short name (`Q-703`): a tag or
@@ -37,6 +38,11 @@ every reviewer's first call fails.
 exit 0 prints its commit id (published), exit 1 `(local-only)`. It replaced a `case` guard and
 `git rev-parse --verify --quiet … || echo`, both denied under `dontAsk` (`Q-665`), and like them
 it exits 3 on an unsubstituted name, which would otherwise read as local-only.
+`closed-tasks` (`_shared/main-push-guard.md` Rule B step 3) runs before a merge of `<theirs ref>`
+into `<ours ref>`, both `refs/` names: for each task body `<ours ref>` edited since their merge
+base that `<theirs ref>` has since moved to `tasks/archive/` or deleted, it prints a
+`CLOSED TASK EDITED:` line and a `show:` line (`_closed_tasks.py` holds the check), then exit 1
+`STOP: …`; exit 0 `OK: …` when there is none, and exit 2 when there is no merge base.
 """
 from __future__ import annotations
 
@@ -48,10 +54,10 @@ import sys
 from typing import NoReturn
 
 SUBCOMMANDS = ('head-is', 'head-is-not', 'head-matches', 'primary-checkout', 'ancestor',
-                'nothing-staged', 'file', 'lock', 'fork-has', 'published')
+                'nothing-staged', 'file', 'lock', 'fork-has', 'published', 'closed-tasks')
 _ARITY = {'head-is': 1, 'head-is-not': 1, 'head-matches': 1, 'primary-checkout': 0,
           'ancestor': 2, 'nothing-staged': 1, 'file': 1, 'lock': 1, 'fork-has': 2,
-          'published': 1}
+          'published': 1, 'closed-tasks': 2}
 
 
 def say(code: int, line: str) -> NoReturn:
@@ -177,6 +183,27 @@ def main(argv: list[str]) -> None:
         if rc == 1:
             say(1, '(local-only)')
         say(2, f'STOP: git rev-parse --verify {remote} failed (exit {rc})')
+
+    if sub == 'closed-tasks':
+        ours, theirs = ops
+        for name in ops:
+            if not name.startswith('refs/'):
+                say(3, f'STOP: operand {name!r} is a short name; write a refs/ name '
+                       '(refs/heads/…, refs/remotes/origin/…)')
+            if git('rev-parse', '--verify', '-q', name + '^{commit}')[0] != 0:
+                say(2, f'STOP: {name} does not name a commit')
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import _closed_tasks
+        try:
+            base, found = _closed_tasks.closed_task_edits(ours, theirs, theirs)
+        except (_closed_tasks.NoMergeBase, _closed_tasks.GitFailed) as e:
+            say(2, f'STOP: {e}; the closed-task check cannot run')
+        if not found:
+            say(0, f'OK: {theirs} closed no task body {ours} edited')
+        for line in _closed_tasks.lines(found, base, ours, 'this close', theirs):
+            print(line)
+        say(1, f'STOP: {theirs} closed {len(found)} task body(ies) {ours} edited; '
+               'merging it would write the edit into the closed copy')
 
     if os.path.isfile(ops[0]):
         say(0, f'OK: {ops[0]} is a file')

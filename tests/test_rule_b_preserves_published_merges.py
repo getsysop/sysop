@@ -109,10 +109,11 @@ def _rule_b_calls() -> list[str]:
     """The shipped calls, one per fenced block in Rule B's section, `<default branch>`
     substituted and the trailer `-m` dropped as a runner with no required trailers would drop
     it. Since Phase 422 (`Q-665`) Rule B is six calls, not one block: a `test`, an `if` and a
-    `$(…)` are each denied under `dontAsk`."""
+    `$(…)` are each denied under `dontAsk`. Phase 446 (`Q-547`) added a seventh, step 3's
+    closed-task check before its merge."""
     sec = GUARD[GUARD.index("## Rule B"):GUARD.index("## Rule C")]
     blocks = re.findall(r"```bash\n(.*?)```", sec, re.S)
-    assert len(blocks) == 6, f"Rule B has {len(blocks)} fenced calls, not 6; re-anchor this test"
+    assert len(blocks) == 7, f"Rule B has {len(blocks)} fenced calls, not 7; re-anchor this test"
     out = []
     for b in blocks:
         b = b.strip().replace("<default branch>", "main")
@@ -124,9 +125,10 @@ def _rule_b_calls() -> list[str]:
 
 
 def _run_rule_b(w: Path, env: dict | None = None, extra_m: str = "") -> tuple[str, str]:
-    """Run the six calls as Rule B's prose orders them; return (outcome, everything printed).
+    """Run the seven calls as Rule B's prose orders them; return (outcome, everything printed).
 
-    Step 2's exit 0 skips step 3; exit 1 runs it. A failed step 3 runs `git ls-files -u` (any
+    Step 2's exit 0 skips step 3; exit 1 runs it. Step 3's closed-task check stops on a
+    non-zero exit, as a headless run does; exit 0 goes on to the merge. A failed merge runs `git ls-files -u` (any
     path listed is a conflict, none a refusal) and `git merge --abort`, then stops. Step 4's
     output is the `<SHA>` steps 5 and 6 are written with."""
     import os
@@ -143,18 +145,20 @@ def _run_rule_b(w: Path, env: dict | None = None, extra_m: str = "") -> tuple[st
         return "stop: not on main", "".join(printed)
     adv = sh(calls[1]).returncode
     if adv == 1:
-        merge = calls[2].replace('(autonomous advance)"', f'(autonomous advance)" -m "{extra_m}"') \
-            if extra_m else calls[2]
+        if sh(calls[2]).returncode:
+            return "stop: closed task", "".join(printed)
+        merge = calls[3].replace('(autonomous advance)"', f'(autonomous advance)" -m "{extra_m}"') \
+            if extra_m else calls[3]
         if sh(merge).returncode:
             unmerged = sh("git ls-files -u").stdout.strip()
             sh("git merge --abort")
             return ("conflict" if unmerged else "refused"), "".join(printed)
     elif adv != 0:
         return "stop: advance not measured", "".join(printed)
-    sha = sh(calls[3]).stdout.strip()
-    if sh(calls[4].replace("<SHA>", sha)).returncode:
-        return "stop: push", "".join(printed)
+    sha = sh(calls[4]).stdout.strip()
     if sh(calls[5].replace("<SHA>", sha)).returncode:
+        return "stop: push", "".join(printed)
+    if sh(calls[6].replace("<SHA>", sha)).returncode:
         return "stop: not landed", "".join(printed)
     return ("merged and pushed" if adv == 1 else "pushed"), "".join(printed)
 
@@ -190,12 +194,44 @@ def test_the_shipped_sequence_pushes_the_branch_tip_after_head_moves_away_and_ba
     assert sh(calls[0]).returncode == 0 and sh(calls[1]).returncode == 0
     _git(w, "checkout", "-q", "-b", "wip"); (w / "wip").write_text("x"); _git(w, "add", "wip")
     _git(w, "commit", "-qm", "unreviewed wip")
-    sha = sh(calls[3]).stdout.strip()                   # step 4, while HEAD is on wip
+    sha = sh(calls[4]).stdout.strip()                   # step 4, while HEAD is on wip
     _git(w, "checkout", "-q", "main")
-    assert sh(calls[4].replace("<SHA>", sha)).returncode == 0
+    assert sh(calls[5].replace("<SHA>", sha)).returncode == 0
     _git(w, "fetch", "-q", "origin")
     assert sha == tip and _git(w, "rev-parse", "origin/main").stdout.strip() == tip, \
         "Rule B pushed a commit that is not the default branch's tip"
+
+
+def test_the_shipped_sequence_stops_before_merging_an_advance_that_closed_an_edited_task(tmp_path):
+    """Phase 446 (`Q-547`): another clone's close archived T-1 on origin while this close merged
+    an edit to it. Step 3's merge would be clean and write the edit into the archived copy; the
+    closed-task check stops first, and nothing is pushed."""
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    _git(origin, "init", "-q", "--bare")
+    w = tmp_path / "w"
+    _git(tmp_path, "clone", "-q", str(origin), "w")
+    _git(w, "checkout", "-q", "-B", "main")
+    (w / "tasks/open").mkdir(parents=True)
+    (w / "tasks/open/T-1.md").write_text("# T-1\n\na\nb\nc\n")
+    _git(w, "add", "-A"); _git(w, "commit", "-qm", "base"); _git(w, "push", "-q", "origin", "main")
+    o = tmp_path / "o"
+    _git(tmp_path, "clone", "-q", str(origin), "o")
+    _git(o, "checkout", "-q", "main")
+    (o / "tasks/archive").mkdir()
+    _git(o, "mv", "tasks/open/T-1.md", "tasks/archive/T-1.md")
+    _git(o, "commit", "-qm", "another close archives T-1"); _git(o, "push", "-q", "origin", "main")
+    advanced = _git(o, "rev-parse", "main").stdout.strip()
+    with open(w / "tasks/open/T-1.md", "a") as fh:
+        fh.write("\n## Plan\nmerged by this close\n")
+    _git(w, "commit", "-qam", "this close merged a plan for T-1")
+    _git(w, "fetch", "-q", "origin")
+    outcome, printed = _run_rule_b(w)
+    assert outcome == "stop: closed task", printed
+    assert "CLOSED TASK EDITED: tasks/open/T-1.md" in printed, printed
+    assert not (w / ".git" / "MERGE_HEAD").exists()
+    _git(w, "fetch", "-q", "origin")
+    assert _git(w, "rev-parse", "origin/main").stdout.strip() == advanced, "nothing may be pushed"
 
 
 def test_the_shipped_sequence_refuses_off_the_default_branch(published_merge):

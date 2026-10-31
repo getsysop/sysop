@@ -805,7 +805,7 @@ PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_squash_provenance as T; T._print_pins()"
     "2a landed check": "e055069a3203431f",  # Phase 387: the span plus feature_branch.py landed, the heredoc moved verbatim, appended fenced so its indentation counts (round 1) (Phase 380: dict(...) env-strip)
     "2b landed not a target": "b451c64d35fc19a9",
-    "4a recorded head": "34b3325798e6e052",  # Phase 387: the span plus pr_head_check.py, the heredoc moved verbatim, appended fenced so its indentation counts (round 1)
+    "4a recorded head": "46d40109a77bac47",  # Phase 446 (`Q-547`): the closed-task check moved into `_closed_tasks.py`, which the pin now reads too, and its round made it read every merge base; Phase 387: the span plus pr_head_check.py, the heredoc moved verbatim, appended fenced so its indentation counts (round 1). Phase 445 (`Q-547`): the check runs under either policy and prints `CLOSED TASK EDITED:`, routed by a new bullet in the span
     "4a local-only onto": "e28d544a201e5344",
     "4a published stale status": "4683e760d0b82465",  # Phase 425 (`Q-629`): `tasks/index.yml`'s resolution is the arm's `index --since`
     "shared append status": "3f3a06552dbf9c66",  # Phase 390's round: the bullet sits in `steps/4a-append.md`, and its "item 2" names Step 4a
@@ -834,7 +834,8 @@ def _located(label: str) -> tuple[str, str, int]:
 # so each pin covers its prose span plus the program it runs.
 _PROGRAMS = {
     "2a landed check": lambda: subcommand_body("feature_branch.py", "landed"),
-    "4a recorded head": lambda: (SCRIPTS / "pr_head_check.py").read_text(encoding="utf-8"),
+    "4a recorded head": lambda: (SCRIPTS / "pr_head_check.py").read_text(encoding="utf-8")
+    + (SCRIPTS / "_closed_tasks.py").read_text(encoding="utf-8"),  # Phase 446: the check it imports
 }
 
 

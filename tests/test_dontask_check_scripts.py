@@ -485,7 +485,7 @@ CHAINED_SITES = {
         'python3 sysop/scripts/git_check.py head-is "<default branch>" && git fetch origin <default branch>',
         'python3 sysop/scripts/git_check.py head-is "<default branch>" && git merge --no-edit -m '
         '"merge origin/<default branch> (autonomous advance)" -m "<trailers the project\'s commit '
-        'convention requires, one per line>" origin/<default branch>',
+        'convention requires, one per line>" refs/remotes/origin/<default branch>',  # Phase 446: the ref the check reads
         'python3 sysop/scripts/git_check.py head-is "<default branch>" && git push origin "<SHA>:<default branch>"',
     ],
     "auto-build/SKILL.md": [

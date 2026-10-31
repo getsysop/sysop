@@ -136,7 +136,12 @@ MARKER = re.compile(r"^<!-- sysop:arm=(\S+) -->[ \t]*$")
 #: `wc -c` at `5a22f775`: Phase 433's citation scrub shrank the core by 617 bytes and left this
 #: constant where Phase 430 set it, against Wade's 2026-10-14 answer 2 (lower it to each phase's
 #: new size). The campaign stops here; the budget stays as a growth guard on the core.
-CORE_BUDGET_BYTES = 286_503
+#: Phase 445 (`Q-547`, Wade's ruling of 2026-10-30) raised it to 287_130 (+627): Step 4a item 1's
+#: `CLOSED TASK EDITED:` bullet, "under either policy" on the check that prints it, and Step 8's
+#: `Closed-task edits:` row. The bullet routes before the merge it governs, so it cannot sit in an
+#: arm the merge loads. Phase 446 (`Q-547`, Wade 2026-10-30) raised it to 287_190 (+60): the
+#: `Closed-task edits:` row names Rule B's push-time check too.
+CORE_BUDGET_BYTES = 287_190
 
 GIT_ENV = {k: v for k, v in os.environ.items()
            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}

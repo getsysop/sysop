@@ -1,9 +1,9 @@
 rules:
   - id: http-client-redirect
     message: >
-      httpx.Client(...) / httpx.AsyncClient(...) constructor missing
-      follow_redirects=. Library defaults can change and open redirects can
-      leak Authorization headers to attacker-controlled servers. Set
+      httpx.Client(...) / httpx.AsyncClient(...) constructor without
+      follow_redirects=False. Library defaults can change and open redirects
+      can leak Authorization headers to attacker-controlled servers. Set
       follow_redirects=False at client level — per-request overrides are
       fragile and may be omitted on future code paths.
     severity: ERROR
@@ -12,5 +12,5 @@ rules:
       - pattern-either:
           - pattern: httpx.Client(...)
           - pattern: httpx.AsyncClient(...)
-      - pattern-not: httpx.Client(..., follow_redirects=..., ...)
-      - pattern-not: httpx.AsyncClient(..., follow_redirects=..., ...)
+      - pattern-not: httpx.Client(..., follow_redirects=False, ...)
+      - pattern-not: httpx.AsyncClient(..., follow_redirects=False, ...)

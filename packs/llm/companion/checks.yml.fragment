@@ -21,12 +21,12 @@ checks:
   # `.claude/checks.project.yml` replaces the entry wholesale: copy `exclude_dir` across.
 
   - id: semgrep-llm-cost-abuse
-    name: "LLM Cost Abuse — Missing max_output_tokens (semgrep)"
+    name: "LLM Cost Abuse — Missing or None max_output_tokens (semgrep)"
     category: security
     severity: high
     paths: ["<api module>/", "<scripts dir>/"]
     exclude_dir: ["sysop"]
-    description: "GenerateContentConfig(...) constructor without max_output_tokens — unbounded LLM output cost"
+    description: "GenerateContentConfig(...) constructor without max_output_tokens, or with max_output_tokens=None — unbounded LLM output cost"
     convention: "LLM output bounds"
     used_by: [security-audit]
     blocking: false
