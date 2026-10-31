@@ -47,7 +47,8 @@ if want and got and want != got:
 # collapsed round without re-reading review_tasks.md. Written ONLY on the
 # successful clear path — a receipt asserts "a round closed here". Every failure
 # below is swallowed: evidence must never cost the cleanup it rides on.
-# Why each selector rule exists: REFERENCE.md § Step 5f.
+# Why each selector rule exists: REFERENCE.md § *Step 5f — why the receipt reads the
+# `Fan-out coverage` line*, in /codebase-review's and /security-audit's alike.
 FANOUT_HEAD = re.compile(r"\s*>\s*(?:\*\*)?\s*fan[-\s]?out\s+coverage\b"
                          r"\s*(?:\(([^)]*)\))?\s*(?:\*\*)?\s*:?\s*(?:\*\*)?\s*",
                          re.I)

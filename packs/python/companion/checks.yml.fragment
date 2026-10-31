@@ -213,7 +213,7 @@ checks:
     severity: high
     paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
     exclude_dir: ["sysop"]
-    description: "httpx.Client/AsyncClient constructor without follow_redirects= — defense-in-depth for open-redirect leakage"
+    description: "httpx.Client/AsyncClient constructor without follow_redirects=False — defense-in-depth for open-redirect leakage"
     convention: "Outbound HTTP security"
     used_by: [security-audit]
     blocking: false

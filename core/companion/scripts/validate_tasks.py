@@ -185,6 +185,12 @@ _LONG_HEX_RE = re.compile(r"\b[0-9a-fA-F]{32,}\b")
 _SK_PREFIX_RE = re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")
 _AWS_ACCESS_KEY_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
 
+# Invariant 13: a conflict marker left in a body. Git writes `<<<<<<<` and `>>>>>>>` at column 0,
+# followed by a label or the line's end; `{7,}` because `conflict-marker-size` is an ordinary
+# gitattribute, and a scan keyed on exactly seven reported a fully conflicted body green at 10.
+# A size below 7 is not covered. `=======` is left out: it is also a setext heading.
+_CONFLICT_MARKER_RE = re.compile(r"^(?:<{7,}|>{7,})(?:[ \t]|$)")  # text-mode reads fold CRLF
+
 # Phase 35: manual_smoke heading-presence check (warn-only). Mirrors the
 # regex /review-close Step 3c uses for signal detection, so an author who
 # satisfies the validator's check also satisfies the skill's gate detection.
@@ -407,6 +413,7 @@ def validate(base_dir: Path, project_root: Path | None = None) -> Report:
     _validate_references(tasks, task_ids, index_path, report)
     _validate_orphans(base_dir, tasks, index_path, report)
     _scan_secrets(base_dir, report)
+    _scan_conflict_markers(base_dir, report)
 
     return report
 
@@ -575,7 +582,7 @@ def _validate_tasks(
         # the feature branch. Run from `main` — where /claim-task Step 4c and
         # /review-close's final guard both run it — the section was absent for
         # the entire in_progress window, so the warning fired on every claimed
-        # task on every run: noise in the channel carrying twelve real
+        # task on every run: noise in the channel carrying the real
         # invariants. The read-and-verify gate that replaced it reads the right
         # revision (`/review-close` Step 2d, `git show "refs/heads/<branch>:<path>"`), is a
         # hard gate rather than a warning, and has its own doc-only skip. See
@@ -1036,6 +1043,23 @@ def _scan_secrets(base_dir: Path, report: Report) -> None:
                     _check_secret_line(md, lineno, line, report)
         except OSError as e:
             report.warn(str(md), f"could not scan for secrets: {_sanitize_log(str(e)[:500])}")
+
+
+def _scan_conflict_markers(base_dir: Path, report: Report) -> None:
+    """Invariant 13: no conflict marker in tasks/**/*.md. `/review-close` Step 4a resolves a body
+    by hand and runs this validator before `--continue`, which runs no `pre-commit`."""
+    for md in sorted(base_dir.rglob("*.md")):
+        try:
+            with open(md, "r", encoding="utf-8", errors="replace") as fh:
+                for lineno, line in enumerate(fh, start=1):
+                    if _CONFLICT_MARKER_RE.match(line):
+                        report.error(
+                            f"{md}:{lineno}",
+                            "conflict marker — resolve the conflict and remove it; "
+                            "indent a marker the body quotes on purpose",
+                        )
+        except OSError as e:
+            report.error(str(md), f"could not scan for conflict markers: {_sanitize_log(str(e)[:500])}")
 
 
 def _check_secret_line(path: Path, lineno: int, line: str, report: Report) -> None:

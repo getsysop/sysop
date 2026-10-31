@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" 4a-append ba040a2e25e9f687 "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" 4a-append 03ad02a93ad1b079 "<skill directory>"
 ```
 
 It prints `LOADED: 4a-append`. **Exit 2**: stop and show its stderr.
@@ -38,7 +38,7 @@ It starts from the merge target's file and changes only what the branch changed,
 - **Exit 4** prints a `STATUS: <id> target <x>, branch <y>` line: two actors moved that task's status. Report both values and STOP.
 - **Exit 2**: nothing was written (the file is not conflicted here, PyYAML or git failed, the entries could not be mapped to the text, or `--since`'s ref already holds the whole branch, which item 1's `REPLAY 0` should have kept from merging); stop and show its line. **Exit 3**: an operand is still a placeholder; write it out and re-run.
 
-**A conflicted body file under `tasks/`** (`tasks/open/<ID>.md`, any `.md` there but the notes ledger) **with `tasks/index.yml` not conflicted** is both sides editing one task's prose. **Under `--headless`, STOP**: the close parks, and a person resolves it once. Otherwise read both sides and keep both edits, as `review_tasks.md` is resolved below; where the two edits change the same lines, abort and 4a-SKIP the branch. With `tasks/index.yml` conflicted too, the resolver refuses (exit 1) and the branch is 4a-SKIPped. Never stage a body that still holds conflict markers; neither `validate_tasks.py` nor the shipped `pre-commit` scans for them, so search the file for `<<<<<<<` before you `git add` it.
+**A conflicted body file under `tasks/`** (`tasks/open/<ID>.md`, any `.md` there but the notes ledger) **with `tasks/index.yml` not conflicted** is both sides editing one task's prose. **Under `--headless`, STOP**: the close parks, and a person resolves it once. Otherwise read both sides and keep both edits, as `review_tasks.md` is resolved below; where the two edits change the same lines, abort and 4a-SKIP the branch. With `tasks/index.yml` conflicted too, the resolver refuses (exit 1) and the branch is 4a-SKIPped. Stage the resolved body with `git add`, then run `validate_tasks.py` before you continue: it exits 1 on a body that still holds a conflict marker.
 
 Then, **stage the resolved file and gate it**:
 
@@ -56,6 +56,6 @@ python3 sysop/scripts/validate_tasks.py
 
 **Read the exit code — `1` and `2` mean different things and take different actions.** `validate_tasks.py` returns **1** for schema errors (your resolution is wrong: fix it, or abort and 4a-SKIP the branch) and **2** for environment failures — missing PyYAML, a missing `tasks/` directory, an unreadable script. A `2` says nothing about the resolution, so **do not abort on it**: fix the environment (the script self-resolves venv PyYAML via its own `sys.path` bootstrap, but a `python3` with neither will exit 2 and say so) and re-run. Aborting on a `2` discards a correct resolution and downgrades an approved branch over a missing dependency.
 
-**What this gate does and does not cover.** It validates `tasks/index.yml` only — `validate_tasks.py` has no knowledge of `review_tasks.md` whatsoever. A `review_tasks.md` conflict is resolved by reading both sides per the paragraph below and has **no automated gate**; do not let this step's green stand in for it. (Git does enforce one thing for free: either arm's `--continue` refuses while *any* conflicted path is unresolved, so a half-resolved commit is not reachable even though the two files are documented separately.)
+**What this gate does and does not cover.** It validates `tasks/index.yml`, and the task bodies only for conflict markers — `validate_tasks.py` has no knowledge of `review_tasks.md` whatsoever. A `review_tasks.md` conflict is resolved by reading both sides per the paragraph below and has **no automated gate**; do not let this step's green stand in for it. (Git does enforce one thing for free: either arm's `--continue` refuses while *any* conflicted path is unresolved, so a half-resolved commit is not reachable even though the two files are documented separately.)
 
 Feature branches MAY modify `review_tasks.md` — typically as single-line task-checkbox flips (`[/]` → `[x]`) that rebase clean. Structural conflicts arise when the merge target has moved `review_tasks.md` between branch-cut and rebase, in two common cases: (a) another already-merged batch added a sibling `### Batch N` section, (b) the project's archive-rotation script (e.g., `archive_review_tasks.py`) rotated rounds or batches out into a sibling archive file (committed by Step 1b — and, under `pr` policy, carried onto the integration branch by Step 4-pre, which cuts it from local `<default branch>`). Resolve by reading both sides of the conflict: keep the merge target's structure as authoritative (it reflects the post-rotation / post-other-batch layout), then re-apply the branch's intent — checkbox flips and any net-new `### Batch N` section — in the new layout.

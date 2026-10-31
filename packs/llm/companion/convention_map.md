@@ -15,7 +15,7 @@
 
 ## `<api module>/server.py`, `<api module>/routes/**/*.py` — LLM-using endpoints
 
-- **LLM output bounds**: All `GenerateContentConfig` calls must include `max_output_tokens` (suggested: 2048 for JSON, 4096 for prose). Without bounds, a crafted query can trigger verbose reasoning that inflates per-request cost arbitrarily.
+- **LLM output bounds**: All `GenerateContentConfig` calls must set `max_output_tokens` to a bound, never `None` (suggested: 2048 for JSON, 4096 for prose). Without bounds, a crafted query can trigger verbose reasoning that inflates per-request cost arbitrarily.
 - **LLM response parsing**: Guard LLM response bodies — check `if not response.text` before `json.loads()`. Catch `json.JSONDecodeError` explicitly before any broad `except Exception`; re-raise as descriptive `ValueError("LLM returned invalid JSON")` so callers distinguish parse failures from upstream outages.
 
 ## `<evals module>/*.py` — LLM Eval Runner
@@ -23,13 +23,13 @@
 - **Secrets in logs**: Never use `logger.exception()` — it dumps full tracebacks that embed Vertex AI / Anthropic request URLs and API key fragments. Use `logger.error("msg: %s", <log sanitizer>(str(e)[:500]))` instead.
 - **Logging**: Exceptions → `<log sanitizer>(str(e)[:500])`, never the raw exception. Never `logger.exception()` or `logger.*(..., exc_info=True)` — both bypass redaction; use `%s` style, not f-strings
 - **LLM response guards**: Check `if not response.text` (Gemini) or `if not text` (Anthropic) before processing — safety filters and rate limits can produce empty bodies
-- **LLM output bounds**: All `GenerateContentConfig` calls must include `max_output_tokens`
+- **LLM output bounds**: All `GenerateContentConfig` calls must set `max_output_tokens` to a bound, never `None`
 
 ## `<data pipeline>/*.py` — LLM-using pipeline modules
 
 - **LLM prompt boundaries**: `html.escape()` user/external content before interpolating into XML-tagged prompts (e.g., `<user_query>`, `<custom_angle>`, `<press_release_content>`) to prevent attackers from closing the tag and injecting arbitrary instructions. Prefer multi-part content (Gemini) where user input is in a separate `Part`
 - **LLM response parsing**: Guard LLM response bodies — check `if not response.text` before `json.loads()`. Catch `json.JSONDecodeError` explicitly before any broad `except Exception`; re-raise as descriptive `ValueError`
-- **LLM output bounds**: All `GenerateContentConfig` calls must include `max_output_tokens`
+- **LLM output bounds**: All `GenerateContentConfig` calls must set `max_output_tokens` to a bound, never `None`
 
 > AST-backed equivalent: `semgrep-llm-cost-abuse` (in this pack's `semgrep/` directory)
 

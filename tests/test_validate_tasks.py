@@ -16,6 +16,7 @@ Two sections:
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from unittest import mock
 
@@ -467,15 +468,16 @@ def test_the_warn_channel_still_works(tmp_path):
     assert _td_warnings(report) == [], "test-decision warnings are retired"
 
 
-def test_the_record_agrees_that_there_are_twelve(tmp_path):
+def test_the_record_agrees_that_there_are_thirteen(tmp_path):
     """Phase 204's lesson: a retired check whose roster still lists it reads as
-    coverage. The three shipped surfaces that named Invariant 13 must not claim
-    a live 13th, and WORKFLOW.md's count must match the numbered list."""
+    coverage. The shipped surfaces that named the retired test-decision check must
+    not claim it is live, and WORKFLOW.md's count must match the numbered list.
+    Number 13 is the conflict-marker scan since Phase 445 (`Q-547`)."""
     schema = (REPO_ROOT / "core/companion/tasks/schema.md").read_text(encoding="utf-8")
     body = schema.split("## Invariants (validator-enforced)", 1)[1].split("\n## ", 1)[0]
     numbered = re.findall(r"^(\d+)\. \*\*", body, re.MULTILINE)
     n = int(numbered[-1])
-    assert n == 12, f"schema.md's invariant list ends at {n}"
+    assert n == 13, f"schema.md's invariant list ends at {n}"
 
     # DERIVED from the list, and swept over the whole shipped tree rather than
     # asserted against one sentence. The first cut of this guard checked only
@@ -742,6 +744,71 @@ def test_secret_scan_clean_body_emits_no_secret_warning(tmp_path):
     )
     report = vt.validate(repo / "tasks", project_root=repo)
     assert _secret_warnings(report) == [], [w.format() for w in report.warnings]
+
+
+# ── Invariant 13 — conflict markers (Phase 445, `Q-547`) ─────────────────────
+#
+# `/review-close` Step 4a resolves a conflicted body by hand and runs this
+# validator before `--continue`, which runs no `pre-commit`. Phase 312 reproduced
+# a body committed fully conflicted at `conflict-marker-size=10` past a scan keyed
+# on exactly seven characters, hence `{7,}`. A size below 7 is out of scope, and
+# the last case below pins that boundary rather than leaving it implied.
+
+_CONFLICTED = "# FEAT-LOCKED\n\n{o} HEAD\nthe target's line\n{e}\nthe branch's line\n{c} feat\n"
+
+
+def _marker_errors(report):
+    return [e.format() for e in report.errors if "conflict marker" in e.format()]
+
+
+def test_a_conflicted_body_is_an_error_at_each_marker_line(tmp_path):
+    repo = _repo_with_body(tmp_path, _CONFLICTED.format(o="<" * 7, e="=" * 7, c=">" * 7))
+    report = vt.validate(repo / "tasks", project_root=repo)
+    assert not report.ok
+    found = _marker_errors(report)
+    assert [m.split(":")[-2].split()[0] for m in found] == ["3", "7"], found
+    assert all("FEAT-LOCKED.md" in m and "indent" in m for m in found), found
+
+
+def test_a_wider_marker_and_a_bare_one_are_errors(tmp_path):
+    body = _CONFLICTED.format(o="<" * 10, e="=" * 10, c=">" * 10) + ">>>>>>>\r\n"
+    repo = _repo_with_body(tmp_path, body)
+    assert len(_marker_errors(vt.validate(repo / "tasks", project_root=repo))) == 3
+
+
+def test_a_marker_in_the_notes_ledger_is_an_error(tmp_path):
+    repo = _seed_repo_with_lock(tmp_path)
+    (repo / "tasks" / "notes.md").write_text("- a note\n<<<<<<< HEAD\n", encoding="utf-8")
+    assert len(_marker_errors(vt.validate(repo / "tasks", project_root=repo))) == 1
+
+
+def test_a_marker_in_an_archived_body_is_an_error(tmp_path):
+    """Where a closed task's conflict lands: Step 4c moved the body to `archive/`."""
+    repo = _seed_repo_with_lock(tmp_path)
+    (repo / "tasks" / "archive").mkdir()
+    (repo / "tasks" / "archive" / "T-9.md").write_text("# T-9\n>>>>>>> feat\n", encoding="utf-8")
+    found = _marker_errors(vt.validate(repo / "tasks", project_root=repo))
+    assert len(found) == 1 and "archive" in found[0], found
+
+
+def test_quoted_markers_a_setext_heading_and_short_markers_pass(tmp_path):
+    body = ("# FEAT-LOCKED\n\nA quoted conflict:\n\n    <<<<<<< HEAD\n    >>>>>>> feat\n\n"
+            "Context\n=======\n\n<<<<<<<x is not a marker\n"
+            "<<< ours\n>>> theirs\n")  # conflict-marker-size=3: not covered, by design
+    repo = _repo_with_body(tmp_path, body)
+    report = vt.validate(repo / "tasks", project_root=repo)
+    assert _marker_errors(report) == [], _marker_errors(report)
+    assert report.ok, [e.format() for e in report.errors]
+
+
+def test_the_cli_exits_1_on_a_marker(tmp_path):
+    repo = _repo_with_body(tmp_path, _CONFLICTED.format(o="<" * 7, e="=" * 7, c=">" * 7))
+    # sys.executable, not a bare python3: the validator finds PyYAML in its own repo's
+    # .venv, which the public mirror does not have, so a bare python3 exits 2 there.
+    r = subprocess.run([sys.executable, str(REPO_ROOT / "core/companion/scripts/validate_tasks.py"),
+                        "--path", str(repo / "tasks")], cwd=repo, capture_output=True, text=True)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "conflict marker" in r.stdout + r.stderr
 
 
 # ── Phase 105: Invariant-10 required fields (effort / user_action) ──────────

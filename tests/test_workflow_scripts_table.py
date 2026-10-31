@@ -34,9 +34,11 @@ SCRIPTS_DIR = REPO_ROOT / "core/companion/scripts"
 
 # Underscore-prefixed shared helpers — imported (or, for `_git_lib.sh`, sourced)
 # by other scripts, never invoked directly. Exempt from the row requirement; all
-# three are in fact described (`_log.py` and `_git_lib.sh` have their own rows,
-# `_model_roles.py` inside the `resolve_skill_models.py` row).
-PRIVATE_HELPERS = {"_log.py", "_model_roles.py", "_git_lib.sh"}
+# four are in fact described (`_log.py` and `_git_lib.sh` have their own rows,
+# `_model_roles.py` inside the `resolve_skill_models.py` row, `_closed_tasks.py`
+# inside the `git_check.py` row).
+PRIVATE_HELPERS = {"_log.py", "_model_roles.py", "_git_lib.sh",
+                   "_closed_tasks.py"}  # Phase 446: imported by pr_head_check.py and git_check.py
 
 # First cell of a table row, e.g. "| `claim_task.sh <TASK_ID> <BRANCH>` | ..." —
 # the name may carry a usage signature, so match only the filename that starts it.

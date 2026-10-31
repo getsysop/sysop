@@ -9,3 +9,9 @@ types.GenerateContentConfig(temperature=0.1, max_output_tokens=4096)
 # ok: llm-cost-abuse — type annotation, not a constructor call
 def foo(config: types.GenerateContentConfig) -> None:
     pass
+
+# ok: llm-cost-abuse — a bound held in a name
+types.GenerateContentConfig(max_output_tokens=MAX_TOKENS)
+
+# ok: llm-cost-abuse — the bare-name constructor with a bound
+GenerateContentConfig(max_output_tokens=2048)

@@ -644,7 +644,8 @@ In a **single message**, spawn `min(N, len(batch))` plan-only agents via paralle
 # Assert the worktree branch HEAD is unchanged from before the plan agent ran.
 # If new commits exist, the plan agent violated the contract — abort and park.
 # A consumer that fast-forwards the worktree during 6a false-parks here; `/claim-task` Step 7a
-# accepts that case, and its REFERENCE.md § *Step 7a* says how to port the check.
+# accepts that case, and its REFERENCE.md § *Step 7a — the integrity check asks what HEAD
+# gained, not whether it moved* says how to port the check.
 # Substitute this task's worktree path, id, claim dir, and the pre-plan HEAD you captured above.
 # `NEW_HEAD` and `PARK` are assigned right here, so they are the names safe to carry — the
 # four placeholders are values you hold. Run as written with a `"$PRE_PLAN_HEAD"` in place of

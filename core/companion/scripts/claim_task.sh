@@ -689,7 +689,8 @@ sys.exit(1)'
   # The reporter's fix, flip -> validate -> commit -> `--lock`, was not taken: its own
   # validate step fails, because validate_tasks.py's invariant 9 errors on an
   # in_progress task with no lock, and dropping that step would commit the state the
-  # validator rejects. claim-task/REFERENCE.md § Step 4d has the rest.
+  # validator rejects. claim-task/REFERENCE.md § *Step 4d — the claim worktree is
+  # fast-forwarded to the claim* has the rest.
   # After the mutex: the worktree is this claim's own, and nothing here writes the
   # index. Every skip exits 0, because the claim itself is committed; a skip is
   # stated, never silent, since a silent skip is the state this block exists to end.

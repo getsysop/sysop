@@ -153,8 +153,20 @@ moved `HEAD` and back between calls. (A `test`, an `if`, a `$(…)` capture and 
    so the project's commit-msg and pre-merge-commit hooks fire here: put every trailer the
    project requires in the ONE final -m, one per line, or drop that -m.
 
+   First, does the advance close a task body this close edited?
+
    ```bash
-   python3 sysop/scripts/git_check.py head-is "<default branch>" && git merge --no-edit -m "merge origin/<default branch> (autonomous advance)" -m "<trailers the project's commit convention requires, one per line>" origin/<default branch>
+   python3 sysop/scripts/git_check.py closed-tasks "refs/heads/<default branch>" "refs/remotes/origin/<default branch>"
+   ```
+
+   **Exit 0**: merge, below. **Exit 1** prints a `CLOSED TASK EDITED:` line for each such body:
+   **under `--headless`, STOP**, with nothing pushed. Otherwise show the person each `show:` diff.
+   On a `moved it to` line, ask: merge anyway, and list each path on Step 8's `Closed-task edits:`;
+   or STOP, with nothing pushed. On a `deleted it` line, STOP. Every later push stops here again
+   until a person merges anyway or reverts the edit on `<default branch>`. **Exit 2 or 3**: stop.
+
+   ```bash
+   python3 sysop/scripts/git_check.py head-is "<default branch>" && git merge --no-edit -m "merge origin/<default branch> (autonomous advance)" -m "<trailers the project's commit convention requires, one per line>" refs/remotes/origin/<default branch>
    ```
 
    **A non-zero exit: STOP.** Run `git ls-files -u`: paths it lists are a conflict with an

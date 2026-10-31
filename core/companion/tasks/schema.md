@@ -140,7 +140,7 @@ Every claimed task records a **test decision** in its body — the plan-time ans
 
 **Where it is enforced.** `/review-close` Step 2d, and nowhere else. That gate reads the body **at the branch tip** (`git show "refs/heads/<branch>:<path>"`), classifies the record, and blocks on a discrepancy — with a per-task doc-only skip so a docs branch carrying a `no test because Z` is not held up.
 
-**The validator does not check this** (Phase 234, Q-022). It did, warn-only, from Phase 58b: Invariant 13 warned when an `in_progress` body lacked the heading. But the validator reads the body off the **filesystem**, and the executor writes this section *inside the worktree*, so it is committed on the feature branch and nowhere else. Run from `main` — which is where both of its shipped callers run it — the section is absent for the entire `in_progress` window, so the warning fired on every claimed task on every validator run rather than on the tasks actually missing a record. A backstop that cannot distinguish the failure from the normal case is not a backstop, and it was diluting a channel that carries twelve invariants which can. Step 2d, which reads the revision that has the record, is the whole enforcement story.
+**The validator does not check this** (Phase 234, Q-022). It did, warn-only, from Phase 58b: the old Invariant 13 warned when an `in_progress` body lacked the heading. But the validator reads the body off the **filesystem**, and the executor writes this section *inside the worktree*, so it is committed on the feature branch and nowhere else. Run from `main` — which is where both of its shipped callers run it — the section is absent for the entire `in_progress` window, so the warning fired on every claimed task on every validator run rather than on the tasks actually missing a record. A backstop that cannot distinguish the failure from the normal case is not a backstop, and it was diluting a channel whose other invariants can. Step 2d, which reads the revision that has the record, is the whole enforcement story.
 
 This is the **plan-time recording** half of Sysop's test discipline; the adversarial plan reviewer's "Missing invariant tests" dimension (`_shared/adversarial-review.md` finding 7) is the **review-time scrutiny** half — it judges whether a recorded `no test because Z` rationale is *sound*, rather than flagging the mere absence of a test. They are complementary, not redundant: the author records the decision here; the reviewer judges the recorded rationale.
 
@@ -164,7 +164,7 @@ This is the **plan-time recording** half of Sysop's test discipline; the adversa
 
 **Where it is enforced.** `/review-close` Step 2d, alongside the test decision, on the same branch-tip read — see below for why that is the only shape that can work here.
 
-**The validator does not check this, and will not**, for both of the reasons that retired Invariant 13 and kept `## Plan` from ever getting one, in combination:
+**The validator does not check this, and will not**, for both of the reasons that retired the old Invariant 13 and kept `## Plan` from ever getting one, in combination:
 
 - Like `## Test decision`, it is written by the executor **inside the worktree** and committed on the feature branch, so a validator reading the filesystem from `main` cannot see it at all.
 - Like `## Plan`, it is **optional by design** — most tasks fix nothing extra — so a presence check has no failure to distinguish from the normal case.
@@ -407,9 +407,10 @@ Conventional section layout:
 10. **Status-field consistency** — `done` without `completed_date` is a **warning** (imported history is backfilled from git blame), and a malformed one is an error; `done` without `body` requires `archive_summary`; `done` with `body` rejects `open/` or `deferred/` path segments (catches the silent half-migration from ISSUE-0009 when Step 4c's status flip wrote but the rename skipped); `blast_radius` is required on `open`/`in_progress` at `schema_version >= 2`, and its enum is enforced whenever the field is present at any version; etc. (See tables above.)
 11. **Secret-pattern scan** — warn (not block) on long hex strings, `sk-`-prefixed tokens, AWS-style access keys in any `tasks/**/*.md` body. False-positive prone, so non-blocking.
 12. **Manual-smoke documentation (warn-only)** — when `manual_smoke: true`, the body should contain a heading from the set "Manual smoke" above lists (`manual smoke`, `operator action`, `before merge` and the rest, case-insensitive), the pattern `/review-close` Step 3c reads. Warn-not-block: keeps task authoring fluid; the actual merge gate lives in `/review-close` Step 3c (Phase 35, 2026-05-22).
+13. **No conflict markers** — no line in any `tasks/**/*.md` body starts with `<<<<<<<` or `>>>>>>>` (seven or more, then a space or the line's end). `/review-close` Step 4a resolves a conflicted body by hand and runs the validator before `--continue`, which runs no `pre-commit`. A marker the body quotes on purpose is indented. `=======` is not checked, since it is also a heading underline, and a `conflict-marker-size` below 7 is not covered.
 
-> **There is no 14th, and there used to be a 13th.** A warn-only test-decision
-> check shipped here from Phase 58b until Phase 234 retired it: it read the body
+> **Number 13 used to be a different check.** A warn-only test-decision
+> check shipped as Invariant 13 from Phase 58b until Phase 234 retired it: it read the body
 > off the filesystem, while the record it looked for is written inside the
 > worktree and committed on the feature branch, so a run from `main` — the only
 > place `/claim-task` Step 4c and `/review-close`'s final guard run it — found
@@ -424,7 +425,7 @@ Conventional section layout:
 > interaction modes and most tasks never take it — so a warn-only presence check
 > would fire on nearly every task in the queue rather than merely on claimed
 > ones. A check that cannot tell the failure from the normal case is not a
-> backstop, and this one would be louder about it than Invariant 13 ever was.
+> backstop, and this one would be louder about it than the old Invariant 13 ever was.
 > See "Plan" above.
 
 ## Versioning

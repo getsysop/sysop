@@ -310,6 +310,9 @@ RAW_READ_ALLOWED = {
            "the frontmatter's argument hint, and the flag sections hold only their stubs"),
     "tests/test_skill_runner_text.py": (
         1, "the plant's marker must sit in the copy's core, not arrive by the splice"),
+    "tests/test_review_close_reference_pins.py": (
+        1, "the core alone on purpose: Phase 444's step-file test asserts the spliced runner cites "
+           "a heading the core alone does not"),
     "tools/phase282_round_survivors.py": (1, "Phase 282's battery record, measured the core then"),
     "tools/phase294_figures.py": (2, "Phase 294's published figures, measured the core then"),
     "tools/phase295_precondition_b.py": (3, "Phase 295's transform-4 measurement of the core"),

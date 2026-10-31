@@ -92,6 +92,8 @@ EXCLUDED_SCRIPTS = {
     "git_check.py", "git_ro.py", "review_pins.py", "close_state.py",
     # Phase 425 (`Q-629`): Step 4a's shared-append resolver, a `tasks/index.yml` writer.
     "resolve_append_conflict.py",
+    # Phase 446 (`Q-547`): the closed-task check that pr_head_check.py and git_check.py import.
+    "_closed_tasks.py",
     "backfill_completed_dates.py", "batch_work.sh", "claim_task.sh",
     # Phase 237: a `tasks/index.yml` writer, so it is lifecycle. Loop mode
     # installs no task queue at all, which is what makes this a classification

@@ -1,12 +1,12 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" 4d-direct 6f23ffc63af15c77 "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" 4d-direct f1f225cea068439c "<skill directory>"
 ```
 
 It prints `LOADED: 4d-direct`. **Exit 2**: stop and show its stderr.
 
-Once all merges and doc consolidation are complete (or if there were only unpushed main commits), push `main` via the **`_shared/main-push-guard.md` Rule B safe-push sequence** rather than a bare push — assert-on-`main` (Rule A) → `git fetch origin <default branch>` → merge-first if `origin/<default branch>` advanced (an autonomous auto-merge, e.g. Dependabot) → push the exact verified tip (`git push origin "<SHA>:<default branch>"`, **never `--force`** per Rule C) → confirm the SHA you pushed is on `origin/<default branch>`. The merge-first step also re-runs **`4a-post`** — the merged-tree gate — against the new base; not Step 3, whose tree is `main` and is not the thing that moved. The bare `git push origin <default branch>` is safe only when `origin/<default branch>` has not moved; Rule B makes that check explicit instead of assumed.
+Once all merges and doc consolidation are complete (or if there were only unpushed main commits), push `main` via the **`_shared/main-push-guard.md` Rule B safe-push sequence** rather than a bare push — assert-on-`main` (Rule A) → `git fetch origin <default branch>` → if `origin/<default branch>` advanced, the closed-task check (`git_check.py closed-tasks`) and then merge-first (an autonomous auto-merge, e.g. Dependabot) → push the exact verified tip (`git push origin "<SHA>:<default branch>"`, **never `--force`** per Rule C) → confirm the SHA you pushed is on `origin/<default branch>`. The merge-first step also re-runs **`4a-post`** — the merged-tree gate — against the new base; not Step 3, whose tree is `main` and is not the thing that moved. The bare `git push origin <default branch>` is safe only when `origin/<default branch>` has not moved; Rule B makes that check explicit instead of assumed.
 
 Then confirm the push succeeded.
 

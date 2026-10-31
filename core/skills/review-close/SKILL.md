@@ -814,7 +814,7 @@ For each **approved** feature branch (Step 2a verdict) except one approved as la
 
 - **`test-proves` → "plan said test X — is it here?"** Confirm the diff adds or modifies a test matching X — a changed file on the project's test path (`tests/`, `*_test.py`, `*.test.ts`, `*.spec.ts`, or the project's documented test location) and, when X names a specific test/function, that name appearing in the diff. If the diff touches **no** test file at all, the record claims a test that wasn't delivered → **discrepancy**. (Record-vs-reality only: a test that is present but weak is out of scope here — that's the reviewer's coverage judgment, not this gate's.)
 - **`no-test` → "plan said no-test-because-Z — does Z still hold?"** Re-read `Z` against the diff. `Z` **holds** when the diff's character still matches the stated rationale (pure rename/move, config-only, docs-only, covered by an existing named test, `manual_smoke:`-only) — **with the caveat that "config-only" and "docs-only" name a file's extension, not its consequence.** A semgrep rule, a `checks.yml` entry, a CI workflow, a lockfile pin and a lint config are all config, and each is behaviour a project checks; where the diff changes one of those, `Z` holds only if the rationale anticipated *that*, not merely that no `.py` file moved. `Z` is **stale** when the diff now carries behavior changes the rationale didn't anticipate (e.g. `Z` said "pure rename" but the diff edits logic) → **discrepancy**. This carries inherent judgment residue — acknowledged and bounded: you are matching the recorded rationale to the diff, **not** forming a fresh opinion that a test ought to exist.
-- **`missing` → record absent.** This is the **first** notice, not a second one: nothing upstream warns on it any more (an earlier build retired the validator's Invariant 13, which could not see this record at all from `main`). Treat as a discrepancy to surface.
+- **`missing` → record absent.** This is the **first** notice, not a second one: nothing upstream warns on it any more (an earlier build retired the validator's warn-only test-decision check, which could not see this record at all from `main`). Treat as a discrepancy to surface.
 
 **2‑pre. The ownership probe — before asking about a `missing` record, establish whether one was owed.** Numbered out of the list on purpose: this skill already ships a `### 2b. Prevention Convention Check` as a sibling of `### 2d`, so a sub-step called *2b* would send a reader to the wrong section. It is **one bit, per task ID, from the claim lock**:
 
@@ -1159,7 +1159,7 @@ For each approved feature branch (oldest first), merge it into the **merge targe
    **Exit 0** prints the remote branch's SHA: published. **Exit 1** prints `(local-only)`. **Exit 3**: the name is still a placeholder; write it out and re-run, never read it as local-only, which takes the in-place rebase that damages a published branch. **Exit 2**: stop and show its line.
    A stale remote-tracking ref (pushed once, since deleted on the remote) also prints a SHA and so takes the published arm. That is the safe direction: the published arm's only cost is a merge commit in place of a linear replay.
 
-   **Then ask whether a recorded PR head contains any of its commits** (`pr` policy; Step 4d records each close's PR head). Write the branch and the merge target out:
+   **Then ask whether a recorded PR head contains any of its commits**, under either policy (Step 4d records each `pr` close's PR head). Write the branch and the merge target out:
    ```bash
    python3 sysop/scripts/pr_head_check.py "<branch>" "<merge target>"
    ```
@@ -1170,6 +1170,7 @@ For each approved feature branch (oldest first), merge it into the **merge targe
    - **`REPLAY 0 commit(s)` on a branch Step 2a reviewed** (step 0b printed `NOT LANDED`) — its local ref holds nothing new, and step 0b found a reason not to call it landed. Merge it under neither arm and record it **4a-SKIP**, with step 0b's reason, per *When a branch really is skipped* below.
    - **`RECORDED HEAD: not usable`** — the head holding the most of the branch's commits lacks commits the branch carries and the target already has (the branch merged `<default branch>`, or a branch cut after that squash). Take item 2's arm as written, and put the line on Step 8.
    - **Exit 3** — a placeholder or a `git` failure. Nothing has moved; fix it and re-run.
+   - **Any `CLOSED TASK EDITED:` line**, on a branch item 2 will merge — the merge target closed or removed a task body the branch edited. **Under `--headless`, STOP.** Otherwise show the person each `show:` diff. On a `moved it to` line, ask: merge it, and list it on Step 8's `Closed-task edits:`; or 4a-SKIP the branch. On a `deleted it` line, 4a-SKIP it. A skipped branch's line returns at every close until a person merges it or reverts the edit on the branch.
    See `REFERENCE.md` § *Squash provenance: why each `pr` close records its PR head*.
 
 2. **Merge — rebase-then-ff when the branch is local-only, `--no-ff` when it is published.** **If either path below conflicts, go to item 4 before running anything else** — item 4 routes the conflict and nothing between here and there knows one happened. Stated at the command rather than only at item 4: in written order an operator meets the merge first, which is the shape an earlier round caught one step over, where the rule sat 81 lines past the command it governed.
@@ -1823,6 +1824,8 @@ Superseded PRs: <branch #PR, …> (or "none") — published branches whose own P
                close bypassed. Under `pr`: closed as unmerged by Step 6's branch delete,
                each carrying Step 4a item 3's comment. Under `direct`: GitHub marks them
                MERGED once Step 4d's push lands; list any Step 6 item 0 found still OPEN.
+Closed-task edits: <each `<branch>: <path>` a person chose to merge at Step 4a item 1, and each
+               `Rule B: <path>` at Step 4d's push> (or "none")
 Squash provenance: <`pr` only: "recorded PR #N" | "not recorded — <error>"; each branch
                Step 2a approved as landed (`<branch> — PR #N`); each branch Step 4a
                printed `SKIP` lines for, rebased with `--onto` or merged on the published
@@ -1947,7 +1950,7 @@ Held-back docs: <N> (or "none")
 Remaining:
   - <any SKIP'd branches — paused work; include file count + worktree path + recommendation,
      or, for step 0a's clone pre-check, the Step 1-pre line + its remedy>
-  - <any 4a-SKIP'd branches — approved but did NOT merge; name the conflicting file, and say
+  - <any 4a-SKIP'd branches — approved but did NOT merge; name the conflicting file or `CLOSED TASK EDITED:` path, and say
      the branch + lock are intact, its pending-doc was held back from consolidation, and its
      task was NOT flipped to done>
   - <any rejected branches with reasons>

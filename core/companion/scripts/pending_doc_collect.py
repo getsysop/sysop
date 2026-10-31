@@ -13,7 +13,9 @@ removed. `consume` (Step 4c item 6) deletes the named docs from main's pending-d
 directory when it is left empty; `quarantine` (Step 4c item 1b) moves a doc into its
 `quarantine/` subdirectory. Each takes bare file names, never a path, and refuses any other
 operand before it touches anything (exit 3); `consume` also refuses a doc whose frontmatter
-carries `hold:` or `held_since:` (exit 3) and exits 5 when a name matched no doc. They replaced an `rm` and a `mkdir -p` plus `mv`
+carries `hold:`, or carries `held_since:` that `pending_doc_hold.py check` does not route, and, once that
+check has run, any operand it holds (exit 3),
+and exits 5 when a name matched no doc. They replaced an `rm` and a `mkdir -p` plus `mv`
 the runner composed, which no allow rule admits under `dontAsk` (`Q-665`). A missing or unknown
 subcommand exits 2.
 
@@ -908,10 +910,13 @@ elif _SUBCOMMAND == 'consume':
         print(f'{tag} REFUSED: no {live}/ here; run from the main checkout\'s top level')
         sys.exit(4)
     done, absent, failed = [], [], []
-    # A doc Step 4c item 1c holds (its own `hold:`, or the `held_since:` 1c stamps) must
-    # survive this step (BeanRider ISSUE-0050): refuse the whole call before deleting any.
-    import re
-    held = []
+    # A doc Step 4c item 1c holds must survive this step (BeanRider ISSUE-0050): refuse the
+    # whole call before deleting any. Its own `hold:` holds it outright. `held_since:` only
+    # records that 1c once held it, and stays after `pending_doc_hold.py clear` removes the
+    # `hold:` (`Q-725`), so such a doc is held only if `check` does not route it now: it also
+    # holds a doc for an outstanding `user_action`, which writes no `hold:` key.
+    import re, subprocess
+    held, stamped = [], []
     for name in names:
         doc = live / name
         if doc.is_file():
@@ -920,10 +925,61 @@ elif _SUBCOMMAND == 'consume':
             except OSError:
                 head = ''
             m = re.match(r'\ufeff?---\n(.*?)\n---', head, re.DOTALL)
-            if m and re.search(r'^(hold|held_since):', m.group(1), re.MULTILINE):
+            if m and re.search(r'^hold:', m.group(1), re.MULTILINE):
                 held.append(name)
+            elif m and re.search(r'^held_since:', m.group(1), re.MULTILINE):
+                stamped.append(name)
+    # The verdict denies by default: a stamped doc is deleted only when `check` printed
+    # `ROUTE: <name>` for it and no `HELD:` or `UNREADABLE:` line. `check` prints one line per
+    # doc, so a `ROUTE: ` line forged by another doc's multi-line `hold:` reason still arrives
+    # beside the real `HELD:` one. Names compare as the operands do, case-folded (and NFC).
+    import unicodedata
+    key = lambda n: unicodedata.normalize('NFC', n).casefold()
+    routed, check_held, undecided = set(), set(), ''
+    if stamped and not held:
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE')}
+        # `check` reads the MAIN checkout's pending-docs; its verdict names this directory's
+        # docs only when this is that checkout.
+        try:
+            r = subprocess.run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                               capture_output=True, text=True, env=env, timeout=30)
+            main_root = Path(r.stdout.strip()).parent.resolve() if r.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            main_root = None
+        if main_root != Path.cwd().resolve():
+            undecided = 'this is not the main checkout, whose pending docs the hold check reads'
+        else:
+            hold_py = Path(__file__).resolve().parent / 'pending_doc_hold.py'
+            try:
+                r = subprocess.run([sys.executable, str(hold_py), 'check'], capture_output=True,
+                                   text=True, errors='replace', env=env, timeout=120,
+                                   stdin=subprocess.DEVNULL)
+            except (OSError, subprocess.SubprocessError) as e:
+                r = None
+                undecided = f'pending_doc_hold.py check could not run ({e.__class__.__name__}: {e})'
+            if r is not None and r.returncode != 0:
+                last = (r.stderr.strip() or r.stdout.strip() or '(no output)').splitlines()[-1]
+                undecided = f'pending_doc_hold.py check exited {r.returncode}: {last}'
+            elif r is not None:
+                for ln in r.stdout.splitlines():
+                    if ln.startswith('ROUTE: '):
+                        routed.add(key(ln[len('ROUTE: '):]))
+                    elif ln.startswith(('HELD: ', 'UNREADABLE: ')):
+                        check_held.add(key(ln.split(': ', 1)[1].split(' — ', 1)[0]))
     if held:
         print(f'{tag} REFUSED: held back by Step 4c item 1c, never consolidated: {", ".join(held)}')
+        sys.exit(3)
+    if stamped and undecided:
+        print(f'{tag} REFUSED: could not decide the hold on {", ".join(stamped)}, which carry '
+              f'`held_since:`; nothing deleted. {undecided}')
+        sys.exit(3)
+    # Once the verdict is in hand it binds every operand, stamped or not.
+    blocked = [n for n in names if key(n) in check_held]
+    blocked += [n for n in stamped if key(n) not in routed and n not in blocked]
+    if blocked:
+        print(f'{tag} REFUSED: pending_doc_hold.py check does not route {", ".join(blocked)}; '
+              f'nothing deleted. Run it to see each verdict.')
         sys.exit(3)
     for name in names:
         doc = live / name

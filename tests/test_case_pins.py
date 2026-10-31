@@ -259,7 +259,8 @@ def test_argnames_are_counted_conservatively(argnames_src, expect):
 #: This module's own controls, pinned by the predicate they test.
 #:
 #: `Q-518`, Phase 301, added by its round. The phase shipped two NEW parametrized controls — this
-#: module's escape-route table and `test_each_provenance_pointer_arm_is_not_vacuous` in
+#: module's escape-route table and `test_each_provenance_pointer_arm_is_not_vacuous` (since Phase 444,
+#: `test_each_citation_spelling_is_collected_or_screened`) in
 #: `tests/test_review_close_reference_pins.py` — into modules with no emptying guard and no pin.
 #: The round then ran the compound shape the filing describes (delete the rows that would notice,
 #: then neuter the arm) and the whole suite stayed green. That is `Q-518`'s class, minted in the

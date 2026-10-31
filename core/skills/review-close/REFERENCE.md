@@ -1400,8 +1400,8 @@ rule, this keeps the argument.
 ### What this gate replaced, and why reading the right revision is the whole of it
 
 The test-decision convention arrived early. For a long stretch afterwards a second thing
-claimed to enforce it and did not: `validate_tasks.py` carried a warn-only Invariant 13 on the
-same fact, and it read the body **off the working tree** while the record lives on the branch. So
+claimed to enforce it and did not: `validate_tasks.py` carried a warn-only check on the
+same fact, then numbered Invariant 13, and it read the body **off the working tree** while the record lives on the branch. So
 it warned on every claimed task on every run and told the reader nothing — a check whose output
 is constant carries no information, whatever its subject. A later build retired it and left this step
 as the only enforcement.
@@ -2329,6 +2329,22 @@ two `FAILED` listings. Each now passes
 `ACTIVE`, which reclaims nothing, and widening it would reclaim unstarted claims, whose tips the
 heads also contain.
 
+### The closed-task check: why item 1 reads the bodies before the merge
+
+Step 4c closes a task by moving its body to `tasks/archive/` with `git mv`. A branch that edited
+the open copy then merges with no conflict: git's rename detection carries the edit into the
+archived copy, and no gate reads it. A conflict-time rule cannot catch what never conflicts, so
+`pr_head_check.py` compares the branch's edits against the target's tree before item 2 moves
+anything. It reads from the merge base of the recorded head and the branch when the head is
+usable, since `--onto` replays only what is past it; otherwise from the target's merge base.
+
+A body the target deleted is different: git does conflict (modify/delete), and there is no
+target copy to merge into, so the only answer is a 4a-SKIP. The check runs against the local
+merge target. Under `direct`, `_shared/main-push-guard.md` Rule B step 3 merges a newer
+`origin/<default branch>` after Step 4a, and an archive move can arrive that way, so the same
+check runs there first (`git_check.py closed-tasks`). By then the branches are merged, so it
+cannot skip one: it stops the push, or a person lets the edit land.
+
 ### A landed branch stays approved
 
 The landed-branch entry was filed as unfixable because its parent's constraint (4) required the merged state to be
@@ -3252,7 +3268,7 @@ nights on a trusted consumer. What the runner text no longer says, and why:
   the in-place rebase that damages a published branch. Measured three ways when it was written:
   published → SHA, local-only → `(local-only)`, `<branch>` unsubstituted → `(local-only)`.
   `git_check.py published` exits 3 on the placeholder itself.
-- **Rule B is six calls and reads the default branch's own ref.** A `test`, an `if`, a `$(…)` and
+- **Rule B is separate calls and reads the default branch's own ref.** A `test`, an `if`, a `$(…)` and
   a `|| { …; exit 1; }` tail are each denied under `dontAsk`, so the old single block
   could not run. Split into calls, a block's atomicity is gone; steps 2 and 4 therefore read
   `refs/heads/<default branch>`, not `HEAD`, so an actor that switches away and back between
