@@ -866,6 +866,116 @@ def test_preserve_under_a_separate_git_dir(tmp_path):
             "from here)") in _run(wt).stdout
 
 
+def _held(out: str) -> list[str]:
+    return [ln.split(" (")[0][len("HELD: "):] for ln in out.splitlines() if ln.startswith("HELD: ")]
+
+
+def test_preserve_holds_an_ignored_directory_only_the_worktree_holds(tmp_path):
+    """`Q-731` (upstream #939): `evals/runs/` is ignored as a whole, so the copy never read it,
+    printed `0 preserved` at exit 0, and the unforced remove deleted the only copy."""
+    root = _repo(tmp_path, gitignore="*.json\nnode_modules/\nsysop/runtime/\nevals/runs/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, "evals/runs/steering_1/out.txt", "paid for")
+    r = _preserve(wt, "sysop/runtime/preserved/feat", root)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert _held(r.stdout) == ["evals/runs/"], r.stdout
+    assert "HELD: evals/runs/ (1 files, 8 bytes)" in r.stdout, r.stdout
+    assert "1 ignored directories held" in r.stdout, r.stdout
+
+
+def test_preserve_does_not_hold_a_known_cache(tmp_path):
+    root = _repo(tmp_path, gitignore="*.json\nnode_modules/\nsysop/runtime/\n__pycache__/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, "node_modules/left-pad/index.js", "x")
+    _write(wt, "frontend/node_modules/a/b.js", "x")
+    _write(wt, "pkg/__pycache__/m.cpython-312.pyc", "x")
+    r = _preserve(wt, "sysop/runtime/preserved/feat", root)
+    assert r.returncode == 0 and not _held(r.stdout), r.stdout
+    assert "0 ignored directories held" in r.stdout, r.stdout
+
+
+def test_preserve_does_not_hold_a_directory_the_main_checkout_already_has(tmp_path):
+    root = _repo(tmp_path, gitignore="*.json\nsysop/runtime/\ndata/\n")
+    wt = _worktree(root, tmp_path)
+    _write(root, "data/a.csv", "1,2\n")
+    _write(wt, "data/a.csv", "1,2\n")
+    assert _preserve(wt, "sysop/runtime/preserved/feat", root).returncode == 0
+    _write(wt, "data/b.csv", "3,4\n")                    # one file main lacks holds it
+    r = _preserve(wt, "sysop/runtime/preserved/feat", root)
+    assert r.returncode == 4 and "HELD: data/ (1 files, 4 bytes)" in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("built", [".next/build-manifest.json", "dist/app.js", "build/lib/m.py",
+                                   "coverage/lcov.info", "pkg.egg-info/PKG-INFO",
+                                   "app/target/debug/x", ".hypothesis/examples/a"])
+def test_preserve_does_not_hold_build_output(tmp_path, built):
+    """Phase 456's round (lens B): a worktree's build never matches main's byte for byte, so a
+    branch that ran `npm run build` held every close (Wade, 2026-10-31: skip build output too)."""
+    top = built.split("/")[0] if not built.startswith("app/") else "app/target"
+    root = _repo(tmp_path, gitignore="*.json\nsysop/runtime/\n" + top + "/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, built, "generated")
+    r = _preserve(wt, "sysop/runtime/preserved/feat", root)
+    assert r.returncode == 0 and not _held(r.stdout), r.stdout
+
+
+def test_the_check_counts_a_parent_listed_beside_its_ignored_children_once(tmp_path):
+    """Phase 456's round (lens B): git lists `evals/` beside `evals/runs/` and `evals/other/`,
+    and the check counted three unread directories for two."""
+    root = _repo(tmp_path, gitignore="*.json\nsysop/runtime/\nevals/runs/\nevals/other/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, "evals/runs/a.txt", "x")
+    _write(wt, "evals/other/b.txt", "y")
+    assert "2 ignored directories not read" in _run(wt).stdout
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 directory")
+@pytest.mark.parametrize("locked", ["runs", "runs/locked"])
+def test_preserve_refuses_a_directory_it_cannot_read(tmp_path, locked):
+    """Phase 456's round (lens A): os.walk skipped an unreadable directory silently, so the copy
+    exited 0 over content it never read. It does not run (exit 3), which SKIPs the branch."""
+    root = _repo(tmp_path, gitignore="*.json\nsysop/runtime/\nruns/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, "runs/locked/r.txt", "u")
+    os.chmod(wt / locked, 0)
+    try:
+        r = _preserve(wt, "sysop/runtime/preserved/feat", root)
+    finally:
+        os.chmod(wt / locked, 0o755)
+    assert r.returncode == 3 and "cannot read runs/" in r.stderr, r.stdout + r.stderr
+
+
+def test_preserve_does_not_hold_sysops_own_runtime_directory(tmp_path):
+    """Phase 456's round (lens A): `sysop/runtime/` is listed whole in a normal worktree and holds
+    pending docs main lacks; the close collects those, so holding it would SKIP every close."""
+    root = _repo(tmp_path)
+    wt = _worktree(root, tmp_path)
+    _write(wt, "sysop/runtime/pending-docs/feat.md", "---\nbranch: feat\n---\n")
+    r = _preserve(wt, "sysop/runtime/preserved/feat", root)
+    assert r.returncode == 0 and not _held(r.stdout), r.stdout
+
+
+def test_preserve_does_not_walk_a_cache_inside_a_held_candidate(tmp_path):
+    root = _repo(tmp_path, gitignore="*.json\nsysop/runtime/\nresults/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, "results/node_modules/x.js", "x")          # `results/` is no cache; its child is
+    (wt / "results/link").symlink_to(tmp_path)
+    r = _preserve(wt, "sysop/runtime/preserved/feat", root)
+    assert r.returncode == 0 and not _held(r.stdout), r.stdout
+
+
+def test_a_copy_in_the_preserve_area_clears_the_hold(tmp_path):
+    """The HELD line tells the human to move the directory; a copy in the preserve area, where
+    step 0b already keeps this branch's files, counts as kept."""
+    root = _repo(tmp_path, gitignore="*.json\nsysop/runtime/\nevals/runs/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, "evals/runs/r1/out.txt", "paid for")
+    assert _preserve(wt, "sysop/runtime/preserved/feat", root).returncode == 4
+    _write(root, "sysop/runtime/preserved/feat/evals/runs/r1/out.txt", "paid for")
+    r = _preserve(wt, "sysop/runtime/preserved/feat", root)
+    assert r.returncode == 0 and not _held(r.stdout), r.stdout
+
+
 def test_preserve_reads_the_main_checkouts_ignore_rules(tmp_path):
     """The destination must be ignored where the file will sit: in the main checkout,
     whatever the branch's `.gitignore` says."""
@@ -1243,7 +1353,8 @@ def test_workflow_lists_the_script():
     row = rows[0]
     for needle in ("`ignored_refs.py <WORKSPACE> <BASE> [--branch <NAME>]`",
                    "`ignored_refs.py <WORKSPACE> --preserve <DEST>`",
-                   "Exit 0 none or copied, 1 found, 2 usage, 3 did not run |",
+                   "Exit 0 none or copied, 1 found, 4 copied but held, 2 usage, 3 did not run |",
+                   "prints `HELD:` and exits 4",
                    "an unanswered hit SKIPs the branch",
                    "referenced or not, to DEST, which must be gitignored there"):
         assert needle in row, needle
@@ -1268,8 +1379,8 @@ SPANS = {
 PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_ignored_refs as T; T._print_pins()"
     "2a step 3a": "d8da2d56481da7fa",  # Phase 430's round (lens A): `keep-ignored commit` refuses (exit 5) outside a linked worktree. Phase 430 (P5): the answers moved to `steps/2a-ignored-refs.md`, read spliced, behind a stub on the check's non-zero exit. Phase 387: the span plus feature_branch.py keep-ignored, the heredoc moved verbatim (`Q-409` P3). The program is appended fenced, so its indentation counts (Phase 387's round). Phase 380: the commit-or-copy heredoc's env-strip is `dict(...)`, which dontAsk admits (`Q-664`). Phase 362: the --dry-run arm (no commit or copy). Before it, Phase 355: the --clone remedy and workspace lookup name Step 1-pre; round 2 added the branch_tip: re-run
-    "3b step 0b": "8f4d1258b11128a2",
-    "step 8 ignored references": "374cb27c300286f9",
+    "3b step 0b": "f8fecdec2f9d349d",  # Phase 456 (`Q-731`, Wade 2026-10-31): the print line names `HELD:` lines, the hold an ignored directory only the worktree holds now prints before its non-zero exit.
+    "step 8 ignored references": "b9c9f896152b1f9c",  # Phase 456 (`Q-731`, its round, lens B): the row names step 0b's HELD: lines beside its error, since a hold is a SKIP that is not an error.
     "claim-task 7e item 5b": "e38f488e999fbf2d",
     "auto-build 7c item 4c": "c608b7001314d134",
 }

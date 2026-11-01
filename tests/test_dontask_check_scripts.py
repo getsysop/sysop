@@ -236,6 +236,11 @@ def test_git_ro_refuses_a_subcommand_outside_the_allowlist(repo: Path, pinned: P
     ("blame", "-S", "/etc/hosts", "f.txt"), ("grep", "-f", "/etc/hosts"), ("grep", "-nf/etc/hosts"),
     ("ls-files", "--exclude-from=/etc/hosts"), ("status", "--pathspec-from-file=/etc/hosts"),
     ("describe", "--dirty", "--always"),
+    # `status -v` runs a textconv filter and takes no `--no-textconv` (`Q-726`).
+    ("status", "-v"), ("status", "-sv"), ("status", "--verbose"), ("status", "--verb"),
+    # A submodule's diff and a submodule read its own config, which no override reaches.
+    ("diff", "--submodule=diff"), ("log", "-p", "--submodule"), ("show", "--submod=log"),
+    ("status", "--ignore-submodules=none"), ("diff", "--ignore-submodules"),
 ])
 def test_git_ro_refuses_an_argument_that_writes_or_runs(repo: Path, pinned: Path, args) -> None:
     p = run("git_ro.py", repo, str(pinned), *args)
@@ -323,6 +328,179 @@ def test_git_ro_status_takes_no_index_lock(repo: Path, pinned: Path) -> None:
     before = index.stat().st_mtime_ns
     assert run("git_ro.py", repo, str(pinned), "status", "--porcelain").returncode == 0
     assert index.stat().st_mtime_ns == before
+
+
+def test_git_ro_diff_sees_a_same_second_edit(repo: Path, pinned: Path) -> None:
+    """The private index keeps the real one's mtime (`Q-726` leg 2): git rehashes an entry whose
+    mtime is not older than the index's, and a copy dated now trusted a same-size edit's stat.
+    The entry is refreshed from an old mtime first, since a checkout in the index's own second
+    leaves it smudged (size 0, always rehashed); the edit then gets that mtime back, the index
+    is dated to it, and ctime is not trusted, so no clock races."""
+    g(repo, "config", "core.trustctime", "false")
+    f = pinned / "f.txt"
+    old = f.stat().st_mtime_ns - 10_000_000_000
+    os.utime(f, ns=(old, old))
+    g(pinned, "update-index", "--refresh")
+    f.write_text("FEAT\n")  # the size of "feat\n"
+    os.utime(f, ns=(old, old))
+    index = Path(g(pinned, "rev-parse", "--absolute-git-dir")) / "index"
+    os.utime(index, ns=(old, old))
+    p = run("git_ro.py", repo, str(pinned), "diff")
+    assert p.returncode == 0 and "+FEAT" in p.stdout, p.stdout + p.stderr
+
+
+#: git picks the verifying program by the signature's armor, not by `gpg.format`.
+SIGNATURES = {"SIGNED": "-----BEGIN PGP SIGNATURE-----", "SSHSIGNED": "-----BEGIN SSH SIGNATURE-----",
+              "X509SIGNED": "-----BEGIN SIGNED MESSAGE-----"}
+
+
+@pytest.mark.parametrize("config,args", [
+    ({"core.fsmonitor": "PROG"}, ("status",)), ({"core.fsmonitor": "PROG"}, ("diff",)),
+    ({"core.fsmonitor": "PROG"}, ("diff-tree", "-p", "main", "HEAD")),
+    ({"core.fsmonitor": "PROG"}, ("blame", "f.txt")), ({"core.fsmonitor": "PROG"}, ("grep", "FEAT")),
+    ({"core.fsmonitor": "PROG"}, ("ls-files", "-m")),
+    # A driver name holding `=` and `.`, which a `-c name=value` override could not carry.
+    ({"filter.c=f.x.clean": "PROG"}, ("status",)), ({"filter.c=f.x.clean": "PROG"}, ("diff",)),
+    ({"filter.c=f.x.clean": "PROG"}, ("ls-files", "-m")),
+    ({"filter.c=f.x.process": "PROG"}, ("diff",)),
+    ({"diff.external": "PROG"}, ("diff",)), ({"diff.d.command": "PROG"}, ("diff",)),
+    ({"diff.d.textconv": "PROG"}, ("diff",)),
+    ({"diff.d.textconv": "PROG"}, ("log", "-p", "-1")), ({"diff.d.textconv": "PROG"}, ("blame", "f.txt")),
+    ({"diff.d.textconv": "PROG"}, ("show", "HEAD")),
+    ({"diff.d.textconv": "PROG", "diff.d.cachetextconv": "true"}, ("log", "-p", "-1")),
+    ({"gpg.program": "PROG", "log.showSignature": "true"}, ("log", "-1", "SIGNED")),
+    ({"gpg.program": "PROG"}, ("log", "-1", "--show-signature", "SIGNED")),
+    ({"gpg.program": "PROG"}, ("log", "-1", "--format=%G?", "SIGNED")),
+    # ssh verification refuses to start without an allowed-signers file (measured).
+    ({"gpg.ssh.allowedSignersFile": "PROG", "gpg.ssh.program": "PROG"},
+     ("log", "-1", "--show-signature", "SSHSIGNED")),
+    ({"gpg.x509.program": "PROG"}, ("log", "-1", "--show-signature", "X509SIGNED")),
+])
+def test_git_ro_runs_no_program_config_names(repo: Path, pinned: Path, tmp_path: Path, config,
+                                             args) -> None:
+    """`Q-726`: a read runs a program named in config with no argument asking for it. Each case
+    ran its program through the wrapper before the fix (measured on git 2.50.1)."""
+    mark = tmp_path / "ran"
+    prog = tmp_path / "prog"
+    prog.write_text(f"#!/bin/sh\necho \"$0 $*\" >> '{mark}'\ncat \"$1\" 2>/dev/null\nexit 1\n")
+    prog.chmod(0o755)
+    (pinned / ".gitattributes").write_text("f.txt diff=d filter=c=f.x\n")
+    # The size of "feat\n": a clean filter runs only when the size cannot settle the compare.
+    (pinned / "f.txt").write_text("FEAT\n")
+    for k, v in config.items():
+        g(repo, "config", k, str(prog) if v == "PROG" else v)
+    commits = {}
+    for word, armor in SIGNATURES.items():
+        end = armor.replace("BEGIN", "END")
+        sig = f"gpgsig {armor}\n AAAA\n {end}\n"
+        body = g(repo, "cat-file", "commit", "feat").replace("\n\n", "\n" + sig + "\n", 1)
+        commits[word] = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+                                       cwd=repo, env=GIT_ENV, input=body + "\n", capture_output=True,
+                                       text=True, check=True).stdout.strip()
+    p = run("git_ro.py", repo, str(pinned), *[commits.get(a, a) for a in args])
+    assert p.returncode == 0 and not mark.exists(), (p.stdout, p.stderr,
+                                                     mark.exists() and mark.read_text())
+    assert g(repo, "for-each-ref", "refs/notes") == ""
+
+
+def test_git_ro_runs_no_filter_from_global_config(repo: Path, pinned: Path, tmp_path: Path) -> None:
+    """The realistic filter is LFS, configured globally: the drivers are read with the
+    worktree's whole config, not its repository file alone."""
+    mark = tmp_path / "ran"
+    prog = tmp_path / "prog"
+    prog.write_text(f"#!/bin/sh\necho ran >> '{mark}'\ncat\n")
+    prog.chmod(0o755)
+    glob = tmp_path / "global"
+    glob.write_text(f"[filter \"lfs\"]\n\tclean = {prog}\n\tprocess = {prog}\n\trequired = true\n")
+    (pinned / ".gitattributes").write_text("f.txt filter=lfs\n")
+    (pinned / "f.txt").write_text("FEAT\n")
+    for args in (("status", "--porcelain"), ("diff",), ("ls-files", "-m")):
+        p = run("git_ro.py", repo, str(pinned), *args, env={"GIT_CONFIG_GLOBAL": str(glob)})
+        assert p.returncode == 0 and not mark.exists(), (args, p.stdout, p.stderr)
+
+
+def test_git_ro_reads_filters_from_the_config_git_reads(repo: Path, pinned: Path,
+                                                        tmp_path: Path) -> None:
+    """`GIT_CONFIG` narrows `git config` to one file but not the read itself, so a caller's
+    `GIT_CONFIG` hid the repository's drivers from the enumeration: it is stripped."""
+    mark = tmp_path / "ran"
+    prog = tmp_path / "prog"
+    prog.write_text(f"#!/bin/sh\necho ran >> '{mark}'\ncat\n")
+    prog.chmod(0o755)
+    g(repo, "config", "filter.cf.clean", str(prog))
+    (pinned / ".gitattributes").write_text("f.txt filter=cf\n")
+    (pinned / "f.txt").write_text("FEAT\n")
+    empty = tmp_path / "empty.cfg"
+    empty.write_text("")
+    p = run("git_ro.py", repo, str(pinned), "status", env={"GIT_CONFIG": str(empty)})
+    assert p.returncode == 0 and not mark.exists(), p.stdout + p.stderr
+
+
+def test_git_ro_runs_no_program_a_submodules_config_names(tmp_path: Path) -> None:
+    """A submodule's own config (`.git/modules/<name>/config`) is not read for its filter
+    drivers, and `status` and `diff` ran its clean filter by running `status` inside it; a
+    superproject's `diff.submodule=diff` ran its textconv under `log -p` (Phase 451's round)."""
+    mark = tmp_path / "ran"
+    prog = tmp_path / "prog"
+    prog.write_text(f"#!/bin/sh\necho \"$0 $*\" >> '{mark}'\ncat\n")
+    prog.chmod(0o755)
+    inner, sup = tmp_path / "inner", tmp_path / "super"
+    for d in (inner, sup):
+        d.mkdir()
+        g(d, "init", "-q", "-b", "main")
+    (inner / ".gitattributes").write_text("f.txt filter=evil diff=evil\n")
+    (inner / "f.txt").write_text("aaaa\n")
+    g(inner, "add", "-A")
+    g(inner, *ID, "commit", "-q", "-m", "i")
+    g(sup, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(inner), "inner")
+    g(sup, *ID, "commit", "-q", "-m", "s")
+    (sup / "inner" / "f.txt").write_text("bbbb\n")
+    g(sup / "inner", *ID, "commit", "-q", "-am", "moved")
+    (sup / "inner" / "f.txt").write_text("cccc\n")
+    for k in ("filter.evil.clean", "diff.evil.textconv", "diff.evil.command", "diff.external"):
+        g(sup / "inner", "config", k, str(prog))
+    g(sup, "config", "diff.submodule", "diff")
+    for args in (("status",), ("status", "--porcelain"), ("diff",), ("diff", "HEAD"),
+                 ("log", "-p", "-1"), ("show",)):
+        p = run("git_ro.py", sup, str(sup), *args)
+        assert p.returncode == 0 and not mark.exists(), (args, p.stdout, p.stderr,
+                                                         mark.exists() and mark.read_text())
+    # The submodule's new commit still shows: only its uncommitted changes are left unread.
+    assert "inner" in run("git_ro.py", sup, str(sup), "status", "--porcelain").stdout
+
+
+def test_git_ro_starts_no_lazy_fetch(tmp_path: Path) -> None:
+    """In a partial clone a missing object was fetched on demand, running the remote's transport
+    (`core.sshCommand` here, at an unroutable `.invalid` host) and writing what it fetched."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    g(origin, "init", "-q", "-b", "main")
+    g(origin, "config", "uploadpack.allowfilter", "true")
+    (origin / "b.txt").write_text("one\n")
+    g(origin, "add", "-A")
+    g(origin, *ID, "commit", "-q", "-m", "one")
+    g(tmp_path, "clone", "-q", "--filter=blob:none", "--no-checkout", f"file://{origin}", "pc")
+    pc = tmp_path / "pc"
+    mark = tmp_path / "ran"
+    ssh = tmp_path / "ssh"
+    ssh.write_text(f"#!/bin/sh\necho ran >> '{mark}'\nexit 1\n")
+    ssh.chmod(0o755)
+    g(pc, "config", "remote.origin.url", "ssh://sysop-fixture.invalid/x")
+    g(pc, "config", "core.sshCommand", str(ssh))
+    p = run("git_ro.py", pc, str(pc), "cat-file", "-p", "HEAD:b.txt")
+    assert p.returncode != 0 and not mark.exists(), (p.stdout, p.stderr)
+
+
+def test_git_ro_diff_still_shows_the_change_with_helpers_off(repo: Path, pinned: Path,
+                                                             tmp_path: Path) -> None:
+    """Turning the helpers off must not empty the read: the diff is git's own."""
+    prog = tmp_path / "prog"
+    prog.write_text("#!/bin/sh\nexit 0\n")
+    prog.chmod(0o755)
+    g(repo, "config", "diff.external", str(prog))
+    (pinned / "f.txt").write_text("changed\n")
+    p = run("git_ro.py", repo, str(pinned), "diff")
+    assert p.returncode == 0 and "+changed" in p.stdout, p.stdout + p.stderr
 
 
 # --- review_pins.py -------------------------------------------------------------------------

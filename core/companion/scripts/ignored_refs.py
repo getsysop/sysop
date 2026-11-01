@@ -32,14 +32,20 @@ whose path is blocked, goes under a fresh UTC timestamp, so nothing preserved is
 overwritten. A main-checkout file that is a link, or that resolves into the
 workspace, is not a copy. `/review-close` Step 3b step 0b runs it
 before removing a worktree, so the remove destroys nothing the check missed
-(Wade, 2026-10-02).
+(Wade, 2026-10-02). A directory ignored as a whole is not copied: if it holds
+a file neither the main checkout nor an earlier preserve has, the copy prints
+`HELD: <dir> (<n> files, <b> bytes)` and exits 4, and step 0b keeps the worktree
+(Wade, 2026-10-31, `Q-731`). A directory named like a cache or build output
+(`_CACHE_DIRS`, and `*.egg-info`) is never walked, by any path component.
 
 **Which ignored files**, in both modes: the ones `git ls-files --others --ignored
 --exclude-standard --directory` lists one by one, the files a file pattern
 ignores (`*.json`, `.env`). A directory a pattern ignores as a whole
-(`node_modules/`, `.venv/`, `__pycache__/`) is one entry and is not read: those
-are installs, caches and build output, and on one consumer's four live claim
-worktrees they produced every false hit (Wade, 2026-10-01). Symlinks are skipped
+(`node_modules/`, `.venv/`, `__pycache__/`) is one entry. The check does not read
+it: those are installs, caches and build output, and on one consumer's four live
+claim worktrees they produced every false hit (Wade, 2026-10-01). The copy walks
+it only to decide whether to hold, as above. A directory holding nothing but
+ignored directories is listed beside them; it is counted once, by its children. Symlinks are skipped
 (removing one removes the link), and so is `sysop/runtime/`, Sysop's own state:
 the close collects its pending docs, and the rest is scratch.
 
@@ -86,7 +92,8 @@ Step 4a merges this repository's branch, not the clone's, and `/review-close` St
 per file it copies and a `PRESERVE:` summary.
 
 Exit 0 when the check reports nothing or the copy finished, 1 when the check
-reports something, 2 on a usage error (argparse), 3 when either could not run (a
+reports something, 4 when the copy finished but held a directory (`HELD:`), 2 on
+a usage error (argparse), 3 when either could not run (a
 placeholder operand, a workspace that is not the top of a git work tree, a BASE
 git cannot resolve, a DEST outside the main checkout or not ignored there, a git
 command or a copy that failed, any unexpected error). Neither 2 nor 3 is a pass.
@@ -139,9 +146,9 @@ def _in_runtime(path: str) -> bool:
     return path == _RUNTIME or path.startswith(_RUNTIME + "/")
 
 
-def ignored_files(ws: Path) -> tuple[set[str], int]:
-    """(files, directory count): the ignored, untracked files git lists one by one, and
-    the directories it lists with nothing listed under them, whose contents go unread.
+def _ignored(ws: Path) -> tuple[set[str], list[str]]:
+    """(files, directories): the ignored, untracked files git lists one by one, and the
+    directories it lists with nothing listed under them, whose contents go unread.
 
     git lists an untracked directory BESIDE the ignored files it holds; those files are
     read, so such a directory is not counted as unread.
@@ -152,9 +159,16 @@ def ignored_files(ws: Path) -> tuple[set[str], int]:
     listed = [e for e in entries if not e.endswith("/")]
     # A symlink is never the only copy of anything: removing it removes the link.
     files = {e for e in listed if not _in_runtime(e) and not os.path.islink(ws / e)}
-    dirs = sum(1 for e in entries if e.endswith("/")
-               and not any(f.startswith(e) for f in listed))
-    return files, dirs
+    dirs = [e for e in entries if e.endswith("/") and not any(f.startswith(e) for f in listed)]
+    # A directory holding only ignored content is listed beside the ignored directory in it
+    # (`evals/` and `evals/runs/`); the deeper entry names it, so the parent is not counted.
+    return files, [d for d in dirs if not any(x != d and x.startswith(d) for x in dirs)]
+
+
+def ignored_files(ws: Path) -> tuple[set[str], int]:
+    """(files, directory count) — `_ignored` with the directories counted, for the check."""
+    files, dirs = _ignored(ws)
+    return files, len(dirs)
 
 
 def _unquote(target: str) -> str:
@@ -779,7 +793,7 @@ def preserve(ws: Path, dest_arg: str) -> int:
                       env=env).returncode != 0:
         raise CheckError("{} is not gitignored in the main checkout; a preserved file "
                          "would show up there as untracked work".format(rel_dest))
-    files, _ = ignored_files(ws)
+    files, dirs = _ignored(ws)
     runs = sorted(d for d in dest.iterdir() if d.is_dir() and _STAMP.match(d.name)) \
         if dest.is_dir() else []
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -808,10 +822,61 @@ def preserve(ws: Path, dest_arg: str) -> int:
         copied_bytes += src.stat().st_size
         done += 1
         print("PRESERVED: {} -> {}".format(rel, target))
+    held = []
+    for d in sorted(dirs):
+        n, size = _only_copies(root, ws, d, [dest] + runs)
+        if n:
+            held.append(d)
+            print("HELD: {} ({} files, {} bytes) — an ignored directory only this worktree "
+                  "holds; not copied. Move it or delete it, then close the branch again".format(
+                      d, n, size))
     print("PRESERVE: {} preserved ({} bytes), {} already preserved, {} with a copy in the "
-          "main checkout, {} gone before it was read -> {}".format(
-              done, copied_bytes, already, with_copy, gone, rel_dest))
-    return 0
+          "main checkout, {} gone before it was read, {} ignored directories held -> {}".format(
+              done, copied_bytes, already, with_copy, gone, len(held), rel_dest))
+    return 4 if held else 0
+
+
+# Regenerable directories a worktree holds a copy of as a matter of course: caches, installs and
+# build output, which never match main's byte for byte. Named by any path component, so
+# `frontend/node_modules/` and `pkg/__pycache__/` count too, and `*.egg-info` by suffix (Wade,
+# 2026-10-31: hold an ignored directory only this worktree holds, but not a known cache, and the
+# build outputs too, on Phase 456's round).
+_CACHE_DIRS = frozenset({
+    "__pycache__", "node_modules", ".venv", "venv", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".hypothesis", ".tox", ".nox", ".next", ".nuxt", ".turbo", ".cache", ".gradle", ".dart_tool",
+    "dist", "build", "out", "target", "coverage", "htmlcov"})
+
+
+def _is_cache(name: str) -> bool:
+    return name in _CACHE_DIRS or name.endswith(".egg-info")
+
+
+def _only_copies(root: Path, ws: Path, d: str, kept: list[Path]) -> tuple[int, int]:
+    """(files, bytes) under the ignored directory D that neither the main checkout nor an
+    earlier preserve holds byte-identical. Known caches and links are not walked."""
+    if _in_runtime(d.rstrip("/")) or any(_is_cache(c) for c in d.rstrip("/").split("/")) \
+            or os.path.islink(ws / d.rstrip("/")):
+        return 0, 0
+    n = size = 0
+    def unreadable(err: OSError) -> None:
+        # A subtree os.walk cannot list would read as clean, and the remove would follow.
+        raise CheckError("cannot read {} to see whether only this worktree holds it: {}".format(
+            d, err))
+    for top, subdirs, names in os.walk(ws / d, onerror=unreadable):
+        subdirs[:] = [s for s in subdirs
+                      if not _is_cache(s) and not os.path.islink(os.path.join(top, s))]
+        for name in names:
+            src = Path(top) / name
+            if src.is_symlink() or not src.is_file():
+                continue
+            rel = src.relative_to(ws).as_posix()
+            if _has_copy(root, ws, rel) or any(
+                    c.is_file() and not c.is_symlink() and filecmp.cmp(src, c, shallow=False)
+                    for c in [k / rel for k in kept]):
+                continue
+            n += 1
+            size += src.stat().st_size
+    return n, size
 
 
 # The literal placeholders the skills print; a `<` in a real branch or file name is legal.

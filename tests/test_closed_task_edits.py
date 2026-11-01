@@ -289,6 +289,213 @@ def test_rule_b_checks_an_advance_that_closed_a_task_this_close_edited(tmp_path)
     assert "the branch's plan" in (repo / "tasks/archive/T-1.md").read_text()
 
 
+def readded(out):
+    return [ln for ln in out.splitlines() if ln.startswith("CLOSED TASK RE-ADDED:")]
+
+
+def test_a_close_that_also_edits_the_body_beside_a_near_copy_is_still_named(tmp_path):
+    """Phase 446's round: the target archives T-1, adds an outcome to it, and files a near-copy of
+    its old body as T-9. Rename pairing (`-M`) then pairs `open/T-1.md` with `open/T-9.md`, and the
+    check read no close. The close is read by file name first (Phase 452)."""
+    repo = seed(tmp_path, "T-1")
+    git(repo, "checkout", "-qb", "feat")
+    append(repo, "tasks/open/T-1.md", PLAN)
+    git(repo, "commit", "-qam", "plan")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "mv", "tasks/open/T-1.md", "tasks/archive/T-1.md")
+    append(repo, "tasks/archive/T-1.md", "\n## Outcome\nshipped in #12, with notes\nmore\nmore\n")
+    (repo / "tasks/open/T-9.md").write_text(BODY.format(t="T-1") + "x\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "close T-1, file T-9")
+    pairs = git(repo, "diff", "--name-status", "-M", "main~1", "main", "--", "tasks/")
+    assert "tasks/open/T-1.md\ttasks/open/T-9.md" in pairs, pairs  # the premise: git mispairs
+    assert edited(check(repo)) == [
+        "CLOSED TASK EDITED: tasks/open/T-1.md — the branch edited it, and main moved it to "
+        "tasks/archive/T-1.md"]
+
+
+def test_a_body_the_branch_adds_that_the_target_closed_is_named(tmp_path):
+    """A branch that added T-5's body, replayed after a squash of it landed and a close archived
+    it, puts the stale open copy back beside the closed one with no conflict (the premise, run
+    against git). The check names it (`Q-547`, Phase 452)."""
+    repo = seed(tmp_path)
+    git(repo, "checkout", "-qb", "feat")
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add T-5")
+    append(repo, "tasks/notes.md", "- T-5 note\n")
+    git(repo, "commit", "-qam", "note")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--squash", "feat")
+    git(repo, "commit", "-qm", "squash of PR #8")
+    git(repo, "mv", "tasks/open/T-5.md", "tasks/archive/T-5.md")
+    git(repo, "commit", "-qm", "close T-5")
+    out = check(repo)
+    assert readded(out) == [
+        "CLOSED TASK RE-ADDED: tasks/open/T-5.md — the branch adds it, and main closed it at "
+        "tasks/archive/T-5.md"], out
+    assert "  show: git diff" in out and edited(out) == [], out
+
+    git(repo, "checkout", "-q", "feat")
+    git(repo, "rebase", "main")  # exit 0
+    assert (repo / "tasks/open/T-5.md").exists() and (repo / "tasks/archive/T-5.md").exists()
+
+
+def test_a_body_the_recorded_head_already_added_is_not_named(tmp_path):
+    """With a usable head that contains the add, `--onto` replays nothing that adds it."""
+    repo = seed(tmp_path)
+    git(repo, "checkout", "-qb", "feat")
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add T-5")
+    head = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--squash", "feat")
+    git(repo, "commit", "-qm", "squash of PR #8")
+    git(repo, "mv", "tasks/open/T-5.md", "tasks/archive/T-5.md")
+    git(repo, "commit", "-qm", "close T-5")
+    git(repo, "update-ref", "refs/sysop/merged-pr-heads/8", head)
+    out = check(repo)
+    assert "RECORDED HEAD: refs/sysop/merged-pr-heads/8" in out.splitlines(), out
+    assert readded(out) == [] and edited(out) == [], out
+
+
+def test_a_body_the_target_still_holds_open_is_not_named_as_re_added(tmp_path):
+    """Both sides added T-5 and neither closed it: nothing is closed, so nothing is named."""
+    repo = seed(tmp_path)
+    git(repo, "checkout", "-qb", "feat")
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add T-5")
+    git(repo, "checkout", "-q", "main")
+    (repo / "tasks/open").mkdir(exist_ok=True)
+    (repo / "tasks/archive").mkdir(exist_ok=True)
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    (repo / "tasks/archive/T-6.md").write_text(BODY.format(t="T-6"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add T-5 and an archived T-6")
+    assert readded(check(repo)) == []
+
+
+def test_a_live_move_beside_an_archived_near_copy_is_not_named(tmp_path):
+    """The other direction of reading by name: the target defers T-1 and rewrites it, and files an
+    archived near-copy of its old body as T-9. Rename pairing reads `open/T-1.md` as moved to
+    `archive/T-9.md`; by name it is the live `deferred/T-1.md`, where the edit is wanted."""
+    repo = seed(tmp_path, "T-1")
+    git(repo, "checkout", "-qb", "feat")
+    append(repo, "tasks/open/T-1.md", PLAN)
+    git(repo, "commit", "-qam", "plan")
+    git(repo, "checkout", "-q", "main")
+    (repo / "tasks/deferred").mkdir(exist_ok=True)
+    (repo / "tasks/archive").mkdir(exist_ok=True)
+    git(repo, "mv", "tasks/open/T-1.md", "tasks/deferred/T-1.md")
+    (repo / "tasks/deferred/T-1.md").write_text("# T-1\n\nrewritten while deferred\nnew\nnew\nnew\n")
+    (repo / "tasks/archive/T-9.md").write_text(BODY.format(t="T-1") + "x\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "defer T-1, archive T-9")
+    pairs = git(repo, "diff", "--name-status", "-M", "main~1", "main", "--", "tasks/")
+    assert "tasks/open/T-1.md\ttasks/archive/T-9.md" in pairs, pairs  # the premise: git mispairs
+    assert edited(check(repo)) == []
+
+
+def test_an_edit_to_an_archived_body_the_target_kept_is_not_named(tmp_path):
+    repo = seed(tmp_path, "T-1")
+    git(repo, "mv", "tasks/open/T-1.md", "tasks/archive/T-1.md")
+    git(repo, "commit", "-qm", "close T-1")
+    git(repo, "checkout", "-qb", "feat")
+    append(repo, "tasks/archive/T-1.md", "\n## Outcome\nnoted later\n")
+    git(repo, "commit", "-qam", "outcome")
+    git(repo, "checkout", "-q", "main")
+    append(repo, "tasks/notes.md", "- moved on\n")
+    git(repo, "commit", "-qam", "unrelated")
+    out = check(repo)
+    assert edited(out) == [] and readded(out) == [], out
+
+
+def test_a_body_the_target_holds_open_and_closed_is_not_named_as_re_added(tmp_path):
+    """The target carries both copies: the merge puts back nothing that is not already there."""
+    repo = seed(tmp_path)
+    git(repo, "checkout", "-qb", "feat")
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add T-5")
+    git(repo, "checkout", "-q", "main")
+    (repo / "tasks/open").mkdir(exist_ok=True)
+    (repo / "tasks/archive").mkdir(exist_ok=True)
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    (repo / "tasks/archive/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "both copies")
+    assert readded(check(repo)) == []
+
+
+def test_a_reopen_of_a_body_closed_before_the_fork_is_not_named(tmp_path):
+    """A branch that moves an archived body back to `open/` reopens a task the target closed
+    before the fork; that is not a replay (its round, lens B). On Rule B's side the merge would
+    drop the archive copy, so a STOP there would be false."""
+    repo = seed(tmp_path, "T-1")
+    git(repo, "mv", "tasks/open/T-1.md", "tasks/archive/T-1.md")
+    git(repo, "commit", "-qm", "close T-1")
+    git(repo, "checkout", "-qb", "feat")
+    git(repo, "mv", "tasks/archive/T-1.md", "tasks/open/T-1.md")
+    git(repo, "commit", "-qm", "reopen T-1")
+    git(repo, "checkout", "-q", "main")
+    append(repo, "tasks/notes.md", "- moved on\n")
+    git(repo, "commit", "-qam", "unrelated")
+    out = check(repo)
+    assert readded(out) == [] and edited(out) == [], out
+
+
+def test_the_round_s_unpinned_arms(tmp_path):
+    """Three arms lens A's mutants reached and no test did. A nested path is not a body; a branch
+    that moves T-1 to `deferred/` while the target archives it is stopped (git's own rename/rename
+    conflict follows); a target that renumbers T-2 to a live T-100 kept the edit's task live."""
+    repo = seed(tmp_path, "T-1", "T-2")
+    git(repo, "checkout", "-qb", "feat")
+    (repo / "tasks/open/sub").mkdir()
+    (repo / "tasks/open/sub/T-5.md").write_text(BODY.format(t="T-5"))
+    (repo / "tasks/deferred").mkdir()
+    git(repo, "add", "-A")
+    git(repo, "mv", "tasks/open/T-1.md", "tasks/deferred/T-1.md")
+    append(repo, "tasks/open/T-2.md", PLAN)
+    git(repo, "commit", "-qam", "nested T-5, defer T-1, plan T-2")
+    git(repo, "checkout", "-q", "main")
+    (repo / "tasks/archive").mkdir(exist_ok=True)
+    (repo / "tasks/archive/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "mv", "tasks/open/T-1.md", "tasks/archive/T-1.md")
+    git(repo, "mv", "tasks/open/T-2.md", "tasks/open/T-100.md")
+    git(repo, "commit", "-qm", "archive T-5 and T-1, renumber T-2")
+    out = check(repo)
+    assert [ln.split(" — ")[0] for ln in out.splitlines() if ln.startswith("CLOSED TASK")] == [
+        "CLOSED TASK RE-ADDED: tasks/deferred/T-1.md"], out
+
+
+def test_rule_b_stops_on_an_advance_that_closed_a_body_this_close_adds(tmp_path):
+    origin = tmp_path / "origin.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    repo = seed(tmp_path, "T-1")
+    git(repo, "remote", "add", "origin", str(origin))
+    git(repo, "push", "-q", "origin", "main")
+    other = tmp_path / "other"
+    git(tmp_path, "clone", "-q", "-b", "main", str(origin), str(other))
+    (other / "tasks/archive").mkdir(exist_ok=True)
+    (other / "tasks/archive/T-5.md").write_text(BODY.format(t="T-5"))
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "another clone filed and closed T-5")
+    git(other, "push", "-q", "origin", "main")
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "this close: a branch's T-5")
+    git(repo, "fetch", "-q", "origin")
+    r = closed_tasks(repo, "refs/heads/main", "refs/remotes/origin/main")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert readded(r.stdout) == [
+        "CLOSED TASK RE-ADDED: tasks/open/T-5.md — this close adds it, and "
+        "refs/remotes/origin/main closed it at tasks/archive/T-5.md"], r.stdout
+    assert r.stdout.splitlines()[-1].startswith("STOP: "), r.stdout
+
+
 def test_closed_tasks_refuses_short_names_and_a_missing_merge_base(tmp_path):
     repo = seed(tmp_path, "T-1")
     r = closed_tasks(repo, "main", "refs/heads/main")
@@ -339,6 +546,31 @@ def test_the_check_reads_from_the_top_level_wherever_it_runs(tmp_path):
     assert closed_tasks(repo / "tasks", "refs/heads/feat", "refs/heads/main").returncode == 1
 
 
+def test_the_name_reads_hold_from_a_subdirectory(tmp_path):
+    """`git ls-tree` prints paths relative to the working directory, so from `tasks/open` the
+    target's tree read `../archive/T-1.md` and neither the by-name close nor the re-add matched
+    (Phase 452's round, lens A). The near-copy shape and a re-add, read from three directories."""
+    repo = seed(tmp_path, "T-1")
+    git(repo, "checkout", "-qb", "feat")
+    append(repo, "tasks/open/T-1.md", PLAN)
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "plan, and add T-5")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "mv", "tasks/open/T-1.md", "tasks/archive/T-1.md")
+    append(repo, "tasks/archive/T-1.md", "\n## Outcome\nshipped in #12, with notes\nmore\nmore\n")
+    (repo / "tasks/open/T-9.md").write_text(BODY.format(t="T-1") + "x\n")
+    (repo / "tasks/archive/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "close T-1 beside a near-copy, and T-5 closed")
+    want = ["CLOSED TASK EDITED: tasks/open/T-1.md", "CLOSED TASK RE-ADDED: tasks/open/T-5.md"]
+    for cwd in (repo, repo / "tasks", repo / "tasks/open"):
+        r = subprocess.run(["python3", str(SCRIPT), "feat", "main"], cwd=cwd, env=_ENV,
+                           capture_output=True, text=True)
+        got = [ln.split(" — ")[0] for ln in r.stdout.splitlines() if ln.startswith("CLOSED TASK")]
+        assert got == want, (cwd, r.stdout + r.stderr)
+
+
 def test_rule_b_runs_the_check_before_its_merge():
     text = (REPO / "core/skills/_shared/main-push-guard.md").read_text(encoding="utf-8")
     step3 = text.split("3. Integrate it FIRST", 1)[1].split("\n4. ", 1)[0]
@@ -348,7 +580,7 @@ def test_rule_b_runs_the_check_before_its_merge():
     routing = step3[check:step3.index("git merge --no-edit")]
     assert "**under `--headless`, STOP**, with nothing pushed" in routing
     assert "`Closed-task edits:`" in routing and "**Exit 2 or 3**: stop." in routing
-    assert "On a `deleted it` line, STOP." in routing
+    assert "On a `deleted it` or `CLOSED TASK RE-ADDED:` line, STOP." in routing
     assert "until a person merges anyway or reverts the edit" in routing
     assert step3.count("refs/remotes/origin/<default branch>") == 2, "the check and the merge read one ref"
 
@@ -359,9 +591,10 @@ def test_the_step_routes_the_line_before_the_merge():
     text = text_of(REPO / "core/skills/review-close/SKILL.md")
     item1 = text.split("1. **Is this branch published?**", 1)[1].split("\n2. **Merge", 1)[0]
     assert "under either policy" in item1
-    bullet = item1.split("**Any `CLOSED TASK EDITED:` line**", 1)[1].split("\n   ", 1)[0]
+    bullet = item1.split("**Any `CLOSED TASK EDITED:` or `RE-ADDED:` line**", 1)[1].split("\n   ", 1)[0]
     assert "**Under `--headless`, STOP.**" in bullet
     assert "4a-SKIP" in bullet and "Step 8" in bullet
-    assert "On a `deleted it` line, 4a-SKIP it." in bullet
+    # A re-added body has no merge-anyway arm (Wade, 2026-10-31): merging puts the stale copy back.
+    assert "On a `deleted it` or `RE-ADDED:` line, 4a-SKIP it." in bullet
     row = text.split("\nClosed-task edits: ", 1)[1].split("\nSquash provenance:", 1)[0]
     assert "Step 4a item 1" in row and "`Rule B: <path>` at Step 4d's push" in row, row

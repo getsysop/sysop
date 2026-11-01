@@ -1836,12 +1836,19 @@ while the remove deleted the only copy: a directory beside the file, a root-rela
 `Path("tests/fixtures")`, a scoped alias, a template literal. A matcher over every consumer's
 code is never complete, so on the maintainer's answer of 2026-10-02 the guard stopped depending on it:
 step 0b copies **every** ignored file the main checkout has no identical copy of, referenced or
-not, to `sysop/runtime/preserved/<branch>/`, then the remove goes ahead. It never SKIPs for
-this; only a copy that cannot be made SKIPs the branch.
+not, to `sysop/runtime/preserved/<branch>/`, then the remove goes ahead. Only a copy that cannot
+be made, or a directory it holds (below), SKIPs the branch.
 
 **What it copies, and what it does not.** Only files a file pattern ignores, as the check reads;
-a directory ignored as a whole (an install, a cache) is not copied, so a unique file inside one
-is still lost. Symlinks are skipped, because removing one removes the link. A file the main
+a directory ignored as a whole is not copied. Until internal tracker #939 that was silent: the
+copy printed `0 preserved` at exit 0 and the remove deleted a consumer's eval-run outputs, which
+existed only in the worktree. On the maintainer's answer of 2026-10-31 it lists and holds rather
+than copies: a whole-ignored directory holding a file neither the main checkout nor an earlier
+preserve has prints `HELD:` and exits 4, so the branch is SKIPped with its worktree intact. A
+directory named like a cache or build output (`_CACHE_DIRS` in the script, and `*.egg-info`) is
+never walked: a worktree's build never matches main's byte for byte, so a branch that built would
+otherwise be held at every close, and build output joined the list on the maintainer's answer of
+the same day. Symlinks are skipped, because removing one removes the link. A file the main
 checkout holds byte for byte is skipped. Gate outputs (a `tsbuildinfo`, a log) are copied too,
 and Step 8 lists them; that is the price of not guessing.
 
@@ -2344,6 +2351,16 @@ merge target. Under `direct`, `_shared/main-push-guard.md` Rule B step 3 merges 
 `origin/<default branch>` after Step 4a, and an archive move can arrive that way, so the same
 check runs there first (`git_check.py closed-tasks`). By then the branches are merged, so it
 cannot skip one: it stops the push, or a person lets the edit land.
+
+Where a body went is read by its file name before git's rename pairing, because a close that
+also edits the body, beside a near-copy of it filed as a new task, made `-M` pair the open body
+with the new one, and the check read no close. A body the branch *adds* that the target closed
+since the fork is the same race from the other side: a branch replayed after a squash of it
+landed and a close archived the task puts the stale open copy back beside the closed one, again
+with no conflict. That line has no merge-anyway arm, because the merge would only put the stale
+copy back; a body whose archive copy predates the fork is a reopen and is not named. On the
+published arm with a usable head the merge works from the fork point rather than the range the
+check reads, so a re-add there is not caught; that is the arm's behaviour on any file.
 
 ### A landed branch stays approved
 

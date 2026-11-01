@@ -7,6 +7,59 @@ a check that now runs. Each entry is dated by the snapshot's publication and nam
 private development phases it carries. The per-phase journal those phases were recorded in is the
 maintainer's working record and is not in the public tree.
 
+## 2026-11-01 — v0.2.2, private phases 451–457
+
+- **`v0.2.2`.** This snapshot is tagged `v0.2.2`, with a GitHub Release carrying this entry.
+  Every other change in this entry fixes a defect in shipped behaviour. `--ref` pins to it as it
+  does to the earlier tags, once the tag is fetched into your clone.
+- **`/review-close` no longer deletes an ignored directory only a worktree holds.** Before
+  removing a worktree, Step 3b copies the ignored files only it holds, but a directory ignored as a
+  whole (`evals/runs/`) was never read: the copy reported `0 preserved` and the removal deleted
+  the only copy. Such a directory now holds the close: `ignored_refs.py --preserve` prints
+  `HELD: <dir> (<n> files, <b> bytes)` and exits 4, and the branch is skipped with its worktree
+  intact until you move or delete the directory. Caches and build output (`__pycache__`,
+  `node_modules`, `.venv`, `venv`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.hypothesis`,
+  `.tox`, `.nox`, `.next`, `.nuxt`, `.turbo`, `.cache`, `.gradle`, `.dart_tool`, `dist`, `build`,
+  `out`, `target`, `coverage`, `htmlcov`, `*.egg-info`) are never held, so keep data you need out
+  of directories with those names; nor is a directory whose files the main checkout already has.
+  A directory the copy cannot read stops the close instead.
+- **`/auto-fix` and `/auto-judge` no longer run a review title as a command.** Their commits
+  put the batch title, and `/auto-fix`'s verify step its own note, inside `git commit -m "…"`,
+  where a backtick or `$(…)` is command substitution: a title quoting an identifier in backticks
+  lost it from the commit subject, and a title naming a command ran it. Each message is now
+  passed through a quoted heredoc (`git commit -F - <<'SYSOP_COMMIT_MSG_EOF'`), which keeps
+  the text as written.
+  A consumer that allows `Bash(git commit:*)` needs no new rule.
+- **`/review-close` Step 3c no longer passes the manual-smoke gate when a branch's recorded
+  workspace cannot read it.** A lock kept after its worktree was removed sent the gate's reads of
+  the branch tip into a missing directory. Those reads failed, and so did both warnings meant to
+  report them, so a `manual_smoke: true` or a smoke procedure set only on the branch read
+  `NO_SMOKE_REQUIRED` with nothing printed. A leftover directory that is not a checkout, an
+  unrelated repository and a clone whose branch was deleted did the same. Such a workspace is now
+  skipped, as is a sibling clone left on an older commit of the branch, and the branch is read
+  from the main repository instead.
+- **A close stops before a replayed branch puts a closed task's body back.** A branch that added
+  a task's body, replayed after a squash of it landed and a later close archived it, re-added a
+  stale `tasks/open/<ID>.md` beside the archived copy with no conflict. `pr_head_check.py` now
+  prints `CLOSED TASK RE-ADDED:` for it, and `/review-close` Step 4a stops on it under
+  `--headless` and skips the branch when attended. `git_check.py closed-tasks` reports it at the
+  `direct` push too. Not yet on one route: a published branch merged past a recorded PR head
+  still merges from its fork point, which the check does not read. The closed-task check also reads a body's close by its file name before
+  git's rename pairing, which missed a close that edited the body beside a near-copy filed as a
+  new task.
+- **`git_ro.py` runs no program your git config names.** The read-only wrapper that
+  `/review-close`'s reviewers and Step 1a read worktrees through refused `--ext-diff` and
+  `--textconv` as arguments, but git ran a program named in config without either:
+  `core.fsmonitor`, a filter's `clean` or `process`, `diff.external`, a diff driver's `command`
+  or `textconv` (whose `cachetextconv` writes a notes ref), and the signature program when
+  `log.showSignature` is set. A submodule's own config and a partial clone's on-demand fetch
+  could run programs too. These are now turned off for every read; `status -v`, `--submodule` and
+  `--ignore-submodules` are refused, and a read of an object a partial clone lacks fails rather
+  than fetching it. A worktree file under a clean filter such as LFS is compared unfiltered, so
+  one whose stat is stale can read as modified, and a submodule's uncommitted changes are not
+  reported. Separately, `git_ro.py diff` no longer misses an edit made in the
+  same second its index was written and the same size as the original.
+
 ## 2026-10-31 — v0.2.1, private phases 444–450
 
 - **`v0.2.1`.** This snapshot is tagged `v0.2.1`, with a GitHub Release carrying this entry.

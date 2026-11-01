@@ -140,8 +140,15 @@ MARKER = re.compile(r"^<!-- sysop:arm=(\S+) -->[ \t]*$")
 #: `CLOSED TASK EDITED:` bullet, "under either policy" on the check that prints it, and Step 8's
 #: `Closed-task edits:` row. The bullet routes before the merge it governs, so it cannot sit in an
 #: arm the merge loads. Phase 446 (`Q-547`, Wade 2026-10-30) raised it to 287_190 (+60): the
-#: `Closed-task edits:` row names Rule B's push-time check too.
-CORE_BUDGET_BYTES = 287_190
+#: `Closed-task edits:` row names Rule B's push-time check too. Phase 452 (`Q-547`, Wade's ruling of
+#: 2026-10-31: a re-added closed body stops headless and 4a-SKIPs attended) raised it to 287_242
+#: (+52): the same bullet names `RE-ADDED:` lines and routes them with `deleted it`, and Step 8's
+#: 4a-SKIP'd row names a `CLOSED TASK` line's path, either kind (its round, lens B).
+#: Phase 456 (`Q-731`, Wade's ruling of 2026-10-31: list and hold an ignored directory only the
+#: worktree holds) raised it to 287_254 (+12): step 0b's print line names `HELD:` lines, which the
+#: copy prints before the exit that SKIPs the branch, so it cannot sit in an arm. Its round (lens B)
+#: raised it to 287_269 (+15): Step 8's `Ignored references:` row names the `HELD:` lines too.
+CORE_BUDGET_BYTES = 287_269
 
 GIT_ENV = {k: v for k, v in os.environ.items()
            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}

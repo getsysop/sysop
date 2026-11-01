@@ -306,8 +306,12 @@ If no siblings found, report `SIBLINGS_FOUND: 0`.
 After ALL tasks are fixed (or confirmed already-applied), stage and commit with a single commit:
 
 ```bash
-cd <WORKTREE_PATH> && git add -A && git diff --cached --quiet && echo "Nothing to commit" || git commit -m "fix: <batch title, lowercase>"
+cd <WORKTREE_PATH> && git add -A && git diff --cached --quiet && echo "Nothing to commit" || git commit -F - <<'SYSOP_COMMIT_MSG_EOF'
+fix: <batch title, lowercase>
+SYSOP_COMMIT_MSG_EOF
 ```
+
+The message goes in that quoted heredoc, never in `-m "…"`: the title is review-agent text, and a backtick or `$(…)` inside double quotes runs as a command.
 
 If nothing to commit (all fixes were already applied), skip to step 5 (push) — the branch may already have the commit from a prior run.
 
@@ -461,8 +465,16 @@ Example from Batch 416: TASK-2245 (route-layer point cap) and TASK-2250 (FastAPI
 
 For each issue, fix it directly in the worktree. Do **NOT** amend or force-push the fix agent's commit — make a new commit on top:
 
-- **Sibling / Regression**: fix and commit with `git commit -m "fix(batch-<N>): <what you caught> (opus verify)"`
-- **False-positive**: revert the fix agent's change for that task in a new commit. Also update `<WORKTREE_PATH>/review_tasks.md`: **leave the task's `[ ]` checkbox unchanged** and append `  > Dropped: <one-sentence reason>` under the task line. `close_batch.sh` will flip `[ ]` → `[x]` at merge time alongside the other tasks — leaving the checkbox here keeps Grand Total counts accurate. Commit both edits together: `git commit -m "revert(batch-<N>): drop TASK-NNN — <short reason> (opus verify)"`
+- **Sibling / Regression**: fix and commit with the message `fix(batch-<N>): <what you caught> (opus verify)`
+- **False-positive**: revert the fix agent's change for that task in a new commit. Also update `<WORKTREE_PATH>/review_tasks.md`: **leave the task's `[ ]` checkbox unchanged** and append `  > Dropped: <one-sentence reason>` under the task line. `close_batch.sh` will flip `[ ]` → `[x]` at merge time alongside the other tasks — leaving the checkbox here keeps Grand Total counts accurate. Commit both edits together with the message `revert(batch-<N>): drop TASK-NNN — <short reason> (opus verify)`
+
+Each message holds text you wrote, so pass it in a quoted heredoc, never in `-m "…"`, where a backtick or `$(…)` runs as a command. No line of the message may read `SYSOP_COMMIT_MSG_EOF`, which ends it:
+
+```bash
+cd <WORKTREE_PATH> && git add -A && git commit -F - <<'SYSOP_COMMIT_MSG_EOF'
+<the message>
+SYSOP_COMMIT_MSG_EOF
+```
 
 Push each commit:
 

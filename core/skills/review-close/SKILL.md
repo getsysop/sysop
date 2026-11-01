@@ -1040,7 +1040,7 @@ python3 sysop/scripts/workspace_locate.py "<branch name>"
 ```bash
 python3 sysop/scripts/ignored_refs.py "<worktree-path>" --preserve "sysop/runtime/preserved/<sanitized branch>"
 ```
-**Exit 0**: go on to step 1. **Any other exit**: SKIP this branch (worktree, lock and branch intact) and do not run step 1, so nothing is collected and there is nothing to roll back. Print each `PRESERVED:` line and the `PRESERVE:` summary, or the error, under Step 8's `Ignored references:`.
+**Exit 0**: go on to step 1. **Any other exit**: SKIP this branch (worktree, lock and branch intact) and do not run step 1, so nothing is collected and there is nothing to roll back. Print each `PRESERVED:` and `HELD:` line and the `PRESERVE:` summary, or the error, under Step 8's `Ignored references:`.
 
 **1. Collect this branch's pending-docs from the workspace step 0 resolved, whatever its shape** — worktree, clone, or discovered. Step 0 *prints* `workspace=… shape=…`; it does not export them, and the command below takes the path as a quoted positional argument. **Substitute the printed values by hand** — `WS` and `SHAPE` are names for the two things step 0 told you, not shell variables that survive into this block. (Every fenced block in this skill is independent: nothing set in one reaches the next.)
  - a. **Collect pending-docs**: bring each `sysop/runtime/pending-docs/*.md` from the worktree into main's `sysop/runtime/pending-docs/` (these are untracked files that would be lost when the worktree is removed). **The copy is provenance-checked, because the destination is keyed by basename and a basename is not unique to a branch.**
@@ -1170,7 +1170,7 @@ For each approved feature branch (oldest first), merge it into the **merge targe
    - **`REPLAY 0 commit(s)` on a branch Step 2a reviewed** (step 0b printed `NOT LANDED`) — its local ref holds nothing new, and step 0b found a reason not to call it landed. Merge it under neither arm and record it **4a-SKIP**, with step 0b's reason, per *When a branch really is skipped* below.
    - **`RECORDED HEAD: not usable`** — the head holding the most of the branch's commits lacks commits the branch carries and the target already has (the branch merged `<default branch>`, or a branch cut after that squash). Take item 2's arm as written, and put the line on Step 8.
    - **Exit 3** — a placeholder or a `git` failure. Nothing has moved; fix it and re-run.
-   - **Any `CLOSED TASK EDITED:` line**, on a branch item 2 will merge — the merge target closed or removed a task body the branch edited. **Under `--headless`, STOP.** Otherwise show the person each `show:` diff. On a `moved it to` line, ask: merge it, and list it on Step 8's `Closed-task edits:`; or 4a-SKIP the branch. On a `deleted it` line, 4a-SKIP it. A skipped branch's line returns at every close until a person merges it or reverts the edit on the branch.
+   - **Any `CLOSED TASK EDITED:` or `RE-ADDED:` line**, on a branch item 2 will merge — the merge target closed or removed a task body the branch edited, or closed one it adds. **Under `--headless`, STOP.** Otherwise show the person each `show:` diff. On a `moved it to` line, ask: merge it, and list it on Step 8's `Closed-task edits:`; or 4a-SKIP the branch. On a `deleted it` or `RE-ADDED:` line, 4a-SKIP it. A skipped branch's line returns at every close until a person merges it or reverts the edit on the branch.
    See `REFERENCE.md` § *Squash provenance: why each `pr` close records its PR head*.
 
 2. **Merge — rebase-then-ff when the branch is local-only, `--no-ff` when it is published.** **If either path below conflicts, go to item 4 before running anything else** — item 4 routes the conflict and nothing between here and there knows one happened. Stated at the command rather than only at item 4: in written order an operator meets the merge first, which is the shape an earlier round caught one step over, where the rule sat 81 lines past the command it governed.
@@ -1898,7 +1898,7 @@ Ignored references: <N> (or "none")
      did not run: its error, and whether the human held the branch or merged without it.
   - <branch> — Step 3b step 0b's PRESERVED: lines and PRESERVE: summary (the files copied to
      sysop/runtime/preserved/<sanitized branch>/ before the worktree was removed), or its
-     error and the SKIP it caused.
+     HELD: lines or error and the SKIP it caused.
 
 Claims unreadable: <N> (or "none")
   - <branch> — the collect printed `PENDING-DOC CLAIMS UNREADABLE:` for <the locks
@@ -1950,7 +1950,7 @@ Held-back docs: <N> (or "none")
 Remaining:
   - <any SKIP'd branches — paused work; include file count + worktree path + recommendation,
      or, for step 0a's clone pre-check, the Step 1-pre line + its remedy>
-  - <any 4a-SKIP'd branches — approved but did NOT merge; name the conflicting file or `CLOSED TASK EDITED:` path, and say
+  - <any 4a-SKIP'd branches — approved but did NOT merge; name the conflicting file or `CLOSED TASK` line's path, and say
      the branch + lock are intact, its pending-doc was held back from consolidation, and its
      task was NOT flipped to done>
   - <any rejected branches with reasons>
