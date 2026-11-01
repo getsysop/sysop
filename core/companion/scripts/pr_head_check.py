@@ -9,7 +9,8 @@ A git failure or an unsubstituted operand exits 3.
 
 Then a `CLOSED TASK EDITED: <path> — …` line, and a `show:` line under it, for each task body
 the branch edited that the merge target has since moved to `tasks/archive/` or deleted
-(`_closed_tasks.py` holds the check). The branch's edits are read from
+(`_closed_tasks.py` holds the check), and a `CLOSED TASK RE-ADDED: <path> — …` line for each body
+the branch adds that the merge target holds under `tasks/archive/`. The branch's edits are read from
 `merge-base <recorded head> <branch>` when the head is usable, the range `--onto` replays, and
 from `merge-base <merge target> <branch>` otherwise. The published arm's `--no-ff` merge works
 from the fork point instead, so with a usable head it can re-apply a landed line the target has

@@ -338,8 +338,12 @@ For each file you edited, scan the rest of the file for sibling violations of th
 Single commit covering FIX edits, DROP and FAIL annotations in review_tasks.md, and sibling fixes:
 
 ```bash
-cd <WORKTREE_PATH> && git add -A && git diff --cached --quiet && echo "Nothing to commit" || git commit -m "fix: <batch title, lowercase>"
+cd <WORKTREE_PATH> && git add -A && git diff --cached --quiet && echo "Nothing to commit" || git commit -F - <<'SYSOP_COMMIT_MSG_EOF'
+fix: <batch title, lowercase>
+SYSOP_COMMIT_MSG_EOF
 ```
+
+The message goes in that quoted heredoc, never in `-m "…"`: the title is review-agent text, and a backtick or `$(…)` inside double quotes runs as a command.
 
 If no verdict produced a code change (all DROP and/or FAIL), commit the annotations alone with:
 

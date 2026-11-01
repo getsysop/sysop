@@ -345,7 +345,7 @@ _CODE_SPAN = re.compile(r"`[^`]*`")
 #: and Opus were each observed doing (lines 395, 434, 446, 456, 519 at Phase 349), and its
 #: `(opus verify)` commit label, an identifier already in consumers' histories (462, 463).
 PROSE_ALLOW = {
-    "auto-fix/SKILL.md": {'1846f3caaf63296f', '9ee89a9e8a41e2be', 'ebbfcbebf287f758', 'db3897122fb6466d', 'e7a8ee68d5e06892', '4e1c651a94abe4e6', 'eb594184fef9a492'},
+    "auto-fix/SKILL.md": {'1846f3caaf63296f', '9ee89a9e8a41e2be', 'ebbfcbebf287f758', 'db3897122fb6466d', '07f5f3e06b70e6a8', 'eb7f66c6af842a92', 'eb594184fef9a492'},
 }
 
 

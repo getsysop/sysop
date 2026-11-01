@@ -24,9 +24,29 @@ cluster (`-nO<program>` is `-n -O<program>`). Runs `git --no-pager` in the workt
 optional locks off and the pager, editor and external diff unset, so `status` writes nothing.
 `diff` refreshes the index's stat cache whatever the lock setting (measured: the index changes
 after a bare `git diff` of a touched file, with `GIT_OPTIONAL_LOCKS=0`), so it reads a private
-copy of the index instead, and the worktree's own index is not written either.
+copy of the index instead, and the worktree's own index is not written either. The copy keeps
+the index's mtime: a fresh one hides a same-size edit made in the second the index was written.
 
-Exit: git's own exit code; 2 `STOP: …` for a refused worktree, subcommand or argument.
+Config can name a program for a read to run, and needs no argument to do it (`Q-726`, measured
+on git 2.50.1): `core.fsmonitor` under `status`, `diff`, `diff-tree`, `blame`, `grep` and
+`ls-files`; a filter's `clean` wherever the worktree is compared; `diff.external` and a diff
+driver's `command` under `diff`; a driver's `textconv` under `diff`, `log -p`, `show`, `blame`
+and `status -v`, whose `cachetextconv` writes a `refs/notes/textconv/` ref; `gpg.program` under
+`log` when `log.showSignature` is set. So `NO_HELPERS` puts `--no-ext-diff`/`--no-textconv` ahead of the
+caller's arguments, `status -v` is refused (status takes neither flag), and `GIT_CONFIG_COUNT`
+sets the rest off at command scope: the monitor, each filter driver config names, and every
+signature program. A submodule's own config is not read, so `status` and `diff` get
+`--ignore-submodules=dirty` (git then runs no `status` inside one), `diff.submodule` is `short`,
+and `--submodule` and `--ignore-submodules` are refused. `GIT_NO_LAZY_FETCH` keeps a partial
+clone from fetching a missing object, which would run the transport's programs and write; such a
+read fails instead. An empty value is not off for a diff driver or `diff.external` (git runs
+`""` and dies), which is why those take the flags; an empty gpg program runs nothing and prints
+`error: cannot run`. With clean filters off, a worktree file under one (LFS) is compared
+unfiltered, so one whose stat is stale can read as modified; a diff of two commits is unaffected.
+A submodule's own uncommitted changes are not reported either.
+
+Exit: git's own exit code; 2 `STOP: …` for a refused worktree, subcommand or argument, or when
+the worktree's config cannot be read for its filter drivers.
 """
 from __future__ import annotations
 
@@ -45,7 +65,8 @@ READ_ONLY = frozenset((
 #: Exact arguments, and the prefixes of `--opt=value` forms, refused anywhere after the subcommand.
 REFUSED = ('--output', '-O', '--open-files-in-pager', '--ext-diff', '--textconv', '--filters', '--exec',
            '--upload-pack', '--receive-pack', '--git-dir', '--work-tree', '--namespace',
-           '--exec-path', '--config-env', '--no-index', '--pathspec-from-file')
+           '--exec-path', '--config-env', '--no-index', '--pathspec-from-file', '--submodule',
+           '--ignore-submodules')
 #: Refused only after the subcommand named: the same letter is harmless elsewhere (`log -S` is
 #: the pickaxe, `blame -S` reads a revisions file).
 REFUSED_BY = {
@@ -53,10 +74,25 @@ REFUSED_BY = {
     'blame': ('-S', '--contents', '--ignore-revs-file'),
     'ls-files': ('-X', '--exclude-from', '--exclude-per-directory'),
     'describe': ('--dirty', '--broken'),
+    'status': ('-v', '--verbose'),
 }
+#: Put ahead of the caller's arguments, so no diff helper or textconv filter config names runs.
+#: `--ext-diff` and `--textconv` are refused, so nothing after these turns them back on.
+NO_HELPERS = {
+    'diff': ('--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty'),
+    'diff-tree': ('--no-ext-diff', '--no-textconv'),
+    'log': ('--no-ext-diff', '--no-textconv'), 'show': ('--no-ext-diff', '--no-textconv'),
+    'blame': ('--no-textconv',), 'grep': ('--no-textconv',),
+    # A submodule's own config is not read here: `dirty` keeps git from running `status` inside it.
+    'status': ('--ignore-submodules=dirty',),
+}
+#: Set at command scope for every subcommand, with each filter driver's programs (`config_off`).
+CONFIG_OFF = (('core.fsmonitor', 'false'), ('diff.submodule', 'short'),
+              ('log.showSignature', 'false'), ('gpg.program', ''),
+              ('gpg.openpgp.program', ''), ('gpg.ssh.program', ''), ('gpg.x509.program', ''))
 #: Whole options that are also a prefix of a refused one, so not abbreviations of it.
 NOT_ABBREVIATIONS = frozenset(('--text', '--filter'))
-_STRIP = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_EXTERNAL_DIFF',
+_STRIP = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_EXTERNAL_DIFF', 'GIT_CONFIG',
           'GIT_PAGER', 'PAGER', 'GIT_EDITOR', 'EDITOR', 'VISUAL', 'GIT_SSH', 'GIT_SSH_COMMAND',
           'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT')
 
@@ -109,8 +145,34 @@ def private_index(tree: str, env: dict, tmp: str) -> str:
         stop('git rev-parse --git-path index failed')
     copy = os.path.join(tmp, 'index')
     if os.path.isfile(index):
-        shutil.copyfile(index, copy)
+        # copy2, not copyfile: git rehashes an entry whose mtime is not older than the index's,
+        # and a copy dated now made a same-second, same-size edit read as unchanged.
+        shutil.copy2(index, copy)
     return copy
+
+
+def config_off(tree: str, env: dict) -> dict:
+    """`CONFIG_OFF` and every configured filter driver's programs, as `GIT_CONFIG_*` variables:
+    key and value travel apart, so a driver name holding `=` or `.` needs no escaping."""
+    try:
+        r = subprocess.run(['git', 'config', '-z', '--name-only', '--get-regexp', r'^filter\.'],
+                           cwd=tree, env=env, capture_output=True)
+    except OSError as e:
+        stop(f'git could not run: {e}')
+    if r.returncode not in (0, 1):  # 1: no filter configured
+        stop('git config --get-regexp failed; the filter drivers could not be read')
+    pairs = list(CONFIG_OFF)
+    drivers = set()
+    for key in os.fsdecode(r.stdout).split('\0'):
+        driver = key.partition('.')[2].rpartition('.')[0]  # filter.<driver>.<variable>
+        if driver and driver not in drivers:
+            drivers.add(driver)
+            pairs += [(f'filter.{driver}.{v}', '') for v in ('clean', 'smudge', 'process')]
+            pairs.append((f'filter.{driver}.required', 'false'))
+    out = {'GIT_CONFIG_COUNT': str(len(pairs))}
+    for i, (k, v) in enumerate(pairs):
+        out[f'GIT_CONFIG_KEY_{i}'], out[f'GIT_CONFIG_VALUE_{i}'] = k, v
+    return out
 
 
 def main(argv: list[str]) -> None:
@@ -126,15 +188,17 @@ def main(argv: list[str]) -> None:
         stop(f'refused argument(s): {" ".join(bad)}')
     env = {k: v for k, v in os.environ.items() if k not in _STRIP}
     env.update(GIT_OPTIONAL_LOCKS='0', GIT_PAGER='cat', PAGER='cat', GIT_TERMINAL_PROMPT='0',
-               GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS='true')
+               GIT_TEST_DISALLOW_ABBREVIATED_OPTIONS='true', GIT_NO_LAZY_FETCH='1')
     real = os.path.realpath(tree)
     if real not in worktrees(env):
         stop(f'{tree} is not a worktree of this repository (git worktree list)')
+    env.update(config_off(real, env))
     with tempfile.TemporaryDirectory(prefix='git-ro-') as tmp:
         if sub == 'diff':
             env['GIT_INDEX_FILE'] = private_index(real, env, tmp)
         try:
-            r = subprocess.run(['git', '--no-pager', sub, *args], cwd=real, env=env)
+            r = subprocess.run(['git', '--no-pager', sub, *NO_HELPERS.get(sub, ()), *args],
+                               cwd=real, env=env)
         except OSError as e:
             stop(f'git could not run: {e}')
     sys.exit(r.returncode)

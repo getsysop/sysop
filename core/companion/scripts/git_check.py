@@ -41,7 +41,8 @@ it exits 3 on an unsubstituted name, which would otherwise read as local-only.
 `closed-tasks` (`_shared/main-push-guard.md` Rule B step 3) runs before a merge of `<theirs ref>`
 into `<ours ref>`, both `refs/` names: for each task body `<ours ref>` edited since their merge
 base that `<theirs ref>` has since moved to `tasks/archive/` or deleted, it prints a
-`CLOSED TASK EDITED:` line and a `show:` line (`_closed_tasks.py` holds the check), then exit 1
+`CLOSED TASK EDITED:` line and a `show:` line (`_closed_tasks.py` holds the check), and a
+`CLOSED TASK RE-ADDED:` line for a body `<ours ref>` added that `<theirs ref>` holds closed; then exit 1
 `STOP: …`; exit 0 `OK: …` when there is none, and exit 2 when there is no merge base.
 """
 from __future__ import annotations
@@ -199,11 +200,11 @@ def main(argv: list[str]) -> None:
         except (_closed_tasks.NoMergeBase, _closed_tasks.GitFailed) as e:
             say(2, f'STOP: {e}; the closed-task check cannot run')
         if not found:
-            say(0, f'OK: {theirs} closed no task body {ours} edited')
+            say(0, f'OK: {theirs} closed no task body {ours} edited or adds')
         for line in _closed_tasks.lines(found, base, ours, 'this close', theirs):
             print(line)
-        say(1, f'STOP: {theirs} closed {len(found)} task body(ies) {ours} edited; '
-               'merging it would write the edit into the closed copy')
+        say(1, f'STOP: {theirs} closed {len(found)} task body(ies) {ours} edited or adds; '
+               'merging it would write them into, or beside, the closed copy')
 
     if os.path.isfile(ops[0]):
         say(0, f'OK: {ops[0]} is a file')

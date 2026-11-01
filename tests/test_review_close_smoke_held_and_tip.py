@@ -202,6 +202,114 @@ def test_a_task_no_approved_branch_claims_is_read_from_the_working_tree_and_says
     assert "no approved branch in this run claims this task" in read, read
 
 
+def test_a_lock_whose_workspace_is_gone_still_reads_the_tips_flag(tmp_path):
+    """`Q-733` (upstream #904): a landed branch's worktree is removed while its lock stays.
+    The gate ran `git -C <missing>` for the tip read and for both warnings about it, so a
+    flag set only on the branch read NO_SMOKE_REQUIRED with nothing printed."""
+    gone = tmp_path / "main-feat-x"
+    assert not gone.exists()
+    repo = _tree(tmp_path, index=_index(_task("FEAT-X", smoke=False)),
+                 bodies={"FEAT-X.md": NEW}, locks={"FEAT-X.lock": LOCK + f"workspace: {gone}\n"})
+    _git(repo, "checkout", "-q", "-b", "feat/x")
+    (repo / "tasks/index.yml").write_text(_index(_task("FEAT-X")), encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "flag it")
+    _git(repo, "checkout", "-q", "main")
+    out = _run(repo, [], branches=["feat/x"])
+    assert _signals(out) == 1, out
+    tip = _git(repo, "rev-parse", "refs/heads/feat/x")[:12]
+    assert _field(out, "READ") == [f"feat/x@{tip} — the branch tip, the text that is merging"], out
+
+
+def test_a_lock_whose_workspace_is_gone_still_reads_the_body_at_the_tip(tmp_path):
+    """The same lock, the body half: the branch rewrote its procedure, and the gate must
+    show the branch's text, not main's retired copy."""
+    repo = _git_tree(tmp_path, main_body=OLD, branch_body=NEW, index=_index(_task("FEAT-X")),
+                     locks={"FEAT-X.lock": LOCK + f"workspace: {tmp_path / 'gone'}\n"})
+    out = _run(repo, [], branches=["feat/x"])
+    assert _signals(out) == 1, out
+    assert "CURRENT" in out and "STALE" not in out, out
+
+
+def test_a_stale_lock_does_not_shadow_a_later_lock_whose_workspace_exists(tmp_path):
+    """Locks are read in name order. A first lock naming a removed workspace must not stop
+    the search, or a second lock's real workspace and the doc in it are never scanned."""
+    doc = ("---\nbranch: feat/x\n---\n# S\n\n"
+           "## OPERATOR ACTION REQUIRED BEFORE MERGE\n1. Rotate the prod key.\n")
+    ws = tmp_path / "elsewhere"
+    repo = _tree(tmp_path, index=_index(), locks={
+        "A.lock": LOCK.replace("FEAT-X", "A") + f"workspace: {tmp_path / 'gone'}\n",
+        "B.lock": LOCK.replace("FEAT-X", "B") + f"workspace: {ws}\n"})
+    _git(repo, "worktree", "add", "-q", "-b", "feat/x", str(ws))
+    (ws / "sysop/runtime/pending-docs").mkdir(parents=True)
+    (ws / "sysop/runtime/pending-docs/feat-x.md").write_text(doc, encoding="utf-8")
+    out = _run(repo, [], branches=["feat/x"])
+    assert "OPERATOR ACTION REQUIRED BEFORE MERGE" in out, out
+
+
+def _flagged_on_branch_only(tmp_path, workspace: str) -> Path:
+    """A repo whose `feat/x` alone sets `manual_smoke: true`, with a lock naming `workspace`."""
+    repo = _tree(tmp_path, index=_index(_task("FEAT-X", smoke=False)),
+                 bodies={"FEAT-X.md": NEW}, locks={"FEAT-X.lock": LOCK + f"workspace: {workspace}\n"})
+    _git(repo, "checkout", "-q", "-b", "feat/x")
+    (repo / "tasks/index.yml").write_text(_index(_task("FEAT-X")), encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "flag it")
+    _git(repo, "checkout", "-q", "main")
+    return repo
+
+
+@pytest.mark.parametrize("shape", ["a regular file", "a directory that is not a checkout",
+                                   "an unrelated repository"])
+def test_a_lock_workspace_that_cannot_read_the_branch_is_not_trusted(tmp_path, shape):
+    """`Q-733`'s round: the directory check alone still trusted a path that exists but
+    cannot resolve `refs/heads/feat/x`, and the gate passed silently through it."""
+    ws = tmp_path / "leftover"
+    if shape == "a regular file":
+        ws.write_text("x\n", encoding="utf-8")
+    else:
+        ws.mkdir()
+        if shape == "an unrelated repository":
+            _init(ws)
+    repo = _flagged_on_branch_only(tmp_path, str(ws))
+    out = _run(repo, [], branches=["feat/x"])
+    assert _signals(out) == 1, out
+    tip = _git(repo, "rev-parse", "refs/heads/feat/x")[:12]
+    assert _field(out, "READ") == [f"feat/x@{tip} — the branch tip, the text that is merging"], out
+
+
+def test_a_stale_sibling_clone_is_not_read_as_the_tip(tmp_path):
+    """`Q-733`'s round: with the recorded workspace gone, the sibling fallback found an old
+    clone on the same branch at an older commit and labelled its text as what is merging."""
+    repo = _tree(tmp_path, index=_index(_task("FEAT-X")), bodies={"FEAT-X.md": OLD},
+                 locks={"FEAT-X.lock": LOCK + f"workspace: {tmp_path / 'gone'}\n"})
+    _git(repo, "branch", "feat/x")
+    sib = tmp_path / "main-old"
+    _git(tmp_path, "clone", "-q", "-b", "feat/x", str(repo), str(sib))
+    _git(repo, "checkout", "-q", "feat/x")
+    (repo / "tasks/open/FEAT-X.md").write_text(NEW, encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "the current procedure")
+    _git(repo, "checkout", "-q", "main")
+    out = _run(repo, [], branches=["feat/x"])
+    assert "CURRENT" in out and "STALE" not in out, out
+    tip = _git(repo, "rev-parse", "refs/heads/feat/x")[:12]
+    assert _field(out, "READ") == [f"feat/x@{tip} — the branch tip, the text that is merging"], out
+
+
+def test_a_lock_for_another_branch_lends_its_workspace_to_no_one(tmp_path):
+    """Phase 454's battery (W03): the lock loop matched on `workspace:` alone once the branch
+    test was dropped, and nothing failed. Another branch's checkout is not this branch's."""
+    doc = ("---\nbranch: feat/other\n---\n# S\n\n"
+           "## OPERATOR ACTION REQUIRED BEFORE MERGE\n1. Rotate the prod key.\n")
+    ws = tmp_path / "other"
+    repo = _tree(tmp_path, index=_index(), locks={
+        "A.lock": LOCK.replace("FEAT-X", "A").replace("feat/x", "feat/other") + f"workspace: {ws}\n"})
+    _git(repo, "branch", "feat/x")
+    _git(repo, "worktree", "add", "-q", "-b", "feat/other", str(ws))
+    (ws / "sysop/runtime/pending-docs").mkdir(parents=True)
+    (ws / "sysop/runtime/pending-docs/feat-other.md").write_text(doc, encoding="utf-8")
+    out = _run(repo, [], branches=["feat/x"])
+    assert "OPERATOR ACTION REQUIRED BEFORE MERGE" not in out, out
+
+
 def test_a_failed_tip_read_falls_back_loudly_never_silently(tmp_path):
     """The body is gone at the tip. The working-tree text is still shown, because the
     declaration is the ask, but the label must say it may not be what is merging."""

@@ -164,10 +164,16 @@ for _b in _approved:
                 _k, _sep, _v = _line.partition(":")
                 if _sep and _k not in _f:
                     _f[_k] = _v.strip()
-            if _f.get("branch") == _b and _f.get("workspace"):
+            if _f.get("branch") != _b or not _f.get("workspace"):
+                continue
+            # VERIFY it, as Step 3b's `workspace_locate.py` does: a landed branch's worktree
+            # is removed while its lock stays, and a `-C` into a missing directory failed
+            # every tip read and both warnings about it, so a flag set only on the branch
+            # read NO_SMOKE_REQUIRED (`Q-733`). With no workspace, the reads run in main.
+            if Path(_f["workspace"]).is_dir():
                 _ws = Path(_f["workspace"]); break
     if _ws is None:
-        # Sibling-glob fallback, reached only when the lock has no `workspace:`.
+        # Sibling-glob fallback, reached when no lock records a `workspace:` that exists.
         # It cannot see WORKTREE_PREFIX exported by another session, and cannot
         # see WORKTREE_ROOT (Phase 262) at all — a relocated workspace is not a
         # sibling. Both limits are the same one: neither variable is recorded,
@@ -181,7 +187,17 @@ for _b in _approved:
                 _ws = _cand; break
     if _ws is None:
         continue
-    branch_ws.setdefault(_b, _ws)
+    # The tip reads run in a workspace only when it can resolve the branch, and its tip is not
+    # one main's own ref has already moved past. A leftover directory, an unrelated repo or a
+    # clone whose branch was deleted failed the reads and both warnings, which share the `-C`;
+    # a stale sibling clone showed old text as the tip (`Q-733`'s round). A clone AHEAD of
+    # main's ref, the claim base, is still read in place: its commits are only there.
+    _here = git("-C", str(_ws), "rev-parse", "--verify", "-q", f"refs/heads/{_b}^{{commit}}")
+    _main = git("rev-parse", "--verify", "-q", f"refs/heads/{_b}^{{commit}}")
+    _behind = (_here[0] == 0 and _main[0] == 0 and _here[1].strip() != _main[1].strip()
+               and git("merge-base", "--is-ancestor", _here[1].strip(), _main[1].strip())[0] == 0)
+    if _here[0] == 0 and not _behind:
+        branch_ws.setdefault(_b, _ws)
     try:
         _r = _ws.resolve()
     except OSError:
