@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" prepare-resume f7f30d8eecc3b582 "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" prepare-resume 42306f89e879eece "<skill directory>"
 ```
 
 It prints `LOADED: prepare-resume`. **Exit 2**: stop and show its stderr.
@@ -47,8 +47,12 @@ A prepare runs Steps 1, 2, 3 and 3c for real, asks the human nothing, records th
 3. **A `VERDICT: BLOCKED` from Step 2b on a branch stops that branch, not the prepare.** Write its violations, with their `file:line` citations, into the branch's state, keep the branch out of Steps 2d, 3 and 3c, and go on with the others. A `VERDICT: BLOCKED` on the unpushed-main group halts the prepare (item 4). **With `--agent <name>`**, also hold the branch, with the first violation as the reason:
 
    ```bash
-   python3 sysop/scripts/close_run.py hold "<run-id>" "<branch>" "VERDICT: BLOCKED: <first violation>"
+   python3 sysop/scripts/close_run.py hold "<run-id>" "<branch>" - <<'SYSOP_REASON_EOF'
+   VERDICT: BLOCKED: <first violation>
+   SYSOP_REASON_EOF
    ```
+
+   The reason goes on stdin, never inside double quotes: the gate's text carries backticks, which `dontAsk` denies there and any other mode runs. No line of it may read `SYSOP_REASON_EOF`.
 
    A Step 2b reviewer that returns no `VERDICT:` line halts the prepare (item 4), with its last output as the reason.
 

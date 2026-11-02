@@ -682,7 +682,7 @@ def consumer(tmp_path):
     root = tmp_path / "proj"
     (root / "sysop" / "scripts").mkdir(parents=True)
     for name in ("validate_tasks.py", "next_task.py", "scope_overlap.py",
-                 "archive_review_tasks.py", "_log.py"):
+                 "archive_review_tasks.py", "_log.py", "_tracker_lock.py"):
         shutil.copyfile(SCRIPTS / name, root / "sysop" / "scripts" / name)
     (root / "tasks" / "open").mkdir(parents=True)
     (root / "tasks" / "index.yml").write_text(

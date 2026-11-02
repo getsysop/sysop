@@ -429,6 +429,160 @@ def test_a_body_the_target_holds_open_and_closed_is_not_named_as_re_added(tmp_pa
     assert readded(check(repo)) == []
 
 
+def _replay_then_move(tmp_path, added, moved):
+    """The branch adds `tasks/<added>/T-5.md` over two commits, a squash of it lands, and the
+    target `git mv`s the body to `tasks/<moved>/`."""
+    repo = seed(tmp_path)
+    (repo / "tasks/deferred").mkdir(exist_ok=True)
+    git(repo, "checkout", "-qb", "feat")
+    (repo / f"tasks/{added}/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add T-5")
+    append(repo, "tasks/notes.md", "- T-5 note\n")
+    git(repo, "commit", "-qam", "note")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--squash", "feat")
+    git(repo, "commit", "-qm", "squash of PR #8")
+    git(repo, "mv", f"tasks/{added}/T-5.md", f"tasks/{moved}/T-5.md")
+    git(repo, "commit", "-qm", f"move T-5 to {moved}")
+    return repo
+
+
+def test_a_body_the_branch_adds_that_the_target_deferred_is_named(tmp_path):
+    """`Q-730` shape (1): the replay leaves `open/T-5.md` beside `deferred/T-5.md`, two live bodies
+    for one id, with no conflict (the premise, run against git). It takes the same `RE-ADDED:`
+    line, naming the deferred copy (Wade, 2026-10-31), so it routes as a re-add: STOP headless,
+    4a-SKIP attended, Rule B STOP. The tail carries neither word an `EDITED:` line routes on."""
+    repo = _replay_then_move(tmp_path, "open", "deferred")
+    out = check(repo)
+    assert readded(out) == [
+        "CLOSED TASK RE-ADDED: tasks/open/T-5.md — the branch adds it, and main deferred it at "
+        "tasks/deferred/T-5.md"], out
+    assert edited(out) == [] and "  show: git diff" in out, out
+    assert not any(w in ln for ln in readded(out) for w in ("moved it to", "deleted it")), out
+
+    git(repo, "checkout", "-q", "feat")
+    git(repo, "rebase", "main")  # exit 0
+    assert (repo / "tasks/open/T-5.md").exists() and (repo / "tasks/deferred/T-5.md").exists()
+
+
+def test_a_body_the_branch_adds_deferred_that_the_target_undeferred_is_named(tmp_path):
+    """The mirror of shape (1), by the same mechanism: an added `deferred/` body the target has
+    since moved to `open/` replays beside it."""
+    repo = _replay_then_move(tmp_path, "deferred", "open")
+    out = check(repo)
+    assert readded(out) == [
+        "CLOSED TASK RE-ADDED: tasks/deferred/T-5.md — the branch adds it, and main undeferred it "
+        "at tasks/open/T-5.md"], out
+    assert not any(w in ln for ln in readded(out) for w in ("moved it to", "deleted it")), out
+
+    git(repo, "checkout", "-q", "feat")
+    git(repo, "rebase", "main")  # exit 0
+    assert (repo / "tasks/open/T-5.md").exists() and (repo / "tasks/deferred/T-5.md").exists()
+
+
+def test_a_body_the_recorded_head_already_added_is_not_named_when_deferred(tmp_path):
+    """With a usable head that contains the add, `--onto` replays nothing that adds it."""
+    repo = _replay_then_move(tmp_path, "open", "deferred")
+    git(repo, "update-ref", "refs/sysop/merged-pr-heads/8", "refs/heads/feat")
+    out = check(repo)
+    assert "REPLAY 0 commit(s)" in out.splitlines(), out
+    assert readded(out) == [] and edited(out) == [], out
+
+
+def test_a_defer_or_undefer_on_the_branch_is_not_named(tmp_path):
+    """Boundary (passes on the base too): the branch's own move between the live directories adds
+    a body under the other name, and the base already held the copy it moved from, so the target
+    holding that copy is not a second body."""
+    for start, end in (("deferred", "open"), ("open", "deferred")):
+        repo = seed(tmp_path / start)
+        (repo / "tasks/deferred").mkdir(exist_ok=True)
+        (repo / f"tasks/{start}/T-5.md").write_text(BODY.format(t="T-5"))
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", f"file T-5 under {start}")
+        git(repo, "checkout", "-qb", "feat")
+        git(repo, "mv", f"tasks/{start}/T-5.md", f"tasks/{end}/T-5.md")
+        git(repo, "commit", "-qm", f"move T-5 to {end}")
+        git(repo, "checkout", "-q", "main")
+        append(repo, "tasks/notes.md", "- moved on\n")
+        git(repo, "commit", "-qam", "unrelated")
+        out = check(repo)
+        assert readded(out) == [] and edited(out) == [], (start, out)
+        assert closed_tasks(repo, "refs/heads/feat", "refs/heads/main").returncode == 0, start
+
+
+def test_a_live_copy_the_base_already_held_is_not_named(tmp_path):
+    """Boundary (passes on the base too): the base and the target hold `tasks/deferred/T-5.md`,
+    and the branch adds `tasks/open/T-5.md` beside it without touching the deferred copy. The
+    target moved nothing since the fork, so the branch's own second copy is not a replay."""
+    repo = seed(tmp_path)
+    (repo / "tasks/deferred").mkdir(exist_ok=True)
+    (repo / "tasks/deferred/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "file T-5 deferred")
+    git(repo, "checkout", "-qb", "feat")
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "a second T-5 under open")
+    git(repo, "checkout", "-q", "main")
+    append(repo, "tasks/notes.md", "- moved on\n")
+    git(repo, "commit", "-qam", "unrelated")
+    out = check(repo)
+    assert readded(out) == [] and edited(out) == [], out
+
+
+def test_the_branch_s_own_defer_after_a_squash_of_its_add_is_not_named(tmp_path):
+    """The round's false positive: the branch adds `tasks/open/T-5.md`, a squash of it lands with
+    no recorded head, and the branch then defers its own body. The target's `open/` copy is the
+    squash of the branch's add, so the replay drops it and leaves one body; neither check names
+    it."""
+    repo = seed(tmp_path)
+    (repo / "tasks/deferred").mkdir(exist_ok=True)
+    git(repo, "checkout", "-qb", "feat")
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add T-5")
+    append(repo, "tasks/notes.md", "- T-5 note\n")
+    git(repo, "commit", "-qam", "note")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--squash", "feat")
+    git(repo, "commit", "-qm", "squash of PR #8")
+    git(repo, "checkout", "-q", "feat")
+    git(repo, "mv", "tasks/open/T-5.md", "tasks/deferred/T-5.md")
+    git(repo, "commit", "-qm", "the branch defers T-5")
+    git(repo, "checkout", "-q", "main")
+    (repo / "other.txt").write_text("x\n")
+    git(repo, "add", "other.txt")
+    git(repo, "commit", "-qm", "unrelated")
+    out = check(repo)
+    assert "RECORDED HEAD: none" in out.splitlines(), out
+    assert readded(out) == [] and edited(out) == [], out
+    r = closed_tasks(repo, "refs/heads/feat", "refs/heads/main")
+    assert r.returncode == 0 and "CLOSED TASK" not in r.stdout, r.stdout + r.stderr
+
+    git(repo, "checkout", "-q", "feat")
+    git(repo, "rebase", "main")  # exit 0
+    assert not (repo / "tasks/open/T-5.md").exists() and (repo / "tasks/deferred/T-5.md").exists()
+
+
+def test_a_body_the_target_holds_closed_and_deferred_is_named_as_closed(tmp_path):
+    """Boundary (passes on the base too): the archive copy is read first."""
+    repo = seed(tmp_path)
+    git(repo, "checkout", "-qb", "feat")
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add T-5")
+    git(repo, "checkout", "-q", "main")
+    (repo / "tasks/deferred").mkdir(exist_ok=True)
+    (repo / "tasks/archive/T-5.md").write_text(BODY.format(t="T-5"))
+    (repo / "tasks/deferred/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "both copies")
+    assert readded(check(repo)) == [
+        "CLOSED TASK RE-ADDED: tasks/open/T-5.md — the branch adds it, and main closed it at "
+        "tasks/archive/T-5.md"]
+
+
 def test_a_reopen_of_a_body_closed_before_the_fork_is_not_named(tmp_path):
     """A branch that moves an archived body back to `open/` reopens a task the target closed
     before the fork; that is not a replay (its round, lens B). On Rule B's side the merge would
@@ -493,6 +647,33 @@ def test_rule_b_stops_on_an_advance_that_closed_a_body_this_close_adds(tmp_path)
     assert readded(r.stdout) == [
         "CLOSED TASK RE-ADDED: tasks/open/T-5.md — this close adds it, and "
         "refs/remotes/origin/main closed it at tasks/archive/T-5.md"], r.stdout
+    assert r.stdout.splitlines()[-1].startswith("STOP: "), r.stdout
+
+
+def test_rule_b_stops_on_an_advance_that_deferred_a_body_this_close_adds(tmp_path):
+    """Rule B step 3's call, as written: this close adds `open/T-5.md`, and the advance holds T-5
+    under `deferred/`, filed since the fork. The merge would leave two live bodies."""
+    origin = tmp_path / "origin.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    repo = seed(tmp_path, "T-1")
+    git(repo, "remote", "add", "origin", str(origin))
+    git(repo, "push", "-q", "origin", "main")
+    other = tmp_path / "other"
+    git(tmp_path, "clone", "-q", "-b", "main", str(origin), str(other))
+    (other / "tasks/deferred").mkdir(exist_ok=True)
+    (other / "tasks/deferred/T-5.md").write_text(BODY.format(t="T-5"))
+    git(other, "add", "-A")
+    git(other, "commit", "-qm", "another clone filed and deferred T-5")
+    git(other, "push", "-q", "origin", "main")
+    (repo / "tasks/open/T-5.md").write_text(BODY.format(t="T-5"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "this close: a branch's T-5")
+    git(repo, "fetch", "-q", "origin")
+    r = closed_tasks(repo, "refs/heads/main", "refs/remotes/origin/main")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert readded(r.stdout) == [
+        "CLOSED TASK RE-ADDED: tasks/open/T-5.md — this close adds it, and "
+        "refs/remotes/origin/main deferred it at tasks/deferred/T-5.md"], r.stdout
     assert r.stdout.splitlines()[-1].startswith("STOP: "), r.stdout
 
 

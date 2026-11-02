@@ -255,8 +255,9 @@ require_default_branch() {
 #
 # WHY HERE. The bash writers of `review_tasks.md` — `batch_work.sh` (the claim)
 # and `close_batch.sh` (the close) — already source this file, and a mutex that
-# only some writers acquire is not a mutex. The third writer,
-# `archive_review_tasks.py`, carries a Python twin of this pair (Phase 368, `Q-398`)
+# only some writers acquire is not a mutex. The Python writers (`archive_review_tasks.py`,
+# `close_index.py`, `clear_user_action.py`, `backfill_completed_dates.py`) take a Python
+# twin of this pair in `_tracker_lock.py` (Phase 368, `Q-398`; shared since Phase 461)
 # that takes the same file by the same rules. Phase 251 established this file as
 # the one sourced helper for exactly this reason (see the header).
 #
@@ -372,7 +373,7 @@ tracker_lock_acquire() {
   local max_wait="${SYSOP_TRACKER_LOCK_WAIT:-120}"
   # A non-integer override means the default, not zero: `[ x -lt abc ]` errors,
   # and the loop below then refused a FREE lock as held (Phase 368). The Python
-  # twin in `archive_review_tasks.py` reads the variable the same way.
+  # twin in `_tracker_lock.py` reads the variable the same way.
   case "$max_wait" in ''|*[!0-9]*) max_wait=120 ;; esac
   # More than six digits overflows `[ -ge ]` (an error every second, so the wait
   # never ended) and is no wait anyone means; the Python twin applies both rules.

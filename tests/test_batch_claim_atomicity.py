@@ -706,6 +706,7 @@ class TestTheArchiverGateIsNarrowerThanTheReport:
     def _archive(self, tmp_path, tail):
         repo = _repo(tmp_path / "proj")
         shutil.copy(self.ARCHIVER, repo / "sysop/scripts/archive_review_tasks.py")
+        shutil.copy(SCRIPTS / "_tracker_lock.py", repo / "sysop/scripts/_tracker_lock.py")
         (repo / "review_tasks.md").write_text(self._tracker(tail))
         return subprocess.run(
             [sys.executable, str(repo / "sysop/scripts/archive_review_tasks.py")],

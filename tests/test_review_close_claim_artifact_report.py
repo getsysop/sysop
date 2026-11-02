@@ -237,6 +237,99 @@ class TestArtifactEnumeration:
         assert "outcome.md" in absent and "review.md" in absent
 
 
+def _lists(stdout: str) -> tuple[str, str]:
+    """The `present:` and `absent:` values of a one-branch report."""
+    lines = stdout.splitlines()
+    present = next(l for l in lines if l.startswith("      present: "))
+    absent = next(l for l in lines if l.startswith("      absent:  "))
+    return present[len("      present: "):], absent[len("      absent:  "):]
+
+
+class TestAnAutoBuildCycleIsReportedAgainstItsOwnSet:
+    """An `/auto-build` cycle directory holds `/auto-build`'s three files, not
+    `/claim-task`'s five. Judged against the five, every executed cycle read
+    `absent: planner-integrity.md, review.md, outcome.md` — three files that skill
+    never writes there (its park verdict goes to the worktree and to
+    `sysop/runtime/parked/`). The two skills mint differently shaped run names,
+    and that name is the discriminator: it is fixed before any artifact lands."""
+
+    CYCLE = "20261101T120000Z"          # `/auto-build` Phase 6a: `date -u +%Y%m%dT%H%M%SZ`
+    RUN = "20261101T120000Z-aaaaaaaa"   # `/claim-task` Step 7-pre: stamp + 8 hex
+
+    def _report(self, script, repo, run_id, files):
+        _lock(repo, "FEAT-1", "task/feat-1")
+        d = _run(repo, "FEAT-1", run_id=run_id)
+        for n in files:
+            (d / n).write_text("x")
+        r = _exec(script, repo, "task/feat-1")
+        assert r.returncode == 0, r.stderr
+        return _lists(r.stdout)
+
+    def test_an_executed_cycle_has_nothing_absent(self, script, repo):
+        present, absent = self._report(
+            script, repo, self.CYCLE, ("plan.md", "classification.md", "revised-plan.md"))
+        assert absent == "none", absent
+        assert present == "plan.md, classification.md, revised-plan.md", present
+
+    def test_a_blocker_park_is_missing_only_what_a_park_skips(self, script, repo):
+        """Phase 6d's blocker arm writes no `classification.md` and no executor runs;
+        its `review.md` is in the worktree, so it must not be reported absent here."""
+        present, absent = self._report(script, repo, self.CYCLE, ("plan.md",))
+        assert present == "plan.md", present
+        assert absent == "classification.md, revised-plan.md", absent
+
+    def test_a_plan_missing_park_reports_the_whole_cycle_set_absent(self, script, repo):
+        present, absent = self._report(script, repo, self.CYCLE, ())
+        assert present == "none", present
+        assert absent == "plan.md, classification.md, revised-plan.md", absent
+
+    def test_an_executor_that_skipped_its_revised_plan_shows_it(self, script, repo):
+        """`/auto-build` Step 7c item 2's file is a real absence, and the report is
+        the one place it is visible at close."""
+        _, absent = self._report(script, repo, self.CYCLE, ("plan.md", "classification.md"))
+        assert absent == "revised-plan.md", absent
+
+    def test_a_crashed_claim_task_run_keeps_the_five_name_set(self, script, repo):
+        """Boundary (passes on the base too): the hex half is minted before 7a, so a
+        `/claim-task` run that died after its planner still reports its own gaps."""
+        present, absent = self._report(
+            script, repo, self.RUN, ("plan.md", "planner-integrity.md"))
+        assert present == "plan.md, planner-integrity.md", present
+        assert absent == "review.md, classification.md, outcome.md", absent
+
+    def test_a_claim_task_resume_of_a_cycle_is_judged_as_a_claim_task_run(
+            self, script, repo):
+        """Defensive: no shipped path writes a `/claim-task`-only file into a cycle
+        directory (`--resume` lists only `<stamp>-<8 hex>` runs), but a hand-written one
+        or a later writer's means the five-name set applies, so the
+        cycle shape can only ever narrow the absent list for a pure cycle; and nothing
+        on disk is left out of `present`."""
+        present, absent = self._report(
+            script, repo, self.CYCLE,
+            ("plan.md", "planner-integrity.md", "review.md", "classification.md",
+             "revised-plan.md"))
+        assert absent == "outcome.md", absent
+        assert present == ("plan.md, planner-integrity.md, review.md, classification.md, "
+                           "revised-plan.md"), present
+
+    def test_a_run_of_neither_shape_keeps_the_five_name_set(self, script, repo):
+        """Boundary (passes on the base too): a hand-made directory is not guessed at."""
+        _, absent = self._report(script, repo, "manual-run", ("plan.md",))
+        assert absent == "planner-integrity.md, review.md, classification.md, outcome.md", absent
+
+    def test_the_cycle_set_is_the_one_phase_6a_names(self):
+        """The cycle set is read off `/auto-build`'s own sentence, so a fourth file
+        written there, or one dropped, reddens this rather than the report."""
+        text = (REPO_ROOT / "core/skills/auto-build/SKILL.md").read_text(encoding="utf-8")
+        m = re.search(r"The planner writes `([a-z.-]+)` there \(Step 7a\), 6d writes "
+                      r"`([a-z.-]+)`, and the executor writes `([a-z.-]+)`", text)
+        assert m, "auto-build Phase 6a's artifact sentence moved — re-anchor this guard"
+        src = SCRIPT.read_text(encoding="utf-8")
+        cyc = re.search(r"^CYCLE_ARTIFACTS = \[(.*?)\]", src, re.S | re.M)
+        assert cyc, "claim_artifacts.py has no CYCLE_ARTIFACTS list"
+        assert re.findall(r'"([a-z.-]+)"', cyc.group(1)) == list(m.groups())
+
+
 class TestBranchToClaimResolution:
     def test_the_first_branch_line_wins_matching_claim_task_sh(self, script, repo):
         """`claim_task.sh` uses `awk '/^branch:/{...; exit}'`. A lock's free-text

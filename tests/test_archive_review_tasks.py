@@ -1113,7 +1113,7 @@ def _installed_script(tmp_path):
     scripts = tmp_path / "sysop" / "scripts"
     scripts.mkdir(parents=True)
     src = Path(__file__).resolve().parents[1] / "core/companion/scripts"
-    for name in ("archive_review_tasks.py", "_log.py"):
+    for name in ("archive_review_tasks.py", "_log.py", "_tracker_lock.py"):
         (scripts / name).write_bytes((src / name).read_bytes())
     return scripts / "archive_review_tasks.py"
 

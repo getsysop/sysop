@@ -1402,3 +1402,141 @@ class TestFlipPredicateRefusalArms:
         assert "Could not compare this batch against HEAD" in r.stdout, r.stdout
         assert "Commit resumed" not in r.stdout
         assert _head(repo) == before
+
+
+class TestBatchNumberRange:
+    """An operand too long for bash's 64-bit `$((10#…))` is refused, not wrapped.
+
+    The parse used to feed the digits straight into the arithmetic, which wraps
+    silently: `99999999999999999999` printed `── Batch 7766279631452241919 ──` at
+    exit 0, `9223372036854775808` became a negative batch, and `2**64 + 1` became
+    batch 1 — a close of a batch the operator never typed. The bound: strip the
+    leading zeros (a lone `0` kept), then refuse more than 18 digits, before any
+    arithmetic, the lock, or a write. The 18-digit, leading-zero and all-zero
+    cases are boundary pins that held on the unbounded parse too.
+    """
+
+    WRAPS_TO_1 = str(2**64 + 1)
+
+    def _assert_refused(self, r, operand):
+        assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+        assert f"Batch number out of range: {operand}" in r.stderr, r.stderr
+        assert "Usage: close_batch.sh" in r.stderr, r.stderr
+        assert "── Batch" not in r.stdout, r.stdout
+
+    def test_a_twenty_digit_operand_is_refused_on_dry_run(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "--dry-run", "99999999999999999999")
+        self._assert_refused(r, "99999999999999999999")
+
+    def test_an_operand_that_wraps_onto_a_real_batch_closes_nothing(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        tasks_before = (repo / "review_tasks.md").read_text()
+        head_before = _head(repo)
+        r = _run(repo, self.WRAPS_TO_1)
+        self._assert_refused(r, self.WRAPS_TO_1)
+        assert (repo / "review_tasks.md").read_text() == tasks_before
+        assert _head(repo) == head_before
+        # Refused before the tracker write mutex: the real run never created
+        # the runtime directory the lock lives in.
+        assert not (repo / "sysop" / "runtime").exists()
+
+    def test_one_bad_operand_refuses_the_whole_run(self, tmp_path):
+        # The refusal is in the parse, so a good batch listed first is not
+        # closed by a run that is going to refuse.
+        repo = _repo(tmp_path / "repo")
+        head_before = _head(repo)
+        r = _run(repo, "1", "BATCH-" + self.WRAPS_TO_1)
+        self._assert_refused(r, "BATCH-" + self.WRAPS_TO_1)
+        assert "### Batch 1 — First batch `Pending`" in (repo / "review_tasks.md").read_text()
+        assert _head(repo) == head_before
+
+    def test_nineteen_digits_is_refused(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "--dry-run", "1" + "0" * 18)
+        self._assert_refused(r, "1" + "0" * 18)
+
+    def test_eighteen_digits_is_accepted(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "--dry-run", "9" * 18)
+        assert r.returncode == 0, r.stderr
+        assert f"── Batch {'9' * 18} ──" in r.stdout
+        assert f"{'9' * 18}:not-found" in r.stdout
+
+    def test_leading_zeros_do_not_count_toward_the_bound(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        for operand in ("0" * 24 + "1", "batch-" + "0" * 24 + "1"):
+            r = _run(repo, "--dry-run", operand)
+            assert r.returncode == 0, (operand, r.stderr)
+            assert "── Batch 1 ──" in r.stdout, (operand, r.stdout)
+            assert "'Pending' → 'Merged'" in r.stdout, (operand, r.stdout)
+
+    def test_a_leading_zero_operand_really_closes_its_batch(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "0" * 24 + "1")
+        assert r.returncode == 0, r.stderr
+        assert "### Batch 1 — First batch `Merged`" in (repo / "review_tasks.md").read_text()
+
+    def test_all_zeros_is_batch_zero(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        r = _run(repo, "--dry-run", "0" * 25)
+        assert r.returncode == 0, r.stderr
+        assert "── Batch 0 ──" in r.stdout
+        assert "0:not-found" in r.stdout
+
+    def test_the_bound_and_the_zero_strip_hold_on_bash_3_2(self, tmp_path):
+        # The strip is a nested pattern expansion; run it on the shell macOS ships.
+        old_bash = _bash_lt_4()
+        if old_bash is None:
+            import pytest
+            pytest.skip("no bash < 4.0 on this machine; macOS ships 3.2 as /bin/bash")
+        repo = _repo(tmp_path / "repo")
+
+        def run(*args):
+            return subprocess.run([old_bash, str(SCRIPT), *args], cwd=str(repo),
+                                  capture_output=True, text=True)
+
+        self._assert_refused(run("--dry-run", self.WRAPS_TO_1), self.WRAPS_TO_1)
+        r = run("--dry-run", "0" * 24 + "1")
+        assert r.returncode == 0, r.stderr
+        assert "── Batch 1 ──" in r.stdout, r.stdout
+        r = run("--dry-run", "0" * 25)
+        assert r.returncode == 0, r.stderr
+        assert "── Batch 0 ──" in r.stdout, r.stdout
+
+
+class TestASymlinkedTracker:
+    """A real close refuses a symlinked `review_tasks.md`, as `batch_work.sh` does.
+
+    Both rewrites `mv` a new copy onto the path, which replaced the link with a
+    regular file and committed it at exit 0, while the real file kept its old
+    status. A dry run writes nothing and still reads through the link.
+    """
+
+    def _linked(self, tmp_path):
+        repo = _repo(tmp_path / "repo")
+        (repo / "docs").mkdir()
+        _git(repo, "mv", "review_tasks.md", "docs/review_tasks.md")
+        (repo / "review_tasks.md").symlink_to("docs/review_tasks.md")
+        _git(repo, "add", "review_tasks.md")
+        _git(repo, "commit", "-qm", "the tracker lives in docs/")
+        return repo
+
+    def test_a_real_close_refuses_and_leaves_the_link(self, tmp_path):
+        repo = self._linked(tmp_path)
+        head_before = _head(repo)
+        real_before = (repo / "docs/review_tasks.md").read_text()
+        r = _run(repo, "1")
+        assert r.returncode == 1, (r.stdout, r.stderr)
+        assert "is a symlink" in r.stderr and "nothing was written" in r.stderr, r.stderr
+        assert (repo / "review_tasks.md").is_symlink()
+        assert (repo / "docs/review_tasks.md").read_text() == real_before
+        assert _head(repo) == head_before
+        assert not (repo / "sysop" / "runtime").exists()
+
+    def test_a_dry_run_reads_through_the_link(self, tmp_path):
+        repo = self._linked(tmp_path)
+        r = _run(repo, "--dry-run", "1")
+        assert r.returncode == 0, r.stderr
+        assert "── Batch 1 ──" in r.stdout
+        assert (repo / "review_tasks.md").is_symlink()

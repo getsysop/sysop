@@ -921,13 +921,19 @@ route, but only `/claim-task` option A ever asks that question before the close;
 **Only files a file pattern ignores**. A directory a pattern ignores as a
 whole is one entry in `git ls-files --directory`, and the script does not read inside it. Every
 false hit measured on one consumer's live claim worktrees was inside such a directory (a
-lockfile naming `node_modules/...`, a test naming `tests/__pycache__`). The check reads the
+lockfile naming `node_modules/...`, a test naming `tests/__pycache__`). Nor does it read a
+listed file under a directory named like a cache or build output (the script's `_CACHE_DIRS`,
+and `*.egg-info`): pytest's `.pytest_cache/` ignores its own contents with a nested `*`, so git
+lists them one by one, and a test writing a `README.md` into a temporary repo matched
+`.pytest_cache/README.md` by bare name. A line that is only a comment, by the file's extension,
+is not read either; the same report's other false hit was `# see .gitignore`. The check reads the
 consumer's resolver configuration where the maintainer ruled it should: a quoted token
 through the `compilerOptions.paths` of the nearest `tsconfig.json`/`jsconfig.json` that declares
 them, and a root-absolute URL through the `public/` directory beside the nearest `next.config.*`.
 What it still cannot see: an import from a directory ignored as a whole, a config's `extends`, a
 config under another name (`tsconfig.app.json`, reached by `references`), a bundler alias map, and
-a name built at run time (`importlib`, a template literal, `import.meta.glob`). Its summary line
+a name built at run time (`importlib`, a template literal, `import.meta.glob`), nor an ignored file
+read from under a cache or build-output directory (`build/config.json`). Its summary line
 names the first and the last. Step 3b step 0b's preservation does not depend on the check, so none
 of these loses a file; they merge without one. Prose (`.md`, `.rst`, `.adoc`) and
 `*ignore` files are not read: over 40 commits of the same consumer's history, an early matcher
@@ -1748,12 +1754,14 @@ the ordering rather than leaving it to the loop's shape.
 
 ### Why the workspace shape is re-tested here even though step 0 resolves it
 
-An earlier draft of this comment claimed step 0 enforces that a workspace is a checkout. It does
-not, and the distinction is the reason the test exists. The discovered arm is git-backed, because
-it reads the head branch; the recorded arm is not — it accepts the lock's workspace on a
-directory test alone. So a stale or hand-edited lock naming a plain directory resolves as recorded
-and reaches this heredoc, and the refusal names that reason rather than reusing the generic
-invocation message. Telling an operator to fix an invocation they never typed is the mis-blame this
+An earlier draft of this comment claimed step 0 enforces that a workspace is a checkout, and for
+a long time it did not: the recorded arm accepted the lock's workspace on a directory test alone,
+so a stale lock naming a plain directory resolved as recorded and reached this heredoc. Step 0 now
+takes a recorded workspace only when it is this branch's checkout (a linked worktree on the
+branch, or a clone that holds its ref; a reftable clone, which no file read can verify, is taken
+as the lock says). The test stays because the collect is also run by hand,
+and a typed path naming a plain directory still arrives here; the refusal names that reason
+rather than reusing the generic invocation message. Telling an operator to fix an invocation they never typed is the mis-blame this
 arm was reshaped to remove.
 
 **A filing about this arm was wrong, and the oracle it wanted overturned stands.** The filing held
@@ -1785,9 +1793,10 @@ clone claimed without a lock, rather than leaving it open for every relocated wo
 
 An earlier draft used two bash `for` loops. Those are unauthorizable: `for` and `done` are not
 documented command separators, so no permission rule binds them, and the same reasoning is why this
-step's rollback became a heredoc too. Passing the worktree listing in as an argument is what lets
-the block run no subprocess of its own, which is the property that keeps the whole thing matching
-as a single simple command.
+step's rollback became a heredoc too. Given the worktree listing as an argument, the script runs
+no subprocess of its own; the skill now passes the branch alone and lets the script read
+`git worktree list` itself, because the old `"$(git worktree list --porcelain)"` argument is a
+quoted command substitution, which `dontAsk` denies under any rule.
 
 ### What ordering an unverified arm first actually cost
 
@@ -1839,7 +1848,8 @@ step 0b copies **every** ignored file the main checkout has no identical copy of
 not, to `sysop/runtime/preserved/<branch>/`, then the remove goes ahead. Only a copy that cannot
 be made, or a directory it holds (below), SKIPs the branch.
 
-**What it copies, and what it does not.** Only files a file pattern ignores, as the check reads;
+**What it copies, and what it does not.** Only files a file pattern ignores (the check also
+drops a listed file under a cache or build-output directory; the copy does not);
 a directory ignored as a whole is not copied. Until internal tracker #939 that was silent: the
 copy printed `0 preserved` at exit 0 and the remove deleted a consumer's eval-run outputs, which
 existed only in the worktree. On the maintainer's answer of 2026-10-31 it lists and holds rather

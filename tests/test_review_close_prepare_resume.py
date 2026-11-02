@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _command_blocks import command_blocks, unfilled
 from skill_runner_text import text_of
 
 REPO = Path(__file__).resolve().parent.parent
@@ -45,11 +46,11 @@ def _section() -> str:
 
 
 def _commands() -> dict[str, str]:
-    found = re.findall(r"^\s*(python3 sysop/scripts/close_run\.py (\w+) .*)$", _section(), re.M)
     by = {}
-    for line, sub in found:
+    for cmd in command_blocks(_section(), r"python3 sysop/scripts/close_run\.py \w+ "):
+        sub = cmd.split()[2]
         assert sub not in by, f"two `{sub}` commands in the section"
-        by[sub] = line.strip()
+        by[sub] = cmd
     # Phase 380 (`Q-664`): the prepare with `--agent` selects and holds; `eligible` runs
     # against a class, so `test_unattended_half_a_build.py` runs it.
     assert set(by) == {"begin", "finish", "load", "check", "consume", "eligible", "hold"}, sorted(by)
@@ -103,9 +104,11 @@ def test_the_prescribed_commands_run_as_written(repo: Path) -> None:
 
     hold = sub(cmds["hold"]).replace('"<branch>"', '"feat/a"').replace(
         "<first violation>", "rule 1 (a.py:1)")
-    assert "<" not in hold, hold
+    assert not unfilled(hold), hold
     r = _sh(repo, hold)
     assert r.returncode == 0 and r.stdout.startswith("HELD: feat/a at "), r.stdout + r.stderr
+    held = json.loads((repo / "sysop/runtime/close/holds/feat%2Fa.json").read_text(encoding="utf-8"))
+    assert held["reason"] == "VERDICT: BLOCKED: rule 1 (a.py:1)", held
     r = _sh(repo, sub(cmds["finish"]))
     assert r.returncode == 0 and f"RESUME: /review-close --resume {run_id}" in r.stdout, r.stdout + r.stderr
     for name in ("load", "check"):

@@ -309,10 +309,27 @@ normalize_batch_arg() {
   # would make `TECH-7` claim batch 7, which is the claim-kind confusion this
   # phase exists to remove.
   if [[ "$raw" =~ ^[Bb][Aa][Tt][Cc][Hh]-([0-9]+)$ ]]; then
-    printf '%s\n' "${BASH_REMATCH[1]}"
-  else
-    printf '%s\n' "$raw"
+    raw="${BASH_REMATCH[1]}"
   fi
+  # Leading zeros too, as `close_batch.sh` strips them: the batch is looked up by
+  # the index's `str(int(...))` key and its lock is `BATCH-<N>.lock`, so `007`
+  # read "not found" here while `close_batch.sh 007` closed batch 7. A parameter
+  # expansion, not `$((10#…))`, so a long operand cannot wrap; a lone `0` stays.
+  if [[ "$raw" =~ ^[0-9]+$ ]]; then
+    raw="${raw#"${raw%%[!0]*}"}"
+    [[ -n "$raw" ]] || raw=0
+  fi
+  printf '%s\n' "$raw"
+}
+
+# The bound `close_batch.sh` applies: more than 18 digits after the leading zeros
+# is refused, so this script never claims a batch that script refuses to close.
+# Nothing here does arithmetic on the number, so this is agreement, not overflow.
+batch_in_range() {
+  local digits="$1"
+  [[ ! "$digits" =~ ^[0-9]+$ ]] || [[ ${#digits} -le 18 ]] && return 0
+  echo "❌ Batch number out of range: $2 (more than 18 digits after leading zeros)." >&2
+  return 1
 }
 
 # ── Helper: refuse a flag sitting AFTER the positional (Q-243) ─
@@ -370,6 +387,79 @@ find_worktree_for_branch() {
     esac
   done < <(git worktree list --porcelain 2>/dev/null)
   return 1
+}
+
+# ── Helper: a path's physical spelling, whether or not it exists ─
+# For comparing a worktree git reports against a path this script computes,
+# either of which may be gone from disk: the directory itself when it resolves,
+# else its parent's physical path with the leaf appended, else the path as given.
+physical_path() {
+  local p="$1" d=""
+  if d="$(CDPATH= cd "$p" 2>/dev/null && pwd -P)"; then
+    printf '%s\n' "$d"
+  elif d="$(CDPATH= cd "$(dirname "$p")" 2>/dev/null && pwd -P)"; then
+    printf '%s/%s\n' "$d" "$(basename "$p")"
+  else
+    printf '%s\n' "$p"
+  fi
+}
+
+# Do two paths name the same place? Physical spellings first; `-ef` too when both
+# exist, because `pwd -P` resolves symlinks but not case.
+same_place() {
+  local a b
+  a="$(physical_path "$1")"; b="$(physical_path "$2")"
+  [[ "$a" == "$b" ]] && return 0
+  [[ -e "$a" && -e "$b" && "$a" -ef "$b" ]]
+}
+
+# ── Helper: has this batch's claim flip gone uncommitted? ──────
+# True when the primary's review_tasks.md differs from HEAD's AND HEAD's copy
+# reads batch $1 as `Pending`: the status flip a claim writes and then commits is
+# on disk, and the commit never landed. A signal during the claim commit (a slow
+# pre-commit hook, then Ctrl-C or a closed terminal) leaves exactly this: the
+# commit is killed before the rollback can run, so the file stays flipped beside
+# the lock and the worktree. A re-attach must not adopt it, because nothing on
+# that path ever commits the flip.
+#
+# HEAD's copy is parsed by `review_index.py` — the only parser — through
+# `cat-file --filters`, which applies the checkout's eol and clean/smudge filters
+# as the working copy has them. Anything it cannot read (no HEAD, no tracked
+# copy, a parse error) answers false: the re-attach proceeds as it always did,
+# rather than refusing on a state this did not establish.
+claim_flip_uncommitted() {
+  local n="$1" rc=0 head_status=""
+  git -C "$MAIN_ROOT" diff --quiet HEAD -- review_tasks.md 2>/dev/null && rc=0 || rc=$?
+  [[ "$rc" -eq 1 ]] || return 1
+  head_status="$(git -C "$MAIN_ROOT" cat-file --filters "HEAD:review_tasks.md" 2>/dev/null \
+    | python3 -B -c '
+import os, sys, tempfile
+sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[1])))
+import review_index
+fd, path = tempfile.mkstemp(suffix=".md")
+try:
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(sys.stdin.buffer.read())
+    batch = review_index.parse_review_tasks(path)["batches"].get(str(int(sys.argv[2]))) or {}
+    print(batch.get("status", ""))
+finally:
+    os.unlink(path)
+' "$INDEX_SCRIPT" "$n" 2>/dev/null)" || head_status=""
+  [[ "$head_status" == "Pending" ]]
+}
+
+# ── Helper: refuse a symlinked review_tasks.md (claim and release) ─
+# $1 completes "Refusing …" with what this caller refuses and what it left.
+refuse_symlinked_tracker() {
+  local target=""
+  target="$(readlink "$TASKS_FILE" 2>/dev/null)" || target="<unreadable>"
+  echo "❌ review_tasks.md in ${MAIN_ROOT} is a symlink (to ${target})." >&2
+  echo "   Refusing $1." >&2
+  echo "   This script rewrites the tracker by moving a new copy onto that path, which" >&2
+  echo "   replaces the link with a regular file and commits the change, while the file" >&2
+  echo "   it points at keeps the old status." >&2
+  echo "   Keep review_tasks.md as a regular file at the repository root (move the real" >&2
+  echo "   file there with git mv, in place of the link), commit, then re-run." >&2
 }
 
 # ── Helper: is this path a real worktree, or just a directory? ─
@@ -810,8 +900,9 @@ live_batch_record() {
 # ── Helper: claim a Pending batch on main ─────────────────────
 # Marks the batch as In Progress in review_tasks.md and commits on main, after
 # building the batch's branch and worktree. Refuses if the primary is not on the
-# default branch or its review_tasks.md is untracked or dirty; returns 0 without
-# a flip when the batch is already past Pending.
+# default branch or its review_tasks.md is untracked, a symlink or dirty; returns
+# 0 without a flip when the batch is already past Pending, unless its
+# `In Progress` is a flip HEAD does not hold, which refuses.
 # `claim_batch` is a thin serializing wrapper; the body is `_claim_batch_locked`.
 #
 # The whole read-modify-write-commit is the critical section, not just the
@@ -884,6 +975,33 @@ _claim_batch_locked() {
       echo "   See its state with: bash sysop/scripts/batch_work.sh --list-all" >&2
       return 1
     fi
+    # An `In Progress` that HEAD does not hold is a claim whose commit never
+    # landed (`claim_flip_uncommitted` says how). Decided here, under the mutex,
+    # and not at the top level: outside it, a rival claim between its flip and
+    # its commit looks the same, and the way out printed below would undo it.
+    # Under the mutex no claim or close is mid-commit, so the flip is dead.
+    # Refuses before the top level builds anything: no second branch, worktree
+    # or lock.
+    if [[ "$reattach_status" == "In Progress" ]] && claim_flip_uncommitted "$batch_num"; then
+      local q_main q_wt
+      q_main="$(printf '%q' "$MAIN_ROOT")"; q_wt="$(printf '%q' "$WORKTREE_DIR")"
+      echo "❌ Batch ${batch_num} reads 'In Progress' in ${MAIN_ROOT}/review_tasks.md, but HEAD's copy" >&2
+      echo "   reads 'Pending': the claim's status flip was never committed. A claim interrupted" >&2
+      echo "   during its commit (a signal while a pre-commit hook ran) leaves this state." >&2
+      echo "   Refusing to resume — nothing was written: a re-attach never commits the flip," >&2
+      echo "   so it would build on a claim HEAD does not hold." >&2
+      echo "   First check that the file differs from HEAD only by that flip:" >&2
+      echo "     git -C ${q_main} diff HEAD -- review_tasks.md" >&2
+      echo "   To keep the claim, commit the flip and re-run:" >&2
+      echo "     git -C ${q_main} commit -m 'docs: claim Batch ${batch_num}' -- review_tasks.md && bash ${q_main}/sysop/scripts/batch_work.sh ${batch_num}" >&2
+      echo "   (the batch's branch was cut before the flip; once the commit lands, bring it up with" >&2
+      echo "   git -C ${q_wt} merge --ff-only --no-overwrite-ignore refs/heads/${DEFAULT_BRANCH})" >&2
+      echo "   To drop it, restore the file, check it now matches HEAD, and release the batch:" >&2
+      echo "     git -C ${q_main} checkout -- review_tasks.md && git -C ${q_main} diff --quiet HEAD -- review_tasks.md && bash ${q_main}/sysop/scripts/batch_work.sh --release ${batch_num}" >&2
+      echo "   (the release clears the lock; the worktree at ${WORKTREE_DIR} and its branch stay," >&2
+      echo "   for a re-claim to adopt, or for you to remove)" >&2
+      return 1
+    fi
     return 0
   fi
 
@@ -944,6 +1062,17 @@ _claim_batch_locked() {
     echo "   so the flip would survive on disk under a message saying it did not." >&2
     echo "   Track it once and re-run:" >&2
     echo "     git -C $(printf '%q' "$MAIN_ROOT") add review_tasks.md && git -C $(printf '%q' "$MAIN_ROOT") commit -m 'docs: track review_tasks.md'" >&2
+    return 1
+  fi
+
+  # ...and a regular file, not a symlink. The rewrite below installs its result
+  # with `mv` over the path, and `mv` replaces a link rather than writing through
+  # it: the root path became a regular file carrying the flip, the file the link
+  # pointed at kept the old status, and the type change was committed at exit 0.
+  # Refused rather than resolved, so the one tracker path every reader opens is
+  # the one this writes; `--release` refuses it the same way.
+  if [[ -L "$TASKS_FILE" ]]; then
+    refuse_symlinked_tracker "the claim — nothing was written: no branch, no worktree, no lock"
     return 1
   fi
 
@@ -1280,6 +1409,14 @@ _claim_batch_locked() {
 # and --force was not passed) → revert review_tasks.md and commit → remove the
 # lock last. If the commit fails the lock survives, so the batch still reads as
 # claimed rather than as claimable-but-half-reverted.
+#
+# `--force` overrides three refusals, all about the worktree and the work in it:
+# a batch with tasks marked `[x]`, a worktree with uncommitted changes, and a
+# worktree holding the batch branch at a path that is neither the advertised one
+# nor the lock's `workspace:`. One word for the three rather than a new flag: each
+# is "remove what is there even though it may not be safe to", and the refusal
+# for the third names the other two so a `--force` is not given blind. It never
+# covers the fence, duplicate-number, status, branch or symlink refusals.
 if [[ "${1:-}" == "--release" ]]; then
   shift
   # Q-012: before flag parsing, so --force cannot reach past the exit-3 arm.
@@ -1321,6 +1458,7 @@ if [[ "${1:-}" == "--release" ]]; then
     exit 1
   fi
   REL_NUM="$(normalize_batch_arg "$1")"
+  batch_in_range "$REL_NUM" "$1" || exit 1
   shift || true
   # Flags are consumed only *before* the positional, so a trailing flag would
   # silently no-op — reject it rather than abort a dirty-worktree release and
@@ -1458,6 +1596,12 @@ if [[ "${1:-}" == "--release" ]]; then
     echo "❌ review_tasks.md has uncommitted changes — commit or stash them first." >&2
     exit 1
   fi
+  # The claim's symlink refusal, for the same `mv` below; here, before the
+  # worktree removal, which is the release's first write.
+  if [[ -L "$TASKS_FILE" ]]; then
+    refuse_symlinked_tracker "the release — nothing was released, the claim is intact"
+    exit 1
+  fi
 
   # Locate the batch section. `review_index.py` is the ONLY parser here, for
   # the reason the claim path's copy states (Q-017/Phase 211) — and the stake is
@@ -1496,6 +1640,50 @@ if [[ "${1:-}" == "--release" ]]; then
   if [[ -n "$REL_BRANCH" ]]; then
     if REL_WT="$(find_worktree_for_branch "$REL_BRANCH")"; then
       REL_WT_REAL="$( { cd "$REL_WT" && pwd -P; } 2>/dev/null || echo "$REL_WT" )"
+      # Whose worktree is it? The lookup goes by branch, so it finds the batch's
+      # worktree wherever the claiming shell's WORKTREE_ROOT / WORKTREE_PREFIX put
+      # it — and equally a worktree the batch never made: the branch checked out
+      # at some unrelated path, which every arm below would then remove or
+      # de-register. So the found path must be one of the two places this batch's
+      # worktree can be: the path the claim advertises, computed as the claim
+      # computes it under this shell's variables, or the `workspace:` the claim
+      # recorded in its lock (which covers a claim made under other variables).
+      # Anywhere else needs --force. Computed without `worktree_root_parent`: that
+      # validator refuses a WORKTREE_ROOT a release never builds into.
+      REL_EXPECT_PARENT="${MAIN_ROOT}/.."
+      [[ -z "${WORKTREE_ROOT:-}" ]] || REL_EXPECT_PARENT="$WORKTREE_ROOT"
+      REL_EXPECT="${REL_EXPECT_PARENT}/${WORKTREE_PREFIX:-$(basename "$MAIN_ROOT")}-batch-${REL_NUM}"
+      REL_LOCK_WS=""
+      if REL_LOCK_PATH="$(resolve_locks_dir 2>/dev/null)"; then
+        REL_LOCK_PATH="${REL_LOCK_PATH}/BATCH-${REL_NUM}.lock"
+        if [[ -f "$REL_LOCK_PATH" && ! -L "$REL_LOCK_PATH" ]]; then
+          REL_LOCK_WS="$(awk '/^workspace: /{print substr($0, 12); exit}' "$REL_LOCK_PATH" 2>/dev/null)" || REL_LOCK_WS=""
+        fi
+      fi
+      # A live worktree only: a registration whose directory is gone, or has lost its
+      # `.git`, goes to the stale arm below, which de-registers this one record and
+      # removes no files. Checking it here refused a release base recovered, and the
+      # `git -C <path>` way out then ran in whatever repository encloses that path.
+      if path_is_worktree "$REL_WT_REAL" \
+         && [[ ! "$REL_WT_REAL" -ef "$REL_MAIN_REAL" ]] && ! same_place "$REL_WT_REAL" "$REL_EXPECT" \
+         && { [[ -z "$REL_LOCK_WS" ]] || ! same_place "$REL_WT_REAL" "$REL_LOCK_WS"; }; then
+        if ! $RELEASE_FORCE; then
+          echo "❌ Branch ${REL_BRANCH} is checked out at ${REL_WT_REAL}," >&2
+          echo "   which is not where this batch's worktree is:" >&2
+          echo "     advertised: $(physical_path "$REL_EXPECT")   (this shell's WORKTREE_ROOT / WORKTREE_PREFIX)" >&2
+          echo "     lock:       ${REL_LOCK_WS:-<no lock, or no workspace: in it>}" >&2
+          echo "   Refusing to remove it — nothing was released, the claim is intact." >&2
+          echo "   If it is not this batch's worktree, take the branch off it, then re-run;" >&2
+          echo "   the release leaves that worktree alone:" >&2
+          echo "     git -C $(printf '%q' "$REL_WT_REAL") checkout --detach && bash $(printf '%q' "$MAIN_ROOT")/sysop/scripts/batch_work.sh --release ${REL_NUM}" >&2
+          echo "   If it is (claimed under other WORKTREE_ROOT / WORKTREE_PREFIX values), re-run with" >&2
+          echo "   those set, or remove it anyway with --force — which also discards uncommitted" >&2
+          echo "   changes in it and releases over tasks marked [x]:" >&2
+          echo "     bash $(printf '%q' "$MAIN_ROOT")/sysop/scripts/batch_work.sh --release --force ${REL_NUM}" >&2
+          exit 1
+        fi
+        echo "⚠️  ${REL_WT_REAL} is neither the advertised worktree path nor the lock's — removing it anyway (--force)."
+      fi
       # `REL_MAIN_REAL` was resolved by the main-checkout guard above.
       # `-ef`, not `==` — a case-divergent spelling would make this
       # "never remove the main worktree" guard MISS, which is the direction
@@ -1729,6 +1917,7 @@ if [[ -z "${1:-}" ]]; then
   exit 1
 fi
 BATCH_NUM="$(normalize_batch_arg "$1")"
+batch_in_range "$BATCH_NUM" "$1" || exit 1
 shift || true
 if [[ "${1:-}" == --* ]]; then
   echo "❌ Flags must come before <BATCH_NUMBER> (e.g. batch_work.sh --force ${BATCH_NUM})." >&2
@@ -1815,6 +2004,7 @@ fi
 # about which states are live would just relocate the confusion. `Review Ready`
 # is LIVE (--release still owns it) and `Ready for Review` is TERMINAL, despite the
 # names.
+ANNOUNCE_RESUME=false
 case "$BATCH_STATUS" in
   Pending)
     : # the claim this path exists for
@@ -1824,22 +2014,10 @@ case "$BATCH_STATUS" in
     # the documented way back in, so this proceeds — but it announces the lock
     # rather than stepping over it in silence, because the same invocation is
     # what a second agent runs when it does not know the batch is taken.
-    # `resolve_locks_dir` returns 1 when the main root is unresolvable, so it is
-    # given its own `|| CLAIM_LOCK_DIR=""` rather than being inlined into the
-    # test — an unset-on-failure assignment inside `if` would take the helper's
-    # exit status for the whole condition and read as "no lock". The `|| true`
-    # on the grep is the same guard close_batch.sh's Branch/Grand-Total greps
-    # carry: no matching field must not abort the run under `set -euo pipefail`.
-    CLAIM_LOCK_DIR="$(resolve_locks_dir 2>/dev/null)" || CLAIM_LOCK_DIR=""
-    CLAIM_LOCK_FILE="${CLAIM_LOCK_DIR}/BATCH-${BATCH_NUM}.lock"
-    if [[ -n "$CLAIM_LOCK_DIR" && -f "$CLAIM_LOCK_FILE" ]]; then
-      echo "ℹ️  Batch ${BATCH_NUM} is already claimed — resuming."
-      grep -E '^(agent|started|workspace):' "$CLAIM_LOCK_FILE" \
-        | sed 's/^/   /' || true
-      echo "   If that is not your claim, stop: release it from the primary checkout first with"
-      echo "     bash sysop/scripts/batch_work.sh --release ${BATCH_NUM}"
-      echo ""
-    fi
+    # Printed after `claim_batch`, not here: the re-attach can still refuse (an
+    # uncommitted flip, a status that changed while this run waited), and a
+    # "resuming" line above a refusal reads as a resume that happened.
+    ANNOUNCE_RESUME=true
     ;;
   "Review Ready")
     # Live, but finished and awaiting review. Claiming it is precisely the
@@ -2126,6 +2304,26 @@ if branch_held_elsewhere "$BATCH_BRANCH" "$WORKTREE_DIR"; then
 fi
 
 claim_batch "$BATCH_NUM" "$BATCH_STATUS" || exit 1
+
+# The `In Progress` arm's announcement (see the status decision above).
+# `resolve_locks_dir` returns 1 when the main root is unresolvable, so it is
+# given its own `|| CLAIM_LOCK_DIR=""` rather than being inlined into the
+# test — an unset-on-failure assignment inside `if` would take the helper's
+# exit status for the whole condition and read as "no lock". The `|| true`
+# on the grep is the same guard close_batch.sh's Branch/Grand-Total greps
+# carry: no matching field must not abort the run under `set -euo pipefail`.
+if $ANNOUNCE_RESUME; then
+  CLAIM_LOCK_DIR="$(resolve_locks_dir 2>/dev/null)" || CLAIM_LOCK_DIR=""
+  CLAIM_LOCK_FILE="${CLAIM_LOCK_DIR}/BATCH-${BATCH_NUM}.lock"
+  if [[ -n "$CLAIM_LOCK_DIR" && -f "$CLAIM_LOCK_FILE" ]]; then
+    echo "ℹ️  Batch ${BATCH_NUM} is already claimed — resuming."
+    grep -E '^(agent|started|workspace):' "$CLAIM_LOCK_FILE" \
+      | sed 's/^/   /' || true
+    echo "   If that is not your claim, stop: release it from the primary checkout first with"
+    echo "     bash sysop/scripts/batch_work.sh --release ${BATCH_NUM}"
+    echo ""
+  fi
+fi
 
 # A re-attach (`In Progress`, or a forced claim past `Pending`) flips nothing,
 # so `claim_batch` built no workspace; build or adopt it here.

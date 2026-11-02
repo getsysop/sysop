@@ -153,7 +153,8 @@ moved `HEAD` and back between calls. (A `test`, an `if`, a `$(…)` capture and 
    so the project's commit-msg and pre-merge-commit hooks fire here: put every trailer the
    project requires in the ONE final -m, one per line, or drop that -m.
 
-   First, does the advance close a task body this close edited or adds?
+   First, does the advance close a task body this close edited or adds, or move one it adds to the
+   other of `open/` and `deferred/`?
 
    ```bash
    python3 sysop/scripts/git_check.py closed-tasks "refs/heads/<default branch>" "refs/remotes/origin/<default branch>"

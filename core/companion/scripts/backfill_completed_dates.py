@@ -52,7 +52,11 @@ backtick candidate) and rerun.
 
 Exits 0 on success even if some tasks couldn't be resolved — surfacing
 remaining nulls is the operator's call. Exits 1 only on hard failures
-(unreadable index, git unavailable).
+(unreadable index, git unavailable), and when the write cannot be serialized:
+the rewrite takes the tracker write mutex (`_tracker_lock.py`, the one
+`claim_task.sh` takes), so another Sysop process holding it past
+`SYSOP_TRACKER_LOCK_WAIT` (120 s by default), or an index that changed while
+the scan ran, stops the run having written nothing. `--dry-run` takes no lock.
 
 Path-in-message convention: error messages reference the index file by
 basename (`Path(p).name`), not the absolute path. The path is operator-
@@ -63,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import io
 import os
 import re
 import subprocess
@@ -257,8 +262,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        with open(index_path, encoding="utf-8", errors="replace") as f:
-            data = yaml.safe_load(f)
+        # Bytes first, so the write below can tell whether the file changed since this
+        # read; the wrapper decodes them exactly as a text-mode `open` would.
+        raw = index_path.read_bytes()
+        data = yaml.safe_load(io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8", errors="replace"))
     except Exception as e:  # OSError, or any parse failure: not only YAMLError (`Q-621`)
         print(f"ERROR: cannot read {index_path.name}: {_sanitize_log(e)}", file=sys.stderr)
         return 1
@@ -305,6 +312,51 @@ def main(argv: list[str] | None = None) -> int:
         print("--dry-run: not writing.")
         return 0
 
+    # The tracker write mutex `claim_task.sh --commit-claim` and `--release` take, so a
+    # claim flip cannot land between the check below and the replace and be put back by
+    # this run's copy. It is taken HERE, after the `git log` scan, rather than before the
+    # read: the scan runs once per task over the whole history, and a lock held across it
+    # would make every concurrent claim wait out `SYSOP_TRACKER_LOCK_WAIT` and refuse. So
+    # under the lock the file must still hold the bytes read above, and a run that finds
+    # otherwise writes nothing and says to re-run — `archive_review_tasks.py`'s rule for
+    # its own confirmation prompt. Imported here, not at the top, so a dry run does not
+    # need the module beside this script.
+    import _tracker_lock
+    held = _tracker_lock.hold(
+        str(_project_root(index_path)), "this backfill's tasks/index.yml write",
+        "nothing was written", holder=os.path.basename(__file__))
+    if held is None:
+        return 1
+    with held:
+        try:
+            now = index_path.read_bytes()
+        except OSError as e:
+            print(f"ERROR: cannot read {index_path.name}: {_sanitize_log(e)}", file=sys.stderr)
+            return 1
+        if now != raw:
+            print(f"ERROR: {index_path.name} changed while the backfill ran (another "
+                  f"writer got in); nothing was written. Re-run against the current file.",
+                  file=sys.stderr)
+            return 1
+        return _write_index(index_path, data)
+
+
+def _project_root(index_path: Path) -> Path:
+    """The directory the mutex is resolved from: the one holding `tasks/`.
+
+    `--index` is documented as `tasks/index.yml`, so its grandparent; an index outside a
+    `tasks/` directory resolves from its own directory. Inside a repository either one
+    reaches the same mutex through `git rev-parse --git-common-dir`; outside one (no rival
+    can run there) the fallback lock lands beside `tasks/`, not inside it. The path as
+    given, not its symlink target: the bash writers resolve the mutex from the checkout
+    they run in, whatever the index links to.
+    """
+    d = Path(os.path.abspath(index_path)).parent
+    return d.parent if d.name == "tasks" else d
+
+
+def _write_index(index_path: Path, data: dict) -> int:
+    """Rewrite the index from `data`; 0, or 1 after printing why not."""
     # Atomic rewrite via `mkstemp` + `os.replace` so a crash mid-write cannot
     # leave truncated YAML — `tasks/index.yml` is load-bearing for
     # `/next-task`, `/claim-task`, `/review-close`. See CLAUDE.md

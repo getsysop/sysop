@@ -241,7 +241,7 @@ def _git_discovery_env() -> dict[str, str]:
     over `git -C`, and git exports them into every hook — stripping them makes
     `-C` authoritative so a probe against a tmpdir resolves there, not the
     invoking repo. Duplicated verbatim in next_task.py and scope_overlap.py, and
-    in archive_review_tasks.py since Phase 368
+    in _tracker_lock.py (archive_review_tasks.py's, from Phase 368)
     (same zero-dependency-duplicate rationale as _resolve_canonical_locks_dir).
     """
     return {

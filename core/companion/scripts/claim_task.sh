@@ -261,7 +261,8 @@ if $ENTRY_STATE; then
   # batch that Phase 156 fixed elsewhere.
   if [[ "$TASK_ID" =~ ^[Bb][Aa][Tt][Cc][Hh]-([0-9]+)$ ]] || [[ "$TASK_ID" =~ ^([0-9]+)$ ]]; then
     echo "❌ ${TASK_ID} is a review batch; its claim state lives in review_tasks.md, not tasks/index.yml." >&2
-    echo "   Read the batch's status there (and sysop/runtime/locks/BATCH-${BASH_REMATCH[1]}.lock) instead;" >&2
+    _batch_n="${BASH_REMATCH[1]#"${BASH_REMATCH[1]%%[!0]*}"}"   # the lock name strips leading zeros
+    echo "   Read the batch's status there (and sysop/runtime/locks/BATCH-${_batch_n:-0}.lock) instead;" >&2
     echo "   /claim-task Step 2's review-batch branch already does exactly that." >&2
     exit 1
   fi
@@ -512,8 +513,8 @@ if changed:
     # tempfile + os.replace (Phase 201's shape), NOT a truncate in place. This used
     # to cite `/review-close` Step 7's roster of writers "still truncating"; the roster
     # is in Step 4c, not Step 7, and Phase 263 converted the last of them, so no writer
-    # of tasks/index.yml truncates in place any more (`Q-404`, whose open half is the
-    # MUTEX). mkstemp rather than a fixed `<path>.tmp` so the name cannot
+    # of tasks/index.yml truncates in place any more (`Q-404`; since Phase 461 the
+    # Python writers take the mutex too). mkstemp rather than a fixed `<path>.tmp` so the name cannot
     # collide the way `Q-382` describes. Same directory, so the replace is atomic.
     # `realpath` above means a symlinked index is written THROUGH, not replaced,
     # and the mode is carried across.
@@ -1088,7 +1089,8 @@ fi
 # spellings `--entry-state` refuses.
 if $USE_LOCK && { [[ "$TASK_ID" =~ ^[Bb][Aa][Tt][Cc][Hh]-([0-9]+)$ ]] || [[ "$TASK_ID" =~ ^([0-9]+)$ ]]; }; then
   echo "❌ ${TASK_ID} is a review batch; claim it with the script that owns its lock and its status:" >&2
-  echo "     bash sysop/scripts/batch_work.sh $((10#${BASH_REMATCH[1]}))" >&2
+  _batch_n="${BASH_REMATCH[1]#"${BASH_REMATCH[1]%%[!0]*}"}"   # no $((10#…)): a long number wraps
+  echo "     bash sysop/scripts/batch_work.sh ${_batch_n:-0}" >&2
   echo "   Nothing was written." >&2
   exit 1
 fi
@@ -1383,7 +1385,8 @@ elif [[ "$MODE" == "clone" ]]; then
   # script printed `✅ Created branch` and `✅ Lock created`, wrote a lock naming
   # `branch: <BRANCH_NAME>` and `workspace: <dir>`, and told the operator to
   # start working — in a clone still sitting on `main`. `/review-close` Step 0
-  # arm (ii) resolves exactly that lock, and Step 3b then collects from it. A
+  # arm (ii) resolved exactly that lock (it now takes a clone only while the clone
+  # holds the branch's ref), and Step 3b then collected from it. A
   # push-before-clone fix alone is INERT for this path, which is why both legs
   # are here.
   REMOTE_URL=$(git remote get-url origin 2>/dev/null) || {
@@ -1406,7 +1409,16 @@ elif [[ "$MODE" == "clone" ]]; then
   # new branch on origin and then exited 1 — a remote-side side effect of a
   # command that did nothing locally. Pre-220 a claim never touched origin at
   # all, so this is a new surface and worth ordering deliberately.
-  if [[ -d "$WORKTREE_DIR" ]]; then
+  #
+  # `-e || -L`, not `-d`, for the reason the worktree preflight above gives: a
+  # DANGLING symlink is invisible to `-e` and `-d`, and a regular file is not a
+  # directory. Under `-d` both skipped every refusal here, published the branch,
+  # and then died on `git clone` at rc=128. Now they enter this arm and
+  # `path_is_worktree_root` (which tests `-d` itself) refuses them before the
+  # push. A symlink to a real directory is followed and judged by what it
+  # points at, as the worktree mode judges one. It also keeps the `-d` choice
+  # after the push sound: only a directory or nothing reaches it.
+  if [[ -e "$WORKTREE_DIR" ]] || [[ -L "$WORKTREE_DIR" ]]; then
     echo "ℹ️  Clone directory '${WORKTREE_DIR}' already exists."
     # Reporting success over a workspace on the wrong branch is the defect
     # above. Verify, correct if we can, refuse if we cannot — never assume.
@@ -1417,7 +1429,9 @@ elif [[ "$MODE" == "clone" ]]; then
     # A `--clone` workspace is always the root of its own tree.
     if ! path_is_worktree_root "$WORKTREE_DIR"; then
       echo "❌ '${WORKTREE_DIR}' exists but is not the root of a git repository." >&2
-      echo "   Remove it or pick another branch name, then re-run." >&2
+      echo "   Remove it, or set WORKTREE_ROOT / WORKTREE_PREFIX to another path," >&2
+      echo "   then re-run. The path comes from the task id, so another branch" >&2
+      echo "   name would land on it again." >&2
       exit 1
     fi
 
@@ -1475,7 +1489,9 @@ elif [[ "$MODE" == "clone" ]]; then
       echo "   script made always has one. This directory is something else," >&2
       echo "   and adopting it would record a stranger's tree as this claim's" >&2
       echo "   workspace for /review-close Step 3b to collect from." >&2
-      echo "   Remove it or pick another branch name, then re-run." >&2
+      echo "   Remove it, or set WORKTREE_ROOT / WORKTREE_PREFIX to another path," >&2
+      echo "   then re-run. The path comes from the task id, so another branch" >&2
+      echo "   name would land on it again." >&2
       echo "   No lock was written and no status was flipped." >&2
       exit 1
     }
@@ -1491,7 +1507,9 @@ elif [[ "$MODE" == "clone" ]]; then
       echo "   host is compared case-insensitively and the PATH is not, so two" >&2
       echo "   spellings differing only in the case of the owner or repository" >&2
       echo "   name will also land here." >&2
-      echo "   Remove it or pick another branch name, then re-run." >&2
+      echo "   Remove it, or set WORKTREE_ROOT / WORKTREE_PREFIX to another path," >&2
+      echo "   then re-run. The path comes from the task id, so another branch" >&2
+      echo "   name would land on it again." >&2
       echo "   No lock was written and no status was flipped." >&2
       exit 1
     fi

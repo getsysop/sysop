@@ -254,7 +254,9 @@ A review batch is a real claim too (Phase 156) — `batch_work.sh` writes `sysop
 
 ```bash
 bash sysop/scripts/batch_work.sh --release <BATCH-NUMBER>
-#   --force   required if any task in the batch range is already checked off `- [x]`
+#   --force   required if any task in the range is checked off `- [x]`, the worktree has
+#             uncommitted changes, or the batch branch is checked out somewhere other than
+#             the batch's worktree path
 ```
 
 It removes the worktree, reverts the batch header, its `[/]` boxes and the statistics row in `review_tasks.md`, commits that on `main`, and releases the lock — in that order, so an early exit still leaves the file and the lock agreeing with each other. Note the asymmetry with the task path: `claim_task.sh --release` refuses a `BATCH-*` id outright and points here, because a batch's claim state lives in `review_tasks.md` rather than `tasks/index.yml`.

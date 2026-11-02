@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" request-review-land 3a05b9c15c538349 "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" request-review-land 9763be5ba5a347e8 "<skill directory>"
 ```
 
 It prints `LOADED: request-review-land`. **Exit 2**: stop and show its stderr.
@@ -64,7 +64,7 @@ No human is present. Never use `AskUserQuestion` and never relay a `!` command: 
 
    A Step 3c question with no `BRANCH:` line parks the close early (item 4).
 
-2. **Resume item 6.** A question a re-run raises that `answers.md` does not answer takes the park the prepare gives its step (*Under `--prepare`* item 2), with a hold as in item 1. A re-run Step 2b's `VERDICT: BLOCKED` on a branch holds the branch (`"VERDICT: BLOCKED: <first violation>"`) and leaves it out of the rest of the close; on the unpushed-main group it parks the close early. Step 3, when the prepare left it not run, parks the close early.
+2. **Resume item 6.** A question a re-run raises that `answers.md` does not answer takes the park the prepare gives its step (*Under `--prepare`* item 2), with a hold as in item 1. A re-run Step 2b's `VERDICT: BLOCKED` on a branch holds the branch with *Under `--prepare`* item 3's command and leaves it out of the rest of the close; on the unpushed-main group it parks the close early. Step 3, when the prepare left it not run, parks the close early.
 
 3. **Step 2b.** A reviewer that returns no `VERDICT:` line parks the close early, with its last output as the reason.
 
@@ -73,10 +73,12 @@ No human is present. Never use `AskUserQuestion` and never relay a `!` command: 
    - **From Step 4-pre on, a durable park.** Record it, then report it on Step 8 and end the run, leaving everything in place:
 
      ```bash
-     python3 sysop/scripts/close_run.py stop "<run-id>" "<step>" "<reason>. Recovery: <the step's own>" --locks-kept <id> <id>
+     python3 sysop/scripts/close_run.py stop "<run-id>" "<step>" - --locks-kept <id> <id> <<'SYSOP_REASON_EOF'
+     <reason>. Recovery: <the step's own>
+     SYSOP_REASON_EOF
      ```
 
-     Leave out `--locks-kept` and its ids until Step 4c has printed `LOCKS_KEPT:` with ids, and on `LOCKS_KEPT: (none)`. The recovery is the step's own: finish on the integration branch where one exists, as Step 4d-1's stuck-PR recovery does; for Step 4-pre's missing local default branch, recreate it and re-run, as that step says.
+     The reason goes on stdin, never inside double quotes, as in *Under `--prepare`* item 3. Leave out `--locks-kept` and its ids until Step 4c has printed `LOCKS_KEPT:` with ids, and on `LOCKS_KEPT: (none)`. The recovery is the step's own: finish on the integration branch where one exists, as Step 4d-1's stuck-PR recovery does; for Step 4-pre's missing local default branch, recreate it and re-run, as that step says.
    - **Also durable, though before Step 4-pre:** Step 3b's collect exit 5, the rollback's exit 4, and a rollback that leaves main still holding a doc claiming the branch. The recovery is that exit's row in its exit table.
    - A relay's park names the denied command, written out, in its reason; never retype it to run it.
    - When `stop` itself fails, report `STOP NOT RECORDED`, its stderr, the step and the reason on Step 8, and end the run.
@@ -87,7 +89,7 @@ No human is present. Never use `AskUserQuestion` and never relay a `!` command: 
 
 7. **Step 7** appends nothing to `SYSOP_ISSUES.md` and skips the `[good]` prompt: Step 8's `Friction:` row lists the friction itself.
 
-Name each held branch on Step 8 with what clears it: a new head, an attended close, which does not read holds and so asks its question, or, once its cause is fixed outside the branch, `python3 sysop/scripts/close_run.py unhold "<branch>" "<what was fixed>"`.
+Name each held branch on Step 8 with what clears it: a new head, an attended close, which does not read holds and so asks its question, or, once its cause is fixed outside the branch, `python3 sysop/scripts/close_run.py unhold "<branch>"`, to which the human adds what was fixed as a note; never fill the note in yourself.
 
 ### Under `--land <run-id>`
 

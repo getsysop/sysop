@@ -42,7 +42,8 @@ it exits 3 on an unsubstituted name, which would otherwise read as local-only.
 into `<ours ref>`, both `refs/` names: for each task body `<ours ref>` edited since their merge
 base that `<theirs ref>` has since moved to `tasks/archive/` or deleted, it prints a
 `CLOSED TASK EDITED:` line and a `show:` line (`_closed_tasks.py` holds the check), and a
-`CLOSED TASK RE-ADDED:` line for a body `<ours ref>` added that `<theirs ref>` holds closed; then exit 1
+`CLOSED TASK RE-ADDED:` line for a body `<ours ref>` added that `<theirs ref>` holds closed, or
+holds since the merge base in the other live directory (`open/` ↔ `deferred/`); then exit 1
 `STOP: …`; exit 0 `OK: …` when there is none, and exit 2 when there is no merge base.
 """
 from __future__ import annotations
@@ -203,8 +204,8 @@ def main(argv: list[str]) -> None:
             say(0, f'OK: {theirs} closed no task body {ours} edited or adds')
         for line in _closed_tasks.lines(found, base, ours, 'this close', theirs):
             print(line)
-        say(1, f'STOP: {theirs} closed {len(found)} task body(ies) {ours} edited or adds; '
-               'merging it would write them into, or beside, the closed copy')
+        say(1, f'STOP: {theirs} closed or moved {len(found)} task body(ies) {ours} edited or adds; '
+               'merging it would write them into, or beside, the closed or live copy')
 
     if os.path.isfile(ops[0]):
         say(0, f'OK: {ops[0]} is a file')
