@@ -216,6 +216,138 @@ def test_prose_and_ignore_files_are_not_read(tmp_path, rel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# `Q-743` (Phase 460): a tool cache's own files, and comment lines
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_tool_caches_own_files_are_not_candidates(tmp_path):
+    """The entry's fixture. `.pytest_cache/.gitignore` holds `*`, so git lists the cache's
+    files one by one, and a test writing a `README.md` into a temporary repo matched
+    `.pytest_cache/README.md` by bare name."""
+    root = _repo(tmp_path)
+    wt = _worktree(root, tmp_path)
+    _write(wt, ".pytest_cache/.gitignore", "*\n")
+    _write(wt, ".pytest_cache/README.md", "# pytest cache directory #\n")
+    _write(wt, ".pytest_cache/CACHEDIR.TAG", "Signature: x\n")
+    _write(wt, ".pytest_cache/v/cache/lastfailed", "{}\n")
+    _write(wt, "tests/test_x.py",
+           'def test_x(tmp_path):\n    _commit(tmp_path, "README.md", "x")\n')
+    _g(wt, "add", "tests/test_x.py")
+    _g(wt, "commit", "-qm", "work")
+    r = _run(wt)
+    assert r.returncode == 0 and _refs(r.stdout) == [], r.stdout
+
+
+@pytest.mark.parametrize("gitignore,cached,line", [
+    ("*.pyc\n", "pkg/__pycache__/m.cpython-312.pyc", 'open("pkg/__pycache__/m.cpython-312.pyc")'),
+    ("*.json\n", "frontend/.next/cache/images.json", 'read("frontend/.next/cache/images.json")'),
+    ("*.json\n", "pkg.egg-info/meta.json", 'read("pkg.egg-info/meta.json")'),
+])
+def test_a_file_under_a_cache_directory_is_not_a_candidate_by_any_component(
+        tmp_path, gitignore, cached, line):
+    """A file pattern lists a cache's files one by one too; the directory still names it."""
+    root = _repo(tmp_path, gitignore=gitignore + "sysop/runtime/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, cached, "x")
+    _write(wt, "run.py", line + "\n")
+    r = _run(wt)
+    assert r.returncode == 0 and _refs(r.stdout) == [], r.stdout
+
+
+def test_a_file_named_like_a_cache_directory_is_still_a_candidate(tmp_path):
+    """Only a DIRECTORY component counts: an ignored file called `out` is read like any other."""
+    root = _repo(tmp_path, gitignore="*.json\nout\nsysop/runtime/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, "scripts/out", "x")
+    _write(wt, "scripts/build/x.json", "{}")
+    _write(wt, "run.py", 'a = read("scripts/out")\nb = read("scripts/build/x.json")\n')
+    assert _refs(_run(wt).stdout) == ["scripts/out"]
+
+
+def test_the_copy_still_preserves_a_caches_individually_listed_files(tmp_path):
+    """The check's skip is the check's: the copy copies every file listed one by one."""
+    root = _repo(tmp_path, gitignore="*.json\nsysop/runtime/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, ".pytest_cache/.gitignore", "*\n")
+    _write(wt, ".pytest_cache/README.md", "cache\n")
+    r = _preserve(wt, "sysop/runtime/preserved/feat", root)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "PRESERVED: .pytest_cache/README.md -> " in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("rel,lines,want", [
+    # Python: a comment line is skipped; a string holding `#`, a shebang and the code before a
+    # trailing comment are read.
+    ("tools/gen.py", ["#!/usr/bin/env -S python3 tools/run.py", "# see x.json",
+                      "    # and y.json, indented", "PATHS = [", '    "#/conf/c.json",', "]",
+                      'load("a.json")  # the fixture'],
+     ["a.json", "conf/c.json", "tools/run.py"]),
+    ("deploy.sh", ["#!/usr/bin/env -S python3 tools/run.py", "# cat x.json", "cat a.json"],
+     ["a.json", "tools/run.py"]),
+    (".github/workflows/ci.yml", ["# see x.json", "  run: cat a.json"], ["a.json"]),
+    ("pyproject.toml", ["# see x.json", 'data = "a.json"'], ["a.json"]),
+    # Ruby: a `#{…}` line inside a heredoc is interpolation, which is code.
+    ("r.rb", ["# see x.json", "cmd = <<~SH", '  #{File.read("a.json")}', "SH"], ["a.json"]),
+    # The C family: `//` and a line that is one `/* … */` comment; `#` is a directive there.
+    ("src/main.c", ["// see x.json", "/* and y.json */", '#include "local.h"',
+                    '#pragma comment(lib, "vendor.lib")'],
+     ["src/local.h", "vendor.lib"]),
+    ("app/page.ts", ["// see x.json", "  /* import y from './y.json' */",
+                     '/// <reference path="./types.local.d.ts" />',
+                     "import a from './a.json' // the fixture",
+                     "/* the fixture */ import b from './b.json'"],
+     ["app/a.json", "app/b.json", "app/types.local.d.ts"]),
+    ("main.go", ["// see x.json", "//go:embed a.json", "var a string"], ["a.json"]),
+    # A source map is named in a comment, and the tools read it.
+    ("web/app.js", ["// see x.json", "//# sourceMappingURL=app.js.map"], ["web/app.js.map"]),
+    ("web/site.css", ["/* see x.json */", "/*# sourceMappingURL=site.css.map */"],
+     ["web/site.css.map"]),
+])
+def test_a_comment_line_is_not_a_reference(tmp_path, rel, lines, want):
+    root = _repo(tmp_path, gitignore="*.json\n*.h\n*.lib\n*.d.ts\n*.map\nrun.py\nsysop/runtime/\n")
+    wt = _worktree(root, tmp_path)
+    for f in {"x.json", "y.json", "app/y.json", *want}:   # what the comments name, and want
+        _write(wt, f, "x")
+    _write(wt, rel, "\n".join(lines) + "\n")
+    assert _refs(_run(wt).stdout) == want
+
+
+def test_a_file_whose_extension_names_no_comment_form_is_read_whole(tmp_path):
+    """An unknown extension (or none, as `Makefile`) skips nothing: `#` is not a comment in
+    every language, and a missed reference costs more than a question."""
+    root = _repo(tmp_path, gitignore="*.json\nsysop/runtime/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, "x.json", "{}")
+    _write(wt, "y.json", "{}")
+    _write(wt, "Makefile", "# cat x.json\n")
+    _write(wt, "t.py", "# cat y.json\n")
+    assert _refs(_run(wt).stdout) == ["x.json"]
+
+
+def test_a_comment_inside_a_parenthesised_import_does_not_end_it(tmp_path):
+    """A `)` in a comment line closed the import, and the names after it went unread."""
+    root = _repo(tmp_path, gitignore="local_settings.py\nsysop/runtime/\n")
+    wt = _worktree(root, tmp_path)
+    _write(wt, "pkg/__init__.py", "")
+    _write(wt, "pkg/local_settings.py", "A = 1\n")
+    _write(wt, "pkg/mod.py", "from pkg import (\n    # was (a, b)\n    local_settings,\n)\n")
+    assert _refs(_run(wt).stdout) == ["pkg/local_settings.py"]
+
+
+def test_a_bare_name_still_matches_an_ignored_file_at_the_root_and_anywhere(tmp_path):
+    """The candidate the entry offered and the fix did not take: a bare `.env` or `config.json`
+    with no directory component is exactly the reference the gate exists for."""
+    root = _repo(tmp_path, gitignore="*.json\n.env\nsysop/runtime/\n")
+    wt = _worktree(root, tmp_path)
+    for f in (".env", "config.json", "deploy/secrets.json", "other.json"):
+        _write(wt, f, "x")
+    _write(wt, "app/settings.py", '# see other.json\nload_dotenv(".env")\n'
+                                  'CFG = open("config.json")\nS = read("secrets.json")\n')
+    r = _run(wt)
+    assert r.returncode == 1, r.stdout
+    assert _refs(r.stdout) == [".env", "config.json", "deploy/secrets.json"], r.stdout
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 354's round: what the first build missed or over-read
 # ─────────────────────────────────────────────────────────────────────────────
 

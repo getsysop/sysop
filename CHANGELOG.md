@@ -7,6 +7,91 @@ a check that now runs. Each entry is dated by the snapshot's publication and nam
 private development phases it carries. The per-phase journal those phases were recorded in is the
 maintainer's working record and is not in the public tree.
 
+## 2026-11-02 — v0.2.3, private phases 458–463
+
+- **`v0.2.3`.** This snapshot is tagged `v0.2.3`, with a GitHub Release carrying this entry.
+  The next bullet is an instruction; every change after it fixes a defect in shipped behaviour.
+  `--ref` pins to it as it does to the earlier tags, once the tag is fetched into your clone.
+- **Run `install.sh --update` when the plugin updates to this snapshot.** The fixes below are in
+  scripts under `sysop/scripts/`, and some change a skill's text with them. The plugin delivers
+  the skills; only the bash installer's `--update` (or `sysop/scripts/sysop-update.sh`) delivers
+  the scripts, so until you run it the fixes do not reach you. A newer skill over an older script
+  can also fail without saying so: the unattended hold and stop below, run against the previous
+  `close_run.py`, exit 0 and record the reason as `-`.
+- **An unattended `/review-close` records a hold or a stop whose reason quotes code.** Its
+  prepare held a branch the convention gate blocked, and its night recorded a durable park, by
+  passing the reason inside double quotes to `close_run.py hold` and `stop`. The gate's text
+  usually carries backticked identifiers: under `--permission-mode dontAsk` the hold was
+  measured denied, and the stop's same shape falls to the same rule, so the hold or the
+  `STOPPED` marker was never written, and any other mode ran the backticks as
+  a command. Both now pass the reason on stdin through a quoted heredoc (`close_run.py hold
+  <run-id> <branch> - <<'SYSOP_REASON_EOF'`), measured admitted under `dontAsk`, and the text is
+  recorded intact, on one line. Step 8 now names `close_run.py unhold <branch>` and leaves its note to you.
+- **`/review-close` no longer removes a worktree that has moved to another branch.** Step 3b
+  took a lock's recorded workspace whenever the directory existed. A worktree since switched to
+  another branch was then treated as this branch's, and Step 3b preserved, collected from and
+  removed it; a leftover plain directory stopped the close at the collect. A lock's workspace now
+  counts only when it is still the branch's checkout: a worktree standing on the branch, or a
+  clone that still holds the branch (a finished clone back on the default branch still counts).
+  The main checkout of a `--branch` claim is still recognised; otherwise the sibling search runs
+  as if the lock named none.
+- **`close_run.py re-request` waits for GitHub to see your push.** Run straight after the push,
+  it refused because GitHub still reported the old PR head. It now re-reads the PR, 6 times
+  5 seconds apart by default (`SYSOP_PR_HEAD_WAIT_TRIES`, `SYSOP_PR_HEAD_WAIT_SECONDS`), while
+  GitHub's head is an older commit of your branch; anything else still refuses at once.
+  `hand-off` waits the same way when it reuses an existing PR.
+- **`close_run.py re-request` no longer asks the second reader twice after a failed hand-off
+  request.** When the hand-off's request failed in a way that may have posted the comment anyway
+  (a timeout, a reply with no id), a retry posted it again. It now takes an identical comment
+  posted since the hand-off opened as that request, as long as the branch has not moved since.
+- **The ignored-file check stops flagging tool caches and comments.** `ignored_refs.py` (Step 2a
+  step 3a, `/claim-task`, `/auto-build`) no longer reports a file under a cache or build-output
+  directory (`.pytest_cache/`, `__pycache__/`, `node_modules/`, `dist/`, `build/` and the rest of
+  the list the copy already skips), nor a reference on a line that is only a comment. An ignored
+  file your code reads from under, say, `build/` is no longer reported: keep such data elsewhere.
+- **A close, `clear_user_action.py` and `backfill_completed_dates.py` no longer lose a concurrent
+  claim.** Each rewrote `tasks/index.yml` without the tracker write mutex the claim path takes,
+  so a claim committed between one's read and its write was undone, with every command reporting
+  success. All three now take the mutex: `/review-close` Step 4c from its read until the rewrite
+  is staged, `clear_user_action.py` from its read to its write, and `backfill_completed_dates.py`
+  after its history scan, refusing, having written nothing, if the index changed while it
+  scanned. A writer that waits past `SYSOP_TRACKER_LOCK_WAIT` (120 seconds by default) refuses
+  and changes nothing.
+- **The closed-task check names a re-added body the target has since deferred.** A branch that
+  adds `tasks/open/T-5.md` and replays after the target moved that task to `tasks/deferred/`
+  rebased cleanly and left two live bodies for one task. `/review-close` Step 4a and the push
+  guard's closed-task check now print a `CLOSED TASK RE-ADDED:` line for it (`deferred it at`, or
+  `undeferred it at` for the reverse move) and route it as they route a re-added closed body.
+- **`/review-close` Step 2e stops reporting `/claim-task`'s files absent on every `/auto-build`
+  close.** The claim-artifact report judged each run against `/claim-task`'s five files, so an
+  `/auto-build` cycle always listed `planner-integrity.md`, `review.md` and `outcome.md` absent.
+  A cycle is now judged against the three files `/auto-build` writes (`plan.md`,
+  `classification.md`, `revised-plan.md`); a `/claim-task` run reads as before.
+- **`close_batch.sh` no longer closes a batch you did not type.** A batch number too long for the
+  shell's arithmetic wrapped silently: `18446744073709551623` closed and committed Batch 7. A
+  number of more than 18 digits, after leading zeros, is now refused before anything is written,
+  and `batch_work.sh` refuses the same lengths, so it never claims a batch `close_batch.sh` cannot
+  close.
+- **A batch claim interrupted during its commit is no longer resumed as if it had landed.** A
+  Ctrl-C or hang-up while `batch_work.sh`'s claim commit ran left the batch `In Progress` on disk
+  and uncommitted; a re-run "resumed" at exit 0 and never committed it. The re-run now refuses
+  and prints the two ways out, which work from any directory: commit the flip to keep the claim,
+  or restore the file and `--release`.
+- **`batch_work.sh --release` no longer removes a worktree it did not create.** It removed
+  whatever worktree held the batch branch. It now removes one only at the batch's advertised path
+  or the lock's recorded workspace; anywhere else needs `--force`. A registration whose directory
+  is gone is still cleared without it.
+- **`batch_work.sh` and `close_batch.sh` refuse a symlinked `review_tasks.md`** instead of
+  replacing the link with a regular file and committing it while the real file kept its old
+  status. A `close_batch.sh --dry-run` still reads through the link.
+- **`batch_work.sh 007` claims batch 7**, as `close_batch.sh 007` already closed it; it read
+  "not found" before. `claim_task.sh`'s pointer from a batch id to `batch_work.sh` no longer
+  turns a long number into a different batch.
+- **`claim_task.sh --clone` refuses a dangling symlink or a file at the clone path before it
+  pushes.** It published the branch to `origin` and then failed in `git clone`. Its refusals now
+  say to remove the path or set `WORKTREE_ROOT` / `WORKTREE_PREFIX`; another branch name lands on
+  the same path.
+
 ## 2026-11-01 — v0.2.2, private phases 451–457
 
 - **`v0.2.2`.** This snapshot is tagged `v0.2.2`, with a GitHub Release carrying this entry.

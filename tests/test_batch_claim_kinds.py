@@ -1674,6 +1674,17 @@ class TestAdversarialRoundRegressions:
             assert "`Merged`" in (repo / "review_tasks.md").read_text()
             assert not _lock(repo, 7).exists(), f"{arg} closed but stranded the lock"
 
+    def test_a_zero_padded_claim_names_the_batch_close_batch_closes(self, tmp_path):
+        """`batch_work.sh 007` read "Batch 007 not found" while `close_batch.sh 007`
+        closed batch 7: the claim kept the zeros and the close stripped them. Both
+        strip now, so the claim takes batch 7 and writes `BATCH-7.lock`."""
+        for arg in ("007", "BATCH-0007"):
+            repo = _repo(tmp_path / f"repo-{arg}")
+            r = _run(BATCH_WORK, repo, arg)
+            assert r.returncode == 0, (arg, r.stdout, r.stderr)
+            assert _lock(repo, 7).exists(), f"{arg} did not lock batch 7"
+            assert "`In Progress`" in (repo / "review_tasks.md").read_text()
+
     def test_a_refused_claim_writes_nothing_at_all(self, tmp_path):
         """Phase 254 (`Q-378`) — this test used to assert the defect.
 

@@ -402,9 +402,10 @@ if _SUBCOMMAND == 'collect':
         # The wrong-but-existing directory, refused by the one test that tells it apart
         # from the legitimate state. A HEALTHY workspace is always a checkout — a linked
         # worktree (`.git` file) or a clone (`.git` directory) — and `main-checkout` never
-        # runs this heredoc at all. Arm (ii) `recorded` accepts the lock's `workspace:` on
-        # `cand.is_dir()` alone, so a stale or hand-edited lock naming a plain directory
-        # resolves as `recorded` and arrives here. Exit 4 is the right answer for it —
+        # runs this heredoc at all. Step 0 no longer returns such a path (a lock's recorded
+        # workspace counts only when it is the branch's checkout), but the collect is
+        # also run by hand, so a stale or hand-edited path naming a plain directory can
+        # still arrive here. Exit 4 is the right answer for it —
         # there is no checkout to collect from — which is why the message below names the
         # actual reason instead of reusing the generic one.
         # See REFERENCE.md, section Step 3b — provenance.

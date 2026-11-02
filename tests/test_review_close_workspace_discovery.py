@@ -458,3 +458,145 @@ def test_the_widened_sibling_scan_still_verifies_head(repo: Path):
     _make_clone(repo, "feat/other", "totally-unrelated-dir")
     _git(repo, "branch", "feat/z")
     assert _discover(repo, "feat/z") == ("<none>", "<none>")
+
+
+# ── a lock's recorded workspace is verified as arm (iii) verifies a sibling ──
+#
+# Arm (ii) took the lock's `workspace:` when it was merely a directory, so a leftover
+# directory, an unrelated repository, or a clone that no longer stands on the branch was
+# located as the branch's workspace, ahead of arm (iii)'s verified sibling. The collect on a
+# leftover exits 4 and halts the close; a `mode: worktree` lock on a worktree that moved to
+# another branch sent Step 3b's removal at that other branch's worktree.
+
+def test_a_lock_naming_a_plain_directory_falls_through_to_the_verified_sibling(repo: Path):
+    """The sweep's reproduction: lock → a leftover plain directory, the real clone beside it."""
+    clone = _make_clone(repo, "feat/z", "proj-feat-z")
+    leftover = repo.parent / "proj-leftover"
+    leftover.mkdir()
+    _write_lock(repo, "FEAT-Z", branch="feat/z", mode="clone", workspace=leftover)
+    ws, shape = _discover(repo, "feat/z")
+    assert shape == "discovered", (ws, shape)
+    assert Path(ws).resolve() == clone.resolve()
+
+
+def test_a_lock_naming_an_unrelated_repository_falls_through(repo: Path):
+    clone = _make_clone(repo, "feat/z", "proj-feat-z")
+    other = repo.parent / "unrelated"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(other)], check=True)
+    _write_lock(repo, "FEAT-Z", branch="feat/z", mode="clone", workspace=other)
+    ws, shape = _discover(repo, "feat/z")
+    assert shape == "discovered", (ws, shape)
+    assert Path(ws).resolve() == clone.resolve()
+
+
+@pytest.mark.parametrize("packed", [False, True], ids=["loose", "packed"])
+@pytest.mark.parametrize("how", ["stepped-back", "detached"])
+def test_a_lock_naming_a_clone_that_left_the_branch_still_finds_it(repo: Path, how: str,
+                                                                   packed: bool):
+    """A finished `--clone` claim often steps back onto the default branch (REFERENCE.md,
+    Step 1-pre provenance). The clone has its own refs, and it still holds the branch, so it
+    is still the branch's workspace: Step 3b collects its pending doc, and a clone is never
+    removed. Reading its HEAD instead SKIPped such a branch on every close (Phase 460's round)."""
+    clone = _make_clone(repo, "feat/z", "elsewhere")
+    if packed:
+        _git(clone, "pack-refs", "--all")
+        assert not (clone / ".git/refs/heads/feat/z").exists()
+    _git(clone, "checkout", "-q", "--detach" if how == "detached" else "main")
+    _write_lock(repo, "FEAT-Z", branch="feat/z", mode="clone", workspace=clone)
+    ws, shape = _discover(repo, "feat/z", prefix="proj")
+    assert shape == "clone" and Path(ws).resolve() == clone.resolve(), (ws, shape)
+
+
+def test_a_lock_naming_a_reftable_clone_is_taken_as_before(repo: Path):
+    """A reftable clone's HEAD file always reads `ref: refs/heads/.invalid` and it keeps no
+    loose ref or `packed-refs`, so no file read can verify it. Rejecting it SKIPped a
+    `--clone --lock` claim on every close (Phase 460's round); it is taken as the lock says."""
+    _git(repo, "branch", "-f", "feat/rt", "HEAD")
+    _git(repo, "push", "-q", "origin", "feat/rt")
+    clone = repo.parent / "elsewhere-rt"
+    r = subprocess.run(["git", "-c", "init.defaultRefFormat=reftable", "clone", "-q",
+                        str(repo.parent / "remote.git"), str(clone)], capture_output=True)
+    if r.returncode or not (clone / ".git/reftable").is_dir():
+        pytest.skip("this git cannot make a reftable clone")
+    _git(clone, "checkout", "-q", "feat/rt")
+    _write_lock(repo, "FEAT-RT", branch="feat/rt", mode="clone", workspace=clone)
+    ws, shape = _discover(repo, "feat/rt", prefix="proj")
+    assert shape == "clone" and Path(ws).resolve() == clone.resolve(), (ws, shape)
+
+
+@pytest.mark.parametrize("packed", [False, True], ids=["loose", "packed"])
+def test_a_lock_naming_a_clone_whose_branch_was_deleted_is_not_the_workspace(repo: Path,
+                                                                             packed: bool):
+    """A clone that no longer holds the branch is not where this branch's work is. With no
+    sibling on the branch the answer is `<none>`, which Step 3b's exit-8 and exit-6 tests then
+    read, rather than `shape=clone`."""
+    clone = _make_clone(repo, "feat/z", "elsewhere")
+    _git(clone, "checkout", "-q", "main")
+    if packed:
+        _git(clone, "pack-refs", "--all")
+    _git(clone, "branch", "-q", "-D", "feat/z")
+    _write_lock(repo, "FEAT-Z", branch="feat/z", mode="clone", workspace=clone)
+    assert _discover(repo, "feat/z", prefix="proj") == ("<none>", "<none>")
+
+
+def test_a_worktree_lock_whose_worktree_moved_branch_is_not_removed_as_this_branchs(repo: Path):
+    """`mode: worktree` on a worktree now standing on another branch: arm (i) does not list it
+    for this branch, and arm (ii) printed `shape=worktree` with its path, so Step 3b preserved,
+    collected from and `git worktree remove`d another branch's worktree."""
+    wt = repo.parent / "proj-wt"
+    _git(repo, "worktree", "add", "-q", str(wt), "-b", "feat/wt")
+    _git(wt, "checkout", "-q", "-b", "feat/other")
+    _write_lock(repo, "FEAT-W", branch="feat/wt", mode="worktree", workspace=wt)
+    assert _discover(repo, "feat/wt") == ("<none>", "<none>")
+
+
+def test_a_worktree_lock_whose_worktree_is_detached_is_not_the_workspace(repo: Path):
+    """A linked worktree shares main's refs, so its HEAD is the only thing that says whose it
+    is; a detached one is no branch's, and arm (i) does not list it for this branch either."""
+    wt = repo.parent / "proj-wt"
+    _git(repo, "worktree", "add", "-q", str(wt), "-b", "feat/wt")
+    _git(wt, "checkout", "-q", "--detach")
+    _write_lock(repo, "FEAT-W", branch="feat/wt", mode="worktree", workspace=wt)
+    assert _discover(repo, "feat/wt") == ("<none>", "<none>")
+
+
+def test_a_lock_path_through_dot_dot_is_verified_and_kept(repo: Path):
+    """A recorded path is written unresolved and can hold `/../`; the verification reads it
+    as given, and the lock still wins over a sibling, with its own `mode:`."""
+    far = repo.parent / "far"
+    far.mkdir()
+    clone = _make_clone(repo, "feat/z", "far/c")
+    _make_clone(repo, "feat/z", "proj-feat-z")
+    _write_lock(repo, "FEAT-Z", branch="feat/z", mode="clone",
+                workspace=Path(f"{far}/../far/c"))
+    ws, shape = _discover(repo, "feat/z")
+    assert shape == "clone", (ws, shape)
+    assert Path(ws).resolve() == clone.resolve()
+
+
+def test_a_branch_claim_is_main_checkout_whatever_mains_head(repo: Path):
+    """`--branch` records the main checkout. At close time main stands on the default branch,
+    not the claimed one, and the verification must not turn `main-checkout` into `<none>`."""
+    _git(repo, "branch", "feat/b")
+    _git(repo, "checkout", "-q", "-b", "elsewhere")
+    _write_lock(repo, "FEAT-B", branch="feat/b", mode="branch", workspace=repo)
+    assert _discover(repo, "feat/b") == ("<none>", "main-checkout")
+
+
+def test_an_unreadable_sibling_does_not_crash_the_discovery(repo: Path):
+    """Every sibling is read for its HEAD, so one whose `.git` cannot be read must count as
+    not a checkout on the branch, not end the script with a traceback."""
+    import os
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root reads a mode-000 file")
+    clone = _make_clone(repo, "feat/z", "zzz-feat-z")
+    locked = repo.parent / "aaa-locked"
+    locked.mkdir()
+    (locked / ".git").write_text("gitdir: /nowhere\n", encoding="utf-8")
+    (locked / ".git").chmod(0)
+    try:
+        ws, shape = _discover(repo, "feat/z", prefix="nomatch")
+    finally:
+        (locked / ".git").chmod(0o644)
+    assert shape == "discovered", (ws, shape)
+    assert Path(ws).resolve() == clone.resolve()

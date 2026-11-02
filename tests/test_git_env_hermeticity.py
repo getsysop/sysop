@@ -11,8 +11,8 @@ Invariant 9 inside the pre-push pytest gate and ``git push`` died from every
 
 The helper is duplicated across four scripts (a deliberate zero-dependency
 choice — each must import from a minimal environment): verbatim in the first three,
-and in ``archive_review_tasks.py`` — added by Phase 368 (``Q-398``) to resolve the
-tracker mutex — without the type hints and with one extra arm that routes a
+and in ``_tracker_lock.py`` (moved out of ``archive_review_tasks.py`` by Phase 461, which
+re-exports it) — added by Phase 368 (``Q-398``) to resolve the tracker mutex — without the type hints and with one extra arm that routes a
 non-UTF-8 ``git`` output into the same fallback as a failed call. BeanRider's own fix
 reached only ``validate_tasks.py``; the parametrization here keeps the copies in
 lockstep so a future one-site fix can't silently re-open the bug in the others.

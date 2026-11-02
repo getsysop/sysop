@@ -44,7 +44,11 @@ ignores (`*.json`, `.env`). A directory a pattern ignores as a whole
 (`node_modules/`, `.venv/`, `__pycache__/`) is one entry. The check does not read
 it: those are installs, caches and build output, and on one consumer's four live
 claim worktrees they produced every false hit (Wade, 2026-10-01). The copy walks
-it only to decide whether to hold, as above. A directory holding nothing but
+it only to decide whether to hold, as above. Nor does the check read a listed file
+with a directory component named like a cache or build output (`_CACHE_DIRS`, and
+`*.egg-info`; the file's own name does not count): pytest's `.pytest_cache/`
+ignores its own contents with a nested `*`, so git lists them one by one, and the
+copy still copies them. A directory holding nothing but
 ignored directories is listed beside them; it is counted once, by its children. Symlinks are skipped
 (removing one removes the link), and so is `sysop/runtime/`, Sysop's own state:
 the close collects its pending docs, and the rest is scratch.
@@ -55,7 +59,14 @@ nothing), plus every line of each untracked, unignored, non-binary file, so an
 executor can run it before it commits. With `--branch NAME`, when the workspace
 has another branch checked out (a `--branch` claim at close time), NAME's commits
 since the merge-base instead. Not read: `*ignore` files and prose (`.md`,
-`.markdown`, `.rst`, `.adoc`, any case).
+`.markdown`, `.rst`, `.adoc`, any case), and a line that is only a comment, by
+the file's extension: a `#` line (not `#!` or `#{`) in Python, shell, YAML, TOML, Ruby,
+`.cfg` and `.ini`; a `//` line and a line that is one `/* ... */` comment in the
+JS/TS and C families, Java, Kotlin, Scala, Groovy, Gradle, Go, Rust, C#, Swift, Dart, SCSS and Less
+(`.css`: `/* ... */` only), except `///`, `//#`, `//@`, `/*#`, `/*@` and a
+`//word:` directive (`//go:embed`). Any other extension, or none, skips no line.
+A trailing comment is read with the code before it, and the added-line count
+still counts comment lines.
 
 **Which references.** A path-like token resolves against the referencing file's
 directory or the workspace root, with a leading `@/`, `~/`, `#/`, `/` or `$VAR/`
@@ -81,6 +92,8 @@ Output of the check, one line per referenced file, then one summary line:
 
 `<r>` counts each `tsconfig.json`/`jsconfig.json` parsed and each directory holding a Next
 config; `<u>` each `tsconfig.json`/`jsconfig.json` that could not be parsed, which is skipped.
+`<k>` leaves out a file under a cache or build-output directory, which the check drops
+before it reads anything.
 
 The main checkout compared against is the CALLER's (the repository the command
 runs from), so a `--clone` workspace checked from the repo root is compared with
@@ -166,9 +179,14 @@ def _ignored(ws: Path) -> tuple[set[str], list[str]]:
 
 
 def ignored_files(ws: Path) -> tuple[set[str], int]:
-    """(files, directory count) — `_ignored` with the directories counted, for the check."""
+    """(files, directory count) — `_ignored` with the directories counted, for the check.
+
+    A file under a directory named like a cache or build output is not a candidate. pytest's
+    `.pytest_cache/` ignores itself with a nested `*`, so git lists its files one by one, and
+    its `README.md` matched every test that writes a `README.md` into a temporary repo.
+    """
     files, dirs = _ignored(ws)
-    return files, len(dirs)
+    return {f for f in files if not any(_is_cache(c) for c in f.split("/")[:-1])}, len(dirs)
 
 
 def _unquote(target: str) -> str:
@@ -197,6 +215,34 @@ def _unquote(target: str) -> str:
         out += ch.encode("utf-8", "surrogateescape")
         i += 1
     return os.fsdecode(bytes(out))
+
+
+# A line that is only a comment reads no file. Keyed by the referencing file's extension; an
+# extension not listed here (or none: `Makefile`, `Dockerfile`) skips nothing, since `#` is code
+# in some languages. `#` lines, but never a `#!` line (a shebang names a program). `//` lines and
+# lines that are one `/* ... */` comment, but not `///` (a TypeScript `<reference path>`), `//#`,
+# `//@`, `/*#` or `/*@` (a source map), nor a `//word:` directive (`//go:embed`); `#` is a
+# directive in the C family (`#include`, `#pragma`). A trailing comment is read with the code.
+_HASH_COMMENT = (".py", ".pyi", ".sh", ".bash", ".zsh", ".yml", ".yaml", ".toml", ".rb", ".cfg",
+                 ".ini")
+_SLASH_COMMENT = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".c", ".h",
+                  ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".java", ".kt", ".kts",
+                  ".scala", ".groovy", ".gradle", ".swift", ".go", ".rs", ".cs", ".dart", ".scss",
+                  ".less")
+_BLOCK_COMMENT = _SLASH_COMMENT + (".css",)
+_DIRECTIVE = re.compile(r"//(?:/|#|@|\w+:)")
+
+
+def _comment_only(rel: str, text: str) -> bool:
+    ext = os.path.splitext(rel)[1].lower()
+    s = text.strip()
+    if ext in _HASH_COMMENT:   # `#!` is a shebang, and a `#{…}` line is Ruby interpolation
+        return s.startswith("#") and not s.startswith(("#!", "#{"))
+    if ext in _SLASH_COMMENT and s.startswith("//"):
+        return not _DIRECTIVE.match(s)
+    if ext in _BLOCK_COMMENT and s.startswith("/*") and not s.startswith(("/*#", "/*@")):
+        return s.find("*/", 2) == len(s) - 2
+    return False
 
 
 def _not_read(rel: str) -> bool:
@@ -620,6 +666,8 @@ def references(ws: Path, base: str, branch: str | None = None
     first: dict[str, tuple[str, int]] = {}
     open_from: tuple[str, str] | None = None   # (file, module) of a `from x import (`
     for rel, n, text in lines:
+        if _comment_only(rel, text):
+            continue   # before the import state below: a comment never ends a `from x import (`
         rel_dir = rel.rsplit("/", 1)[0] if "/" in rel else ""
         hits: set[str] = set()
         for m in _TOKEN.finditer(text):
@@ -840,7 +888,8 @@ def preserve(ws: Path, dest_arg: str) -> int:
 # build output, which never match main's byte for byte. Named by any path component, so
 # `frontend/node_modules/` and `pkg/__pycache__/` count too, and `*.egg-info` by suffix (Wade,
 # 2026-10-31: hold an ignored directory only this worktree holds, but not a known cache, and the
-# build outputs too, on Phase 456's round).
+# build outputs too, on Phase 456's round). The copy never walks one; the check reads no file
+# under one (`ignored_files`).
 _CACHE_DIRS = frozenset({
     "__pycache__", "node_modules", ".venv", "venv", ".pytest_cache", ".mypy_cache", ".ruff_cache",
     ".hypothesis", ".tox", ".nox", ".next", ".nuxt", ".turbo", ".cache", ".gradle", ".dart_tool",

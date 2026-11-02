@@ -7,6 +7,11 @@ Run from the repo root, one argument per branch under review. Prints, for each b
 claim's newest run and which artifacts it holds, or why that is `UNKNOWN`. It reports and
 never rejects. An unsubstituted argument exits 2.
 
+`present:` names every artifact on disk. `absent:` is judged against the set the run's
+own skill writes: `/claim-task`'s five for a `<stamp>-<8 hex>` run, `/auto-build`'s three
+(`plan.md`, `classification.md`, `revised-plan.md`) for a bare-`<stamp>` cycle, so a
+cycle is never reported missing `review.md` or another file only `/claim-task` writes.
+
 The skill text is the contract: `/review-close` Step 2e says what each line means. This
 file was that step's heredoc until Phase 387 (`Q-409` P3), moved verbatim.
 """
@@ -63,6 +68,39 @@ if locks_dir.is_dir():
 # answering "was the plan re-gated?" and "did the executor already run?".
 NAMES = ["plan.md", "planner-integrity.md", "review.md",
          "classification.md", "outcome.md"]
+
+# `/auto-build` writes into the same namespace and writes a different set: its
+# Phase 6a planner's `plan.md`, 6d's `classification.md` (the all-fixable arm
+# only) and its executor's `revised-plan.md`. It never writes `planner-integrity.md`
+# or `outcome.md`, and its park verdict goes to the worktree's
+# `sysop/runtime/auto-build/review.md` and to `sysop/runtime/parked/`, never
+# here. Judged against `NAMES`, every executed cycle reported three files absent
+# that nothing was ever going to write.
+#
+# Which skill minted a run is read off the directory NAME, fixed before any
+# artifact lands: `/claim-task` Step 7-pre mints `<UTC stamp>-<8 hex>`,
+# `/auto-build` Phase 6a the bare `<UTC stamp>`. A `/claim-task` run that
+# crashed partway keeps its hex half, so it is never judged as a cycle. File
+# presence moves a run one way only, toward `NAMES`: a cycle holding any file
+# only `/claim-task` writes is judged as that skill's run. No shipped path writes
+# one there (`/claim-task --resume` lists only `<stamp>-<8 hex>` runs), so this is
+# defensive, for a hand-written file or a later writer: it can add absences, never
+# hide one. A name of neither shape is judged against `NAMES`, as
+# before. `sitrep_survey.py`'s `_CLAIM_TASK_RUN_ID` tells the two shapes apart
+# the same way.
+CYCLE_ARTIFACTS = ["plan.md", "classification.md", "revised-plan.md"]
+CYCLE_RUN = re.compile(r"\d{8}T\d{6}Z")
+CLAIM_TASK_ONLY = [n for n in NAMES if n not in CYCLE_ARTIFACTS]
+# Every name either skill writes, in report order: `present:` lists what is on
+# disk whichever set the run is judged against, so nothing that exists is hidden.
+ALL_NAMES = NAMES + [n for n in CYCLE_ARTIFACTS if n not in NAMES]
+
+
+def expected_names(run, present):
+    """The set a run's `absent:` list is judged against."""
+    if CYCLE_RUN.fullmatch(run.name) and not any(n in present for n in CLAIM_TASK_ONLY):
+        return CYCLE_ARTIFACTS
+    return NAMES
 
 
 def verdict_of(path):
@@ -137,12 +175,12 @@ for branch in branches:
         continue
     extra = " (+{} older run(s))".format(len(runs) - 1) if len(runs) > 1 else ""
     try:
-        present = [n for n in NAMES if (run / n).is_file()]
+        present = [n for n in ALL_NAMES if (run / n).is_file()]
     except OSError:
         print("  {} ({}) run {}: artifacts unreadable — UNKNOWN"
               .format(branch, claim_id, run.name))
         continue
-    absent = [n for n in NAMES if n not in present]
+    absent = [n for n in expected_names(run, present) if n not in present]
     # Both shapes Step 7-pre globs: the phased `<CLAIM_ID>.<phase>.json` the
     # build emits, and the bare `<CLAIM_ID>.json` that predates `PHASE:`.
     env_dir = runtime / "subagent-envelopes"

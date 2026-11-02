@@ -86,6 +86,9 @@ abandoned. The second reader is read from CLAUDE.md `## Second reader`.
         hand-off is waiting or being recorded, the config or the PR does not
         qualify, or the SHA is not local <default-branch>'s commit at the push (the
         merge base of it and the head). Exit 1 after recording: the post failed.
+        A PR whose head GitHub reports as a proper ancestor of the local tip is a
+        push GitHub has not caught up with: the PR is re-read, 6 times 5 seconds apart
+        (`SYSOP_PR_HEAD_WAIT_TRIES`, `SYSOP_PR_HEAD_WAIT_SECONDS`), before refusing.
 
     seal <run-id>
         Half A, once report.md is written. Exit 1 names what report.md lacks.
@@ -105,7 +108,11 @@ abandoned. The second reader is read from CLAUDE.md `## Second reader`.
 
     re-request <run-id> <default-branch>
         After a park is fixed on the branch and pushed: records the branch's new
-        head and posts the request again.
+        head and posts the request again, checking the PR as `hand-off` does (the
+        same wait for a push). For a hand-off whose request failed or was cut off,
+        on the head it was made for, an identical comment posted since the hand-off
+        opened is taken as that request instead of posting a second
+        (`lost_request`); `REQUESTED:` then names that comment's time.
 
     landed <run-id>
         Half B, once the PR reads MERGED: removes the locks Step 4c kept and the
@@ -187,6 +194,10 @@ on it is durable, and so are three Step 3b exits that leave main's pending docs 
         marker is written whatever the run's state, since a stop that refused would
         leave the close unguarded.
 
+    A `-` in place of `stop`'s or `hold`'s <reason> reads it from stdin, joined onto one
+    line. A runner passes text it did not write this way, through a quoted heredoc: inside
+    double quotes a backtick or `$(…)` in it is command substitution, which `dontAsk` denies.
+
     clear <run-id>
         A human removes a `STOPPED` marker once its recovery is done, and the
         marker is kept beside it as `STOPPED.cleared-<stamp>`.
@@ -227,6 +238,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 from pathlib import Path
 from urllib.parse import quote
@@ -933,24 +945,53 @@ def post_request(root: Path, pr: str, body: str) -> tuple[str, str]:
     return cid, at
 
 
+# GitHub moves a PR's `headRefOid` some seconds after the push that moved its branch, so a check
+# run straight after a push can read the old head. It re-reads the PR this many more times, this
+# many seconds apart (30s in all), and only while GitHub's head is a proper ancestor of the local
+# tip. The environment can change both, within the caps; a value that does not parse is ignored.
+PR_HEAD_WAIT_TRIES, PR_HEAD_WAIT_SECONDS = 6, 5
+PR_HEAD_WAIT_MAX_TRIES, PR_HEAD_WAIT_MAX_SECONDS = 60, 60
+
+
+def pr_head_wait() -> tuple[int, int]:
+    def setting(name: str, default: int, cap: int) -> int:
+        v = os.environ.get(name, "")
+        return min(int(v), cap) if re.fullmatch(r"[0-9]{1,6}", v) else default
+    return (setting("SYSOP_PR_HEAD_WAIT_TRIES", PR_HEAD_WAIT_TRIES, PR_HEAD_WAIT_MAX_TRIES),
+            setting("SYSOP_PR_HEAD_WAIT_SECONDS", PR_HEAD_WAIT_SECONDS, PR_HEAD_WAIT_MAX_SECONDS))
+
+
 def check_pr_for_request(root: Path, pr: str, default: str, branch: str, head: str) -> dict:
-    data = pr_view(root, pr)
-    problems = []
-    if data.get("state") != "OPEN":
-        problems.append(f"state is {data.get('state')}")
-    if data.get("isDraft"):
-        problems.append("it is a draft")
-    if data.get("isCrossRepository"):
-        problems.append("its head is in another repository")
-    if data.get("baseRefName") != default:
-        problems.append(f"its base is {data.get('baseRefName')!r}, not {default!r}")
-    if data.get("headRefName") != branch:
-        problems.append(f"its head branch is {data.get('headRefName')!r}, not {branch!r}")
-    if data.get("headRefOid") != head:
-        problems.append(f"its head is {data.get('headRefOid')}, and local {branch} is {head}")
-    if problems:
-        raise Refuse(f"PR {pr}: " + "; ".join(problems))
-    return data
+    tries, delay = pr_head_wait()
+    for attempt in range(tries + 1):
+        data = pr_view(root, pr)
+        problems = []
+        if data.get("state") != "OPEN":
+            problems.append(f"state is {data.get('state')}")
+        if data.get("isDraft"):
+            problems.append("it is a draft")
+        if data.get("isCrossRepository"):
+            problems.append("its head is in another repository")
+        if data.get("baseRefName") != default:
+            problems.append(f"its base is {data.get('baseRefName')!r}, not {default!r}")
+        if data.get("headRefName") != branch:
+            problems.append(f"its head branch is {data.get('headRefName')!r}, not {branch!r}")
+        reported = data.get("headRefOid")
+        if reported != head:
+            problems.append(f"its head is {reported}, and local {branch} is {head}")
+        if not problems:
+            return data
+        # Wait only for a push GitHub has not caught up with: the head mismatch is the one
+        # problem, and local descends from the head GitHub reports. A diverged head, one this
+        # clone does not have, or one ahead of local refuses at once.
+        in_flight = len(problems) == 1 and isinstance(reported, str) and SHA.fullmatch(reported) \
+            and is_ancestor(root, reported, head)
+        if not in_flight or attempt == tries:
+            break
+        time.sleep(delay)
+    waited = (f" (re-read {attempt} times over {attempt * delay}s, waiting for GitHub's head to "
+              "reach the local tip: push the branch if you have not)") if attempt else ""
+    raise Refuse(f"PR {pr}: " + "; ".join(problems) + waited)
 
 
 def cmd_reader(root: Path) -> int:
@@ -1239,6 +1280,38 @@ def cmd_land_check(root: Path, run_id: str, default: str) -> int:
     return {"merge": 0, "park": 4, "wait": 5}[verdict]
 
 
+def lost_request(root: Path, rec: dict, head: str) -> tuple[str, str] | None:
+    """(id, created_at) of a request the record's own post may have made, or None.
+
+    A failed post does not prove GitHub refused the comment: a timeout after the server took it,
+    or a reply with no id, fails the same way. So before a record that holds no confirmed request
+    (`requesting` or `request-failed`) asks again for the head it was made for, the PR's comments
+    are read, and the earliest comment whose body is the request, posted since the hand-off
+    opened, is taken as that post. Its author is not read: a comment like it from anyone has
+    already asked the reviewer, so posting again would still be the second run. A record with a
+    confirmed request (`awaiting`) never adopts: `re-request` there is the operator asking again,
+    after a park's fix is pushed or a usage limit, and an identical comment posted since may
+    have asked about an older head."""
+    if rec["status"] == "awaiting" or rec["head"] != head:
+        return None
+    try:  # the hand-off's own clock, second-resolution and rounded down, so its post is after it
+        since = datetime.datetime.strptime(str(rec.get("opened", "")), "%Y%m%dT%H%M%SZ") \
+            .replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+    want = rec["request"].strip()
+    found = []
+    for c in gh_list(root, f"repos/{{owner}}/{{repo}}/issues/{rec['pr']}/comments"):
+        if not isinstance(c, dict) or str(c.get("body", "")).strip() != want:
+            continue
+        cid, at = str(c.get("id") or ""), c.get("created_at")
+        t = parse_time(at)
+        if cid and t is not None and t >= since:
+            # Same second: the lower id is the earlier post, compared as a number.
+            found.append((t, int(cid) if cid.isdigit() else float("inf"), cid, at))
+    return min(found)[2:] if found else None
+
+
 def cmd_re_request(root: Path, run_id: str, default: str) -> int:
     run, rec = open_handoff(root, run_id, default)
     if rec["status"] not in ("awaiting", "request-failed", "requesting"):
@@ -1247,7 +1320,7 @@ def cmd_re_request(root: Path, run_id: str, default: str) -> int:
     if not head:
         raise Refuse(f"branch {rec['branch']!r} no longer exists locally")
     check_pr_for_request(root, rec["pr"], default, rec["branch"], head)
-    cid, at = post_request(root, rec["pr"], rec["request"])
+    cid, at = lost_request(root, rec, head) or post_request(root, rec["pr"], rec["request"])
     old = rec["head"]
     rec.update(head=head, status="awaiting", requested_at=at, request_comment=cid)
     rec.pop("checks_waiting_since", None)
@@ -2262,6 +2335,22 @@ def stamp_now() -> str:
     return utcnow().strftime("%Y%m%dT%H%M%SZ")
 
 
+def reason_arg(arg: str) -> str:
+    """A <reason> operand; `-` reads it from stdin. Never raises: a stop must record."""
+    if arg != "-":
+        return arg
+    try:  # a closed stdin is `None`
+        data = sys.stdin.buffer.read() if sys.stdin is not None else b""
+    except (OSError, ValueError):
+        data = b""
+    lines = data.decode("utf-8", "replace").splitlines()
+    # A block copied with its list indent keeps the delimiter line indented, so bash never ends
+    # the heredoc and hands it over as text (measured, Phase 458).
+    if lines and lines[-1].strip() == "SYSOP_REASON_EOF":
+        lines.pop()
+    return " ".join(" ".join(lines).split())
+
+
 def cmd_stop(root: Path, run_id: str, step: str, reason: str, locks: list[str]) -> int:
     if not RUN_ID.fullmatch(run_id):
         raise Refuse(f"not a run id: {run_id!r}")
@@ -2393,8 +2482,8 @@ def main(argv: list[str]) -> int:
              "seal <run-id> | land-check <run-id> <default-branch> [--unattended <agent>] | "
              "re-request <run-id> <default-branch> | landed <run-id> | abandon <run-id> | "
              "park <run-id> <code> <reason> | unpark <run-id> | "
-             "stop <run-id> <step> <reason> [--locks-kept <id>...] | clear <run-id> | "
-             "hold <run-id> <branch> <reason> | unhold <branch> [<note>]")
+             "stop <run-id> <step> <reason>|- [--locks-kept <id>...] | clear <run-id> | "
+             "hold <run-id> <branch> <reason>|- | unhold <branch> [<note>]")
     if not argv:
         print(usage, file=sys.stderr)
         return 3
@@ -2446,11 +2535,12 @@ def main(argv: list[str]) -> int:
         if cmd == "park" and len(rest) == 3:
             return cmd_park(root, *rest)
         if cmd == "stop" and len(rest) >= 3 and (len(rest) == 3 or rest[3] == "--locks-kept"):
-            return cmd_stop(root, rest[0], rest[1], rest[2], rest[4:])
+            reason = reason_arg(rest[2]) or ("(no reason on stdin)" if rest[2] == "-" else "")
+            return cmd_stop(root, rest[0], rest[1], reason, rest[4:])
         if cmd == "clear" and len(rest) == 1:
             return cmd_clear(root, rest[0])
         if cmd == "hold" and len(rest) == 3:
-            return cmd_hold(root, *rest)
+            return cmd_hold(root, rest[0], rest[1], reason_arg(rest[2]))
         if cmd == "unhold" and len(rest) in (1, 2):
             return cmd_unhold(root, rest[0], rest[1] if len(rest) == 2 else "")
     except Refuse as e:

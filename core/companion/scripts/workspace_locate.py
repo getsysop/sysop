@@ -5,7 +5,9 @@
     python3 sysop/scripts/workspace_locate.py "<branch name>" "<worktree listing>" "<prefix>"
 
 Run from the repo root. Prints one line, `workspace=<path> shape=<shape>`, either side
-`<none>` when nothing was found; the first hit wins. An unsubstituted branch exits 3.
+`<none>` when nothing was found; the first hit wins. A lock's recorded workspace is a hit
+only when it is a linked worktree whose HEAD is the branch, a clone that holds the branch's
+ref, or the main checkout itself. An unsubstituted branch exits 3.
 With the branch alone, the script reads `git worktree list --porcelain` itself and takes the
 prefix from `WORKTREE_PREFIX`, or else the repository's own directory name: the skill's old
 arguments, `"$(git worktree list --porcelain)"` and `"${WORKTREE_PREFIX:-$(basename …)}"`, are
@@ -58,6 +60,66 @@ for line in wt_listing.splitlines():
         ws, shape = Path(_w), "worktree"
         break
 
+# A checkout's HEAD branch, read from its git dir rather than from `git`, so no arm spawns
+# anything. None for a directory that is not a checkout, a detached HEAD, or a `.git` or
+# `HEAD` that cannot be read: arms (ii) and (iii) read it from every candidate, and one
+# unreadable directory must count as "not on the branch", not end the script.
+def head_branch(d):
+    try:
+        dot = d / ".git"
+        if dot.is_file():                   # a worktree/submodule: `gitdir: <path>`
+            line = dot.read_text(encoding="utf-8", errors="replace").strip()
+            if not line.startswith("gitdir:"):
+                return None
+            dot = Path(line[len("gitdir:"):].strip())
+            if not dot.is_absolute():
+                dot = (d / dot).resolve()
+        head = dot / "HEAD"
+        if not head.is_file():
+            return None
+        ref = head.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    return ref[len("ref: refs/heads/"):] if ref.startswith("ref: refs/heads/") else None
+
+
+# Whether a clone's own git dir holds `refs/heads/<branch>`, loose or packed, read by file.
+def holds_branch(dot):
+    want = f"refs/heads/{branch}"
+    try:
+        if (dot / want).is_file():
+            return True
+        packed = dot / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line.startswith(("#", "^")) and line.split(" ", 1)[1:] == [want]:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def recorded_is_this_branchs(cand):
+    """A lock's recorded workspace counts only when it is this branch's checkout. A linked
+    worktree shares the main repository's refs, so it counts only while its HEAD is the
+    branch: one since switched to another branch is that branch's, and Step 3b would remove
+    it. A clone (a `.git` directory) has its own refs, and a finished clone often steps back
+    onto the default branch, so it counts while it still holds the branch's ref, as
+    `ignored_refs.py --branch` and `smoke_detect.py` read it. The main checkout, which a
+    `--branch` claim records, is taken unverified, so the tail below still names it
+    `main-checkout`. A path that cannot be resolved is taken too, so the tail can still name
+    it `unresolvable`, and so is a reftable clone, whose refs no file read can see (its HEAD
+    file always names `.invalid`): taking it unverified is what the lock always did."""
+    try:
+        if cand.resolve() == repo:
+            return True
+    except OSError:
+        return True
+    if (cand / ".git").is_dir():
+        return (cand / ".git" / "reftable").is_dir() or holds_branch(cand / ".git")
+    return head_branch(cand) == branch
+
+
 # (ii) the lock's RECORDED workspace. `claim_task.sh --lock` writes `mode:` and
 # `workspace:` at claim time, so this is the claim's own statement of where the work
 # happened — a fact, not a path guess. Locks are canonical under the main repo
@@ -78,33 +140,20 @@ if ws is None:
             cand = Path(fields["workspace"])
             # VERIFY the recorded workspace before taking it. The lock is the claim's own
             # statement, but a claim can be stale. An unverified arm must not be ordered
-            # ahead of a verified one.
+            # ahead of a verified one: a leftover directory, an unrelated repository, a
+            # worktree since moved off the branch, or a clone whose branch was deleted falls
+            # through to arm (iii) as if the lock recorded no workspace.
             # See REFERENCE.md, section Step 3b — provenance.
-            if not cand.is_dir():
+            if not cand.is_dir() or not recorded_is_this_branchs(cand):
                 continue
             ws, shape = cand, fields.get("mode") or "recorded"
             break
 
 # (iii) the conventional sibling directory `claim_task.sh` computes, VERIFIED rather
 # than assumed: a candidate counts only if it is a git checkout whose HEAD is this
-# branch. This is the arm for `--clone` without `--lock` — USE_LOCK defaults to false,
-# so a lock-only fix would be inert on exactly that invocation. HEAD is read from the
-# object store, not from `git`, so this block still spawns nothing.
-def head_branch(d):
-    dot = d / ".git"
-    if dot.is_file():                       # a worktree/submodule: `gitdir: <path>`
-        line = dot.read_text(encoding="utf-8", errors="replace").strip()
-        if not line.startswith("gitdir:"):
-            return None
-        dot = Path(line[len("gitdir:"):].strip())
-        if not dot.is_absolute():
-            dot = (d / dot).resolve()
-    head = dot / "HEAD"
-    if not head.is_file():
-        return None
-    ref = head.read_text(encoding="utf-8", errors="replace").strip()
-    return ref[len("ref: refs/heads/"):] if ref.startswith("ref: refs/heads/") else None
-
+# branch (`head_branch`, above arm (ii)). This is the arm for `--clone` without
+# `--lock` — USE_LOCK defaults to false, so a lock-only fix would be inert on exactly
+# that invocation.
 if ws is None:
     # Two passes. The prefixed glob first, because it is what `claim_task.sh` computes —
     # then EVERY sibling directory, because `WORKTREE_PREFIX` is read from the *claiming*

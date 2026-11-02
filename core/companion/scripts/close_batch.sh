@@ -310,7 +310,25 @@ for arg in "$@"; do
     # lock: `007` reaches review_index.py as batch 7 and closes it, but would
     # look for BATCH-007.lock and report "no lock" — closing the batch while
     # stranding its lock. batch_work.sh normalises the same two forms.
-    BATCH_NUMS+=("$((10#${BASH_REMATCH[2]}))")
+    #
+    # Bound the digits BEFORE the arithmetic. `$((10#…))` is 64-bit and wraps
+    # without a word: `99999999999999999999` read as batch 7766279631452241919,
+    # and 2^64 + 1 read as batch 1 and CLOSED it — a commit against a batch the
+    # operator never typed. Leading zeros are stripped first (a lone `0` kept),
+    # so `000…07` is still batch 7; then more than 18 digits is refused. Every
+    # 18-digit number fits in 64 bits, and some 19-digit ones do not.
+    # batch_work.sh strips leading zeros the same way and refuses the same lengths,
+    # though it does no arithmetic on its operand, so it never claims a batch this
+    # script would refuse to close.
+    _batch_digits="${BASH_REMATCH[2]}"
+    _batch_digits="${_batch_digits#"${_batch_digits%%[!0]*}"}"
+    [[ -n "$_batch_digits" ]] || _batch_digits=0
+    if [[ ${#_batch_digits} -gt 18 ]]; then
+      echo "❌ Batch number out of range: ${arg}" >&2
+      echo "Usage: close_batch.sh [--dry-run] [--force] [--allow-open-fence] [--merge-target <ref>] <N> [<N2> ...]" >&2
+      exit 1
+    fi
+    BATCH_NUMS+=("$((10#${_batch_digits}))")
   else
     echo "❌ Unknown argument: ${arg}" >&2
     echo "Usage: close_batch.sh [--dry-run] [--force] [--allow-open-fence] [--merge-target <ref>] <N> [<N2> ...]" >&2
@@ -705,7 +723,7 @@ rebuild_index() {
 # with the relative `.git` from a main checkout, which needs absolutising.
 # Deliberate duplicate of the resolution in batch_work.sh / claim_task.sh /
 # next_task.py / validate_tasks.py / scope_overlap.py (and, since Phase 368,
-# archive_review_tasks.py's tracker-mutex twin), each of which names the others: these files are delivered independently, so a sourced helper missing
+# the tracker-mutex twin, now in _tracker_lock.py), each of which names the others: these files are delivered independently, so a sourced helper missing
 # from a partial install would be a worse failure than the duplication.
 resolve_main_root() {
   local common_dir
@@ -915,6 +933,20 @@ remove_claim_artifacts() {
 # introduce a fence. The residual is an external editor writing the tracker
 # mid-run, which is named rather than half-guarded.
 fence_preflight || exit 1
+
+# A symlinked tracker is refused on a real run, as `batch_work.sh` refuses it: the
+# rewrites below move a new copy onto the path (`mv -- "$TMP_FILE" "$TASKS_FILE"`),
+# which replaces the link with a regular file and commits that, while the file it
+# pointed at keeps the old status. Before the mutex and every write; a dry run
+# writes nothing and reads through the link.
+if ! $DRY_RUN && [[ -L "$TASKS_FILE" ]]; then
+  echo "❌ review_tasks.md in ${REPO_ROOT} is a symlink (to $(readlink "$TASKS_FILE" 2>/dev/null || echo '<unreadable>'))." >&2
+  echo "   Refusing this close — nothing was written: no status flip, no commit, no lock released." >&2
+  echo "   This script rewrites the tracker by moving a new copy onto that path, which would" >&2
+  echo "   replace the link with a regular file. Keep review_tasks.md as a regular file at" >&2
+  echo "   the repository root (git mv the real file there, in place of the link), commit, then re-run." >&2
+  exit 1
+fi
 
 CLOSED=()
 SKIPPED=()

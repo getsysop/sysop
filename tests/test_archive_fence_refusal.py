@@ -66,7 +66,7 @@ EXAMPLE = [
 
 def _write(tmp_path, lines):
     (tmp_path / "sysop" / "scripts").mkdir(parents=True, exist_ok=True)
-    for name in ("archive_review_tasks.py", "_log.py"):
+    for name in ("archive_review_tasks.py", "_log.py", "_tracker_lock.py"):
         (tmp_path / "sysop" / "scripts" / name).write_bytes(
             (SCRIPTS / name).read_bytes()
         )

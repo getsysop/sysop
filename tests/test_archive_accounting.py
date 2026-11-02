@@ -332,7 +332,7 @@ def _run_archiver(tmp_path, doc: str):
     (repo / "review_tasks_archive.md").write_text(
         "# Archive\n\n## Grand Total\n\n| Round | Tasks |\n|---|---|\n"
     )
-    for helper in ("archive_review_tasks.py", "_log.py"):
+    for helper in ("archive_review_tasks.py", "_log.py", "_tracker_lock.py"):
         src = REPO_ROOT / "core/companion/scripts" / helper
         if src.is_file():
             (repo / "sysop" / "scripts" / helper).write_text(src.read_text())
@@ -353,7 +353,7 @@ def test_the_run_refuses_and_writes_nothing(tmp_path):
     (repo / "review_tasks_archive.md").write_text(
         "# Archive\n\n## Grand Total\n\n| Round | Tasks |\n|---|---|\n"
     )
-    for helper in ("archive_review_tasks.py", "_log.py"):
+    for helper in ("archive_review_tasks.py", "_log.py", "_tracker_lock.py"):
         src = REPO_ROOT / "core/companion/scripts" / helper
         if src.is_file():
             (repo / "sysop" / "scripts" / helper).write_text(src.read_text())

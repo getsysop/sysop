@@ -72,7 +72,8 @@ def _install(root: Path) -> Path:
     """Lay the archiver out the way install.sh does, and seed both files."""
     sd = root / "sysop" / "scripts"
     sd.mkdir(parents=True, exist_ok=True)
-    for name in ("archive_review_tasks.py", "_log.py"):
+    # `_tracker_lock.py` holds the mutex the archiver takes, and ships beside it.
+    for name in ("archive_review_tasks.py", "_log.py", "_tracker_lock.py"):
         (sd / name).write_bytes((SCRIPTS / name).read_bytes())
     (root / "review_tasks.md").write_text(TRACKER, encoding="utf-8")
     (root / "review_tasks_archive.md").write_text(ARCHIVE, encoding="utf-8")

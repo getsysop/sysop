@@ -92,7 +92,8 @@ LOOP_EXCLUDE_SKILLS="intake add-task claim-task auto-build auto-fix auto-judge n
 # fanout-evidence (Phase 138), upstream-repo (Phase 147).
 LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard plan-review-preference ui-verify"
 # Companion scripts excluded from loop mode (lifecycle-coupled). Kept: run_checks*
-# (+ run_checks/ dir), _log.py, review_index.py, archive_review_tasks.py,
+# (+ run_checks/ dir), _log.py, review_index.py, archive_review_tasks.py and the
+# _tracker_lock.py it imports,
 # install_hooks.sh, sysop-update.sh, the model-role set (_model_roles.py,
 # resolve/check/migrate_skill_model.py — mode-agnostic; operate on shipped skills),
 # _git_lib.sh (Phase 368, `Q-376`: the pre-merge-commit hook, armed in both

@@ -13,6 +13,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from _command_blocks import command_blocks, unfilled
 from skill_runner_text import text_of
 
 TESTS = Path(__file__).resolve().parent
@@ -218,8 +219,8 @@ def test_the_commands_the_night_prescribes_run_as_written(repo: Path) -> None:
     prep = t[t.index("### Under `--prepare`"):t.index("### Under `--resume <run-id>`")]
     u = _unattended_resume()
     elig = re.findall(r"^\s*(python3 sysop/scripts/close_run\.py eligible .*)$", prep, re.M)
-    holds = re.findall(r"^\s*(python3 sysop/scripts/close_run\.py hold .*)$", prep + u, re.M)
-    stops = re.findall(r"^\s*(python3 sysop/scripts/close_run\.py stop .*)$", u, re.M)
+    holds = command_blocks(prep + u, r"python3 sysop/scripts/close_run\.py hold ")
+    stops = command_blocks(u, r"python3 sysop/scripts/close_run\.py stop ")
     assert len(elig) == 1 and len(holds) == 2 and len(stops) == 1, (elig, holds, stops)
     (repo / "sysop/scripts").mkdir(parents=True)
     for name in ("close_run.py", "pending_doc_hold.py"):
@@ -227,7 +228,7 @@ def test_the_commands_the_night_prescribes_run_as_written(repo: Path) -> None:
     _ready(repo)
 
     def sh(cmd: str) -> sp.CompletedProcess:
-        assert "<" not in cmd, cmd
+        assert not unfilled(cmd), cmd
         env = {**os.environ, "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"}
         return sp.run(["bash", "-c", cmd], cwd=repo, capture_output=True, text=True, env=env)
 

@@ -525,6 +525,94 @@ def test_a_refused_clone_does_not_publish_the_branch(tmp_path):
     )
 
 
+def _origin_heads(r: Path) -> str:
+    """Origin's branch refs, read from the bare repository itself."""
+    bare = r.parent / f"{r.name}-origin.git"
+    return subprocess.run(["git", "for-each-ref", "--format=%(refname)", "refs/heads"],
+                          cwd=str(bare), capture_output=True, text=True).stdout
+
+
+@pytest.mark.parametrize("kind", ["dangling-symlink", "regular-file"])
+def test_a_non_directory_at_the_clone_path_is_refused_before_the_push(tmp_path, kind):
+    """**`Q-430`: the existing-directory gate tested `-d`.**
+
+    A dangling symlink and a regular file are both invisible to `-d`, so they
+    skipped every directory refusal, the branch was PUSHED, and `git clone`
+    then died at rc=128 on a path that already existed: a published branch from
+    a command that did nothing locally, which is what the block's own ordering
+    rule exists to prevent. The worktree preflight learned `-e || -L` for the
+    same two inputs; this pins the clone gate to the same answer.
+
+    The refusal must be the not-a-repo arm (not a fall-through to `git clone`),
+    it must come before the push, and its advice must not say "pick another
+    branch name": the path comes from the task id, so a new branch name lands
+    on the same path."""
+    r = _repo(tmp_path / "w", task_id="FEAT-0021")
+    at = r.parent / f"{r.name}-feat-0021"
+    if kind == "dangling-symlink":
+        at.symlink_to(r.parent / "nowhere")
+    else:
+        at.write_text("not a directory\n")
+
+    out = _run(CLAIM_TASK, r, "--clone", "--lock", "FEAT-0021", "feat/twentyone")
+    both = out.stdout + out.stderr
+
+    assert out.returncode == 1, both
+    assert "not the root of a git repository" in both, both
+    assert "Pushed" not in both and "fatal:" not in both, (
+        "the refusal came after the push, or fell through to git clone:\n" + both
+    )
+    assert "refs/heads/feat/twentyone" not in _origin_heads(r), (
+        "a refused claim published the branch anyway"
+    )
+    assert "another branch name, then re-run" not in both, (
+        "the advice names the branch, but the clone path comes from the task id"
+    )
+    assert "WORKTREE_ROOT / WORKTREE_PREFIX" in both, both
+    assert not (r / "sysop/runtime/locks/FEAT-0021.lock").exists()
+    # The input is left exactly as found.
+    if kind == "dangling-symlink":
+        assert at.is_symlink() and not at.exists()
+    else:
+        assert at.read_text() == "not a directory\n"
+
+
+def test_a_symlink_to_a_same_origin_clone_is_still_adopted(tmp_path):
+    """Boundary pin (passes on the unfixed script too): widening the gate must
+    not refuse a symlink that points at a real clone of this origin. It is
+    followed and judged by its target, as worktree mode judges a symlink to one
+    of its worktrees; the identity refusals still run through the link."""
+    r = _repo(tmp_path / "w", task_id="FEAT-0022")
+    real = r.parent / "elsewhere-clone"
+    subprocess.run(["git", "clone", "-q", str(r.parent / f"{r.name}-origin.git"), str(real)],
+                   check=True, capture_output=True)
+    (r.parent / f"{r.name}-feat-0022").symlink_to(real)
+
+    out = _run(CLAIM_TASK, r, "--clone", "--lock", "FEAT-0022", "feat/twentytwo")
+
+    assert out.returncode == 0, (out.stdout + out.stderr)
+    assert _branch_of(real) == "feat/twentytwo"
+    assert (r / "sysop/runtime/locks/FEAT-0022.lock").exists()
+
+
+def test_a_symlink_to_a_non_repo_directory_is_refused_before_the_push(tmp_path):
+    """Boundary pin (passes on the unfixed script too): a symlink to a real
+    directory that is not a repository was already refused, because `-d`
+    follows the link. The widened gate keeps that refusal and its ordering."""
+    r = _repo(tmp_path / "w", task_id="FEAT-0023")
+    junk = r.parent / "elsewhere-junk"
+    junk.mkdir()
+    (junk / "junk.txt").write_text("x")
+    (r.parent / f"{r.name}-feat-0023").symlink_to(junk)
+
+    out = _run(CLAIM_TASK, r, "--clone", "--lock", "FEAT-0023", "feat/twentythree")
+
+    assert out.returncode == 1
+    assert "not the root of a git repository" in (out.stdout + out.stderr)
+    assert "refs/heads/feat/twentythree" not in _origin_heads(r)
+    assert list(junk.iterdir()) == [junk / "junk.txt"]
+
+
 def test_clone_refuses_when_origin_has_a_different_branch_of_the_same_name(tmp_path):
     """**Round finding (HIGH): the push probe checked the NAME, not the branch.**
 
@@ -982,3 +1070,14 @@ def test_the_fresh_clone_waits_for_the_assert_too(tmp_path):
     assert "Cloned to" not in out.stdout
     assert "not 'feat/f' at or past origin's tip" in (out.stdout + out.stderr)
     assert not (r / "sysop/runtime/locks/FEAT-0039.lock").exists()
+
+
+def test_a_batch_id_hint_does_not_wrap(tmp_path):
+    """`--lock <batch>` points at `batch_work.sh`; the hint ran the number through
+    `$((10#…))`, so 2^64 + 7 printed `batch_work.sh 7`. It strips the zeros as text."""
+    r = _repo(tmp_path / "w")
+    out = _run(CLAIM_TASK, r, "--lock", str(2**64 + 7), "feat/x")
+    assert out.returncode == 1
+    assert f"batch_work.sh {2**64 + 7}" in out.stderr, out.stderr
+    out = _run(CLAIM_TASK, r, "--lock", "BATCH-007", "feat/x")
+    assert "batch_work.sh 7\n" in out.stderr, out.stderr

@@ -1,4 +1,4 @@
-"""_closed_tasks.py — the task bodies one side edited that the other side has since closed.
+"""_closed_tasks.py — the task bodies one side edited or added that the other side has since closed.
 
 Shared by `pr_head_check.py` (`/review-close` Step 4a item 1, a branch against its merge target)
 and `git_check.py closed-tasks` (`_shared/main-push-guard.md` Rule B step 3, the local default
@@ -8,8 +8,9 @@ Step 4c closes a task by `git mv`-ing its body to `tasks/archive/`. A merge of a
 copy then has no conflict: git's rename detection carries the edit into the archived copy. So
 the check runs before the merge: each body under `tasks/{open,deferred,archive}/` that `ours`
 edited since `since` (`--diff-filter=M`, `--no-renames`) and that `theirs` has since moved to
-`tasks/archive/` or deleted. A move between `open/` and `deferred/` is not reported: the edit
-belongs in the live copy. Every operand is passed to git as given, so a caller passes full refs.
+`tasks/archive/` or deleted. A move of an edited body between `open/` and `deferred/` is not
+reported: the edit belongs in the live copy. Every operand is passed to git as given, so a caller
+passes full refs.
 
 Where a body went is decided by its file name first, since every writer names a body `<ID>.md`
 and a close keeps the name: `tasks/archive/<name>` in `theirs` is the close, and an `open/` or
@@ -17,7 +18,12 @@ and a close keeps the name: `tasks/archive/<name>` in `theirs` is the close, and
 the body, beside a near-copy filed as a new task, paired the open body with the new one, and the
 check read no close. And a body `ours` ADDED (`--diff-filter=A`) whose name `theirs` holds under
 `tasks/archive/`, closed since the merge base, is re-added: a branch replaying a landed squash puts the stale open copy back
-beside the closed one, with no conflict.
+beside the closed one, with no conflict. The same holds for a name `theirs` has since moved to the
+other live directory (`deferred/` for an added `open/` body, `open/` for an added `deferred/`
+one): the replay leaves two live bodies for one id. A copy the merge base already held there, or one
+`ours` itself wrote there since the base, is the branch's own move (a defer, or an un-defer) and
+is not reported. An archive copy is read
+first, so a body `theirs` holds both closed and live is reported as closed.
 """
 from __future__ import annotations
 
@@ -47,8 +53,12 @@ def is_body(path: str) -> bool:
             and parts[2].endswith(".md"))
 
 
-#: A `where` that starts with this is a body `ours` adds and `theirs` has closed.
-READDED = "closed it at "
+#: A `where` that starts with one of these is a body `ours` adds and `theirs` has closed (the
+#: first), deferred, or un-deferred since the merge base. None says `moved it to` or `deleted it`:
+#: the skills route an `EDITED:` line on those words, and a `RE-ADDED:` line on its prefix alone.
+READDED = ("closed it at ", "deferred it at ", "undeferred it at ")
+#: The other live directory an added body's name may have moved to, and that move's `where` verb.
+_LIVE = {"open": ("deferred", "deferred it at "), "deferred": ("open", "undeferred it at ")}
 TASKS = ":(top)tasks/"  # anchored at the top level: a relative `tasks/` from a subdirectory matches nothing
 
 
@@ -64,14 +74,27 @@ def _from(base: str, ours: str, theirs: str, present: set[str]) -> dict[str, str
     found = {}
     added = [p for p in _git_z("diff", "--name-only", "--no-renames", "--diff-filter=A", "-z", base,
                                ours, "--", TASKS) if is_body(p) and p not in present]
-    # Closed since the fork only: an archive copy the base already held is an earlier close, and a
-    # body `ours` adds under that name is a reopen, not a replay.
-    archived = set(_git_z("ls-tree", "-r", "-z", "--name-only", "--full-name", base, "--",
-                          ":(top)tasks/archive/")) if added else set()
+    # Since the fork only: an archive copy the base already held is an earlier close, and a body
+    # `ours` adds under that name is a reopen, not a replay; a live copy the base already held is
+    # the body `ours` moved from (a defer or an un-defer), not a second body.
+    held = set(_git_z("ls-tree", "-r", "-z", "--name-only", "--full-name", base, "--",
+                      TASKS)) if added else set()
     for path in added:
-        closed = "tasks/archive/" + path.rsplit("/", 1)[-1]
-        if closed in present and closed not in archived:
-            found[path] = f"{READDED}{closed}"
+        _, kind, name = path.split("/")  # is_body: tasks/<kind>/<name>
+        closed = "tasks/archive/" + name
+        if closed in present and closed not in held:
+            found[path] = f"{READDED[0]}{closed}"
+        elif kind in _LIVE:
+            other, verb = _LIVE[kind]
+            live = f"tasks/{other}/{name}"
+            # A live copy `ours` itself wrote or moved away since the base is the branch's own
+            # history landed by a squash: the branch added the body there, the squash put it on
+            # the target, then the branch moved it. The replay drops the landed commits and
+            # leaves one body, so it is not a second copy.
+            if live in present and live not in held and not _git_z(
+                    "log", "-z", "--format=%H", "-1", f"{base}..{ours}", "--",
+                    f":(top,literal){live}"):
+                found[path] = f"{verb}{live}"
     edited = [p for p in _git_z("diff", "--name-only", "--no-renames", "--diff-filter=M", "-z",
                                 base, ours, "--", TASKS) if is_body(p) and p not in present]
     if not edited:
@@ -99,7 +122,7 @@ def _from(base: str, ours: str, theirs: str, present: set[str]) -> dict[str, str
 
 def closed_task_edits(ours: str, theirs: str, since: str) -> tuple[str, list[tuple[str, str]]]:
     """(base, [(path, where)]) where `where` is `moved it to <path>`, `deleted it`, or (a body
-    `ours` added) `closed it at <path>`. With more
+    `ours` added) `closed it at <path>`, `deferred it at <path>` or `undeferred it at <path>`. With more
     than one merge base (criss-cross history), a body counts only when every base reports it: a
     body one base calls edited, another base already holds."""
     bases = merge_bases(since, ours)
@@ -116,7 +139,8 @@ def closed_task_edits(ours: str, theirs: str, since: str) -> tuple[str, list[tup
 
 def lines(found: list[tuple[str, str]], base: str, ours: str, side: str, theirs_name: str) -> list[str]:
     """The `CLOSED TASK EDITED:` (or `CLOSED TASK RE-ADDED:`) and `show:` lines both callers print.
-    `side` names who edited (`the branch`, `this close`); `theirs_name` names the side that closed it."""
+    `side` names who edited (`the branch`, `this close`); `theirs_name` names the side that closed,
+    deferred or un-deferred it."""
     out = []
     for path, where in found:
         if where.startswith(READDED):

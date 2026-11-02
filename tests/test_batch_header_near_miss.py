@@ -81,7 +81,7 @@ def _repo(root: Path, tasks: str, *, archive: bool = False) -> Path:
         (root / "review_tasks_archive.md").write_text(ARCHIVE_SEED)
     sd = root / "sysop" / "scripts"
     sd.mkdir(parents=True, exist_ok=True)
-    for n in ("review_index.py", "_log.py", "archive_review_tasks.py"):
+    for n in ("review_index.py", "_log.py", "archive_review_tasks.py", "_tracker_lock.py"):
         s = SCRIPTS / n
         if s.exists():
             shutil.copy(s, sd / n)

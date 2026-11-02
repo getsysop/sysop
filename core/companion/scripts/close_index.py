@@ -7,7 +7,10 @@ Run from the main checkout's top level. Sets `status: done` and `completed_date`
 id given (step 1c's ROUTE: docs' `roadmap_ids`), moves each body under `archive/`, stages the index,
 then removes the closed claims' locks, park markers and claim artifacts
 (`--keep-locks`, under `--request-review`, leaves the locks). Prints one report row per
-outcome (`CLOSED_IDS:`, `HELD_USER_ACTION:`, ...).
+outcome (`CLOSED_IDS:`, `HELD_USER_ACTION:`, ...). Given any id, it holds the tracker write
+mutex (`_tracker_lock.py`, the one `claim_task.sh` takes) from the index read until the
+rewrite is staged, and exits 1 having changed nothing when another Sysop process holds it
+past `SYSOP_TRACKER_LOCK_WAIT` (120 s by default).
 
 The skill text is the contract: `/review-close` Step 4c item 4 says what each row and a
 non-zero exit mean. This file was that step's heredoc until Phase 386 (`Q-409` P3),
@@ -37,6 +40,10 @@ except ImportError:  # PyYAML lives only in the project venv (BeanRider ISSUE-00
     sys.path[:0] = _sites
     import yaml
 from pathlib import Path
+# The tracker write mutex, shared with `archive_review_tasks.py` and the other Python writers
+# of tasks/index.yml. Inserted as `pr_head_check.py` does, so a run through `runpy` finds it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _tracker_lock  # noqa: E402
 today = datetime.date.today().isoformat()
 # The roadmap_ids of step 1c's ROUTE: docs only, never a HELD: one (with the Phase 23a
 # compat shim applied at parse time — see step 3 above), one argument each, after an
@@ -50,6 +57,25 @@ _bad = [i for i in ids if not i.strip() or i.startswith('-') or '<' in i or '>' 
 if _bad:
     sys.exit(f"ERROR: not a task id: {_bad!r}. Pass step 1c's ROUTE: docs' roadmap_ids, "
              "one argument each, after an optional --keep-locks; nothing was changed")
+# The tracker write mutex (`Q-404`): the one `claim_task.sh --commit-claim` and `--release`
+# take, held from the read below until the rewrite is staged. A claim whose flip and commit
+# land between this read and the replace would otherwise be put back to `open` on disk by
+# the replace, and Step 7's commit would revert the claim on the default branch, every
+# command having exited 0. Taken before the read, not around the write alone: the rewrite
+# is computed from the read, so a lock around the replace would serialize the lost update
+# rather than prevent it. Not taken with no ids, which can write nothing: a stale lock must
+# not stop a close that has no index work. A refusal (waited SYSOP_TRACKER_LOCK_WAIT, 120 s
+# by default) exits 1 before anything is read or written, which item 4 reads as stop. The
+# `git mv`s and `git add`s run inside it because they stage what this run is writing; the
+# lock, marker and artifact cleanup below runs after the release, since it touches nothing
+# another writer of the index reads. A `with` block would re-indent the program, so the
+# release is explicit, and `_tracker_lock` also registers it to run at exit.
+_held = None
+if ids:
+    _held = _tracker_lock.hold(os.getcwd(), "/review-close Step 4c's tasks/index.yml write",
+                               "nothing was changed", holder=os.path.basename(__file__))
+    if _held is None:
+        sys.exit(1)
 p = Path('tasks/index.yml')
 try:
     d = yaml.safe_load(p.read_text(encoding='utf-8'))
@@ -165,9 +191,10 @@ if closed:
     # claim_task.sh --release (and gave --commit-claim the same shape when it added
     # it); Phase 263 converted auto-build Step 5.1, which was the last one, so NO
     # writer of tasks/index.yml truncates in place via open(..., "w") any more.
-    # What `Q-404` still has open is the MUTEX, not atomicity: this site,
-    # backfill_completed_dates.py and clear_user_action.py all write without it; this
-    # site was done first because it is the one that has already `git mv`d the bodies, so
+    # What `Q-404` then had open was the MUTEX, not atomicity: this site,
+    # backfill_completed_dates.py and clear_user_action.py wrote without it until Phase 461,
+    # and all three now take it through `_tracker_lock.py` (see above the read). This site
+    # was made atomic first because it is the one that has already `git mv`d the bodies, so
     # a torn write there strands staged renames against an index that never recorded them.
     # Same directory, so the replace is atomic and no reader sees a partial file.
     # Scope, stated because the sibling is copied only in part: this takes the
@@ -221,6 +248,9 @@ if closed:
     # (internal tracker #203). Staging beside the write is the only form that cannot drift out
     # of sync with what was written.
     subprocess.run(['git', 'add', str(p)], check=True)
+# The index is written and staged: release the tracker mutex taken above the read.
+if _held is not None:
+    _held.release()
 # Working-tree cleanup, deferred until every git mv landed and the index wrote:
 # an abort mid-loop must not have already destroyed an earlier task's records
 # (the parked marker below is unrecreatable — plan + verdict, never committed).

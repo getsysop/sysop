@@ -74,6 +74,8 @@ LOOP_SCRIPTS = {
     "_git_lib.sh", "default_branch.sh",
     # Phase 386 (`Q-409` P3): the two loop review skills' Step 5f, which was a heredoc.
     "round_receipt.py",
+    # Phase 461 (`Q-404`): the tracker write mutex `archive_review_tasks.py` imports.
+    "_tracker_lock.py",
 }
 EXCLUDED_SCRIPTS = {
     # Phase 386 (`Q-409` P3): heredocs of `/review-close` (1-pre, 3c, 3b, 4c) and

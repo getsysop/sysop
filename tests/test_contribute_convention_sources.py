@@ -221,7 +221,7 @@ _ARCHIVE_SEED = (
 def test_the_archiver_moves_rounds_out_and_keeps_their_headings(tmp_path):
     """A rule's earlier round is only in the archive once the archiver has run."""
     (tmp_path / "sysop" / "scripts").mkdir(parents=True)
-    for name in ("archive_review_tasks.py", "_log.py"):
+    for name in ("archive_review_tasks.py", "_log.py", "_tracker_lock.py"):
         (tmp_path / "sysop" / "scripts" / name).write_bytes((SCRIPTS / name).read_bytes())
     (tmp_path / "review_tasks.md").write_text(_TRACKER, encoding="utf-8")
     (tmp_path / "review_tasks_archive.md").write_text(_ARCHIVE_SEED, encoding="utf-8")

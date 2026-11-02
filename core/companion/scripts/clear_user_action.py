@@ -42,6 +42,12 @@ has pinned the canonical kwargs across all of them since Phase 201. On a queue
 that has never had a claim released, expect the first run to produce a large
 diff.
 
+**It takes the tracker write mutex** (`_tracker_lock.py`, the one `claim_task.sh
+--commit-claim` and `--release` take) from the read to the rewrite, so a concurrent claim's
+flip is not replaced by this run's copy. Another Sysop process holding it past
+`SYSOP_TRACKER_LOCK_WAIT` (120 s by default) makes it exit 1, having changed nothing.
+`--dry-run` writes nothing and takes no lock.
+
 Never commits. Like `claim_task.sh`, it mutates and hands you the commit.
 
 Usage:
@@ -212,13 +218,12 @@ def _write_atomically(path: Path, data: dict) -> None:
         raise
 
 
-def run(task_id: str, dry_run: bool = False, root: Path | None = None) -> int:
-    root = root or main_repo_root()
-    index_path = root / "tasks" / "index.yml"
-    if not index_path.is_file():
-        print(f"ERROR: no task index at {index_path}", file=sys.stderr)
-        return 1
+def _flip(task_id: str, dry_run: bool, index_path: Path) -> tuple[int | None, str]:
+    """Read the index, check the task, and clear its flag.
 
+    Returns `(exit code, "")` when it stops without writing, and `(None, status)` once
+    the rewrite has landed. A non-dry run holds the tracker mutex across this call.
+    """
     try:
         with open(index_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
@@ -229,17 +234,17 @@ def run(task_id: str, dry_run: bool = False, root: Path | None = None) -> int:
         print(f"ERROR: could not load {index_path}: "
               f"{exc.__class__.__name__}: {exc}. Nothing was changed.",
               file=sys.stderr)
-        return 1
+        return 1, ""
 
     if not isinstance(data, dict):
         print(f"ERROR: {index_path} does not parse as a mapping "
               f"(got {type(data).__name__}) — not a task index.", file=sys.stderr)
-        return 1
+        return 1, ""
     tasks = data.get("tasks") or []
     if not isinstance(tasks, list):
         print(f"ERROR: {index_path} has a `tasks:` key that is not a list "
               f"(got {type(tasks).__name__}).", file=sys.stderr)
-        return 1
+        return 1, ""
     hits = [t for t in tasks if isinstance(t, dict) and t.get("id") == task_id]
     if len(hits) > 1:
         # Flipping the first and leaving the rest would report success while
@@ -248,12 +253,12 @@ def run(task_id: str, dry_run: bool = False, root: Path | None = None) -> int:
         print(f"ERROR: {task_id} appears {len(hits)} times in {index_path} — "
               f"duplicate ids. Fix the index; nothing was changed.",
               file=sys.stderr)
-        return 3
+        return 3, ""
     match = hits[0] if hits else None
 
     if match is None:
         print(f"ERROR: {task_id} is not in {index_path}", file=sys.stderr)
-        return 2
+        return 2, ""
 
     current = match.get("user_action")
     if current is not True:
@@ -265,7 +270,7 @@ def run(task_id: str, dry_run: bool = False, root: Path | None = None) -> int:
             f"ℹ️  {task_id} does not carry `user_action: true` ({shown}) — "
             f"nothing to clear."
         )
-        return 0
+        return 0, ""
 
     status = match.get("status", "?")
     if dry_run:
@@ -273,7 +278,7 @@ def run(task_id: str, dry_run: bool = False, root: Path | None = None) -> int:
             f"DRY RUN: would set {task_id} user_action: true → false "
             f"(status: {status}). Nothing written."
         )
-        return 0
+        return 0, ""
 
     match["user_action"] = False
     try:
@@ -282,7 +287,36 @@ def run(task_id: str, dry_run: bool = False, root: Path | None = None) -> int:
         print(f"ERROR: could not rewrite {index_path}: "
               f"{exc.__class__.__name__}: {exc}. Nothing was changed.",
               file=sys.stderr)
+        return 1, ""
+    return None, status
+
+
+def run(task_id: str, dry_run: bool = False, root: Path | None = None) -> int:
+    root = root or main_repo_root()
+    index_path = root / "tasks" / "index.yml"
+    if not index_path.is_file():
+        print(f"ERROR: no task index at {index_path}", file=sys.stderr)
         return 1
+
+    if dry_run:
+        # A preview writes nothing, so it takes no write mutex (as `close_batch.sh` and
+        # `archive_review_tasks.py` hold for theirs).
+        rc, status = _flip(task_id, True, index_path)
+    else:
+        # The tracker write mutex `claim_task.sh --commit-claim` and `--release` take,
+        # held from the read through the replace: a claim flip landing between the two
+        # would otherwise be replaced by this run's copy and lost. Imported here, not at
+        # the top, so a dry run does not need the module beside this script.
+        import _tracker_lock
+        held = _tracker_lock.hold(
+            str(root), f"the clearing of {task_id}'s user_action", "nothing was changed",
+            holder=os.path.basename(__file__))
+        if held is None:
+            return 1
+        with held:
+            rc, status = _flip(task_id, False, index_path)
+    if rc is not None:
+        return rc
 
     print(f"✅ {task_id}: user_action true → false (status: {status}).")
     print(

@@ -99,6 +99,8 @@ INDEX_READERS = {
     "core/companion/scripts/backfill_completed_dates.py",
     "core/companion/scripts/claim_task.sh",
     "core/companion/scripts/clear_user_action.py",
+    # Phase 461 (`Q-404`): names the index as what its mutex guards; reads nothing.
+    "core/companion/scripts/_tracker_lock.py",
     # Phase 366: the unattended land reads a task's flags and blast_radius at a commit
     # (`git cat-file -p <commit>:tasks/index.yml`); never writes the index.
     "core/companion/scripts/close_run.py",
@@ -1564,7 +1566,7 @@ def test_the_auto_build_guard_module_actually_collects_its_tests():
 
 
 def test_the_roster_separates_the_closed_class_from_the_open_one():
-    """Phase 263 closed the in-place-write class. The mutex class is still open.
+    """Phase 263 closed the in-place-write class; Phase 461 (`Q-404`) closed the mutex class.
 
     The predecessor pinned the sentence naming `/auto-build` Step 5.1 as the last
     writer that truncated in place, and that sentence went false the moment the
@@ -1586,10 +1588,14 @@ def test_the_roster_separates_the_closed_class_from_the_open_one():
         "Step 4c's roster stopped distinguishing the closed class (atomicity) from "
         "the open one (the tracker mutex) — without it `Q-404` reads as resolved"
     )
-    for still_unlocked in ("backfill_completed_dates.py", "clear_user_action.py"):
-        assert still_unlocked in comment, (
-            f"the roster stopped naming {still_unlocked} as an unserialized writer"
+    for writer in ("backfill_completed_dates.py", "clear_user_action.py"):
+        assert writer in comment, (
+            f"the roster stopped naming {writer} among the writers the mutex now covers"
         )
+    assert "all three now take it" in comment, (
+        "Step 4c's roster stopped recording that the three Python writers take the "
+        "tracker mutex — without it the comment reads as `Q-404` still open"
+    )
 
 
 # --------------------------------------------------------------------------
