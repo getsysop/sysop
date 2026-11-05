@@ -7,6 +7,81 @@ a check that now runs. Each entry is dated by the snapshot's publication and nam
 private development phases it carries. The per-phase journal those phases were recorded in is the
 maintainer's working record and is not in the public tree.
 
+## 2026-11-05 — v0.2.4, private phases 464–468
+
+- **`v0.2.4`.** This snapshot is tagged `v0.2.4`, with a GitHub Release carrying this entry.
+  The next bullet is an instruction; the rest are what changed, each a fix to shipped behaviour or
+  to a page that said something the code does not do. `--ref` pins to it as it does to the earlier
+  tags, once the tag is fetched into your clone.
+- **Run `install.sh --update` when the plugin updates to this snapshot.** Most of the fixes below
+  are in `install.sh`, the `pre-merge-commit` skeleton and its example, and scripts under
+  `sysop/scripts/`. The plugin delivers the skills; only the bash installer's `--update` (or
+  `sysop/scripts/sysop-update.sh`) delivers the rest, so until you run it those fixes do not reach
+  you. One fix changes a skill's text with its script: Step 2b's new text runs with the previous
+  `convention_size.py`, which measures as it did before, fenced headings included.
+- **Three pages stop contradicting the code.** The README said no release tag existed, so a
+  `--ref` pin meant a commit SHA; `v0.2.0` through `v0.2.3` are tagged, and `SECURITY.md` lists
+  them. The README's deterministic-enforcement bullet now says who demotes a stale rule:
+  `/codebase-review` brings it to you from the review rounds' false-positive ledger, and no script
+  does it. `docs/history.md` called the source project's 78 promoted conventions "shipping as
+  packs", but 78 is what that project promoted, and the packs were mined from it. The repo layout
+  in `docs/install-and-update.md` counted the postgres pack's Semgrep rules as 2; it ships 3, two
+  of them in one file.
+- **`validate_tasks.py` runs in CI.** Its in-progress lock check reads `sysop/runtime/locks/`,
+  which is runtime state and never committed, so in CI every in-progress task failed and there
+  was no way to turn the check off. `--skip-lock-checks` turns off that check, Invariant 9, and
+  nothing else. Every run that passes it prints a line saying lock state was not read, `--quiet`
+  included, and the exit code is unchanged. Don't pass it locally or in the pre-commit hook,
+  where the locks exist. The validator also now warns about a `completed_date` on an open,
+  in-progress or deferred task, which nothing reads, and names an unquoted date on a done task
+  instead of calling it missing. `tasks/schema.md` now says what the validator does: a done task
+  without a date gets a warning, not an error.
+- **A model-role check that skipped something says so in the update's output.** The check and
+  the rewrite under `--update` both skip a file they cannot read, such as a non-UTF-8 note of
+  your own under `.claude/skills/`. Both reported the skip when run by hand, and the installer
+  then dropped the report, so a passing update said nothing about it. They also missed a folder
+  they could not open: its files were dropped without a word. And on Python 3.13 and older, a
+  folder that could be listed but not entered crashed the check, which the installer reported as
+  an invalid mapping. Now an unreadable file or folder is counted, a folder as a folder, and
+  the update prints a warning naming it and writes the count into its summary.
+- **`run_checks` warns about a `severity` it does not know.** A value outside `low`, `medium`,
+  `high` and `critical` used to appear in the report as typed, with nothing to say it was a
+  typo. Each such check now draws one `warn:` line on stderr per run, naming it and the value. The run
+  is otherwise unchanged, so a private severity word in your own overlay keeps working. Case is
+  ignored, and a check with no `severity` is still `medium`.
+- **`/review-close` measures your `CLAUDE.md` convention sections correctly.** Step 2b measures
+  the sections to choose between pasting them into every reviewer prompt and writing them once.
+  The measurement read a `## ` line inside a fenced example as a heading, so a fenced heading
+  inside a real section cut it short, which could put a large section on the paste arm, and a
+  heading quoted only in an example counted as the section. It also measured only the first of two
+  same-named sections, scored a heading with a trailing space as 0, and did not end a section at
+  a following `# ` heading. All five are fixed, with the fence and HTML-comment reader the
+  security cut beside it already uses, and the heading forms CommonMark allows (two spaces after
+  `##`, a closing `##`) now count. A fence that never closes is reported, and so is a section name
+  found only inside a fence, which is how a forgotten closer above a real section looks. A file
+  without these shapes measures as before.
+- **`--update` no longer calls your own layer files' output a local edit.** Its pre-overwrite
+  check warned "committed local edits in managed paths … consumer-added content will be lost" in
+  three cases where nothing was lost: on the first update after you added a role override to
+  `.claude/served_models.local.yml`, which listed the skills the override moves; on every update
+  after a `.project.*` overlay had been applied, which listed the base map; and on every update
+  with a `.claude/substitutions.project.yml`, which listed `checks.yml`. The check now rebuilds
+  the previous install with your layer files, both as they stand and as they were committed when
+  each path was last written. Content they produced matches, and a hand edit is still reported.
+  Two cases still warn once: the first update with a layer file you have not committed (commit
+  it before you run the update), and the first update after a promotion was written into a base
+  map and its overlay. The check also now finds your edits when the install target is a
+  subdirectory of its repository. Before, it read the repository root's files instead of the
+  target's.
+- **The `pre-merge-commit` skeleton's pytest block, and its worked example, run the main
+  checkout's venv.** Both looked for `.venv` at `git rev-parse --show-toplevel`. In a linked
+  worktree that holds the protected branch, that is the worktree, which has no `.venv`, so pytest
+  ran on whatever `python3` was first on `PATH`, and a failing suite could pass. From a linked
+  worktree, both now find the main checkout through `git rev-parse --git-common-dir`, then this
+  checkout's own `.venv`, then `python3`. The example also no longer exits on macOS's bash 3.2
+  when there is no `.env`: under `set -e`, a `source` of a missing file ended the hook even with
+  `|| true`.
+
 ## 2026-11-02 — v0.2.3, private phases 458–463
 
 - **`v0.2.3`.** This snapshot is tagged `v0.2.3`, with a GitHub Release carrying this entry.

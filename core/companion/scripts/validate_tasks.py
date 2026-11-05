@@ -6,11 +6,15 @@ pre-commit, and via --path against a tasks/ tree other than the repo's own —
 `git-hooks/examples/pre-commit-tasks-validate.example` points it at an export of
 the STAGED tree. --path changes which tree is validated, not which invariants
 apply: the in-progress lock check (Invariant 9) still runs (see main()).
+--skip-lock-checks is the one way to turn Invariant 9 off, for a tree that has no
+lock state to read (CI, where sysop/runtime/ is gitignored): it skips both of
+Invariant 9's halves and nothing else, and says so on every run.
 
 Usage:
     python sysop/scripts/validate_tasks.py
     python sysop/scripts/validate_tasks.py --path tasks/
     python sysop/scripts/validate_tasks.py --quiet            # pre-commit mode
+    python sysop/scripts/validate_tasks.py --skip-lock-checks # CI: no lock state
     python sysop/scripts/validate_tasks.py --self-test       # internal consistency check
 
 Exits 0 on success, non-zero on any ERROR finding. Warnings (e.g., suspected
@@ -304,6 +308,10 @@ class Report:
     warnings: list[Finding] = field(default_factory=list)
     task_count: int = 0
     phase_count: int = 0
+    # Set by validate() when the caller turned Invariant 9 off. Not a warning:
+    # it must not move the warning count, and render() prints it even under
+    # --quiet, because a silent skip reads as a pass that checked locks.
+    lock_checks_skipped: bool = False
 
     def error(self, location: str, message: str) -> None:
         self.errors.append(Finding("ERROR", location, message))
@@ -319,13 +327,21 @@ class Report:
 # ---------------------------------------------------------------------------
 # Core validator
 # ---------------------------------------------------------------------------
-def validate(base_dir: Path, project_root: Path | None = None) -> Report:
+def validate(
+    base_dir: Path, project_root: Path | None = None, *, skip_lock_checks: bool = False
+) -> Report:
     """Validate the tasks tree rooted at *base_dir*.
 
     *project_root* is the directory containing `sysop/runtime/locks/` (for in-progress lock
     checks). Defaults to the parent of *base_dir*.
+
+    *skip_lock_checks* turns off Invariant 9 — both its error half (an in_progress
+    task needs a lock) and its warn-only half (an expired lock that does not say why
+    it is held, including the `BATCH-*.lock` sweep) — and no other check. Lock state
+    is then not read at all, and the report records that it was not.
     """
     report = Report()
+    report.lock_checks_skipped = skip_lock_checks
     base_dir = Path(base_dir).resolve()
     if project_root is None:
         project_root = base_dir.parent
@@ -408,7 +424,8 @@ def validate(base_dir: Path, project_root: Path | None = None) -> Report:
 
     _validate_phases(phases, index_path, report)
     task_ids = _validate_tasks(
-        tasks, base_dir, project_root, phases, index_path, schema_version, report
+        tasks, base_dir, project_root, phases, index_path, schema_version, report,
+        skip_lock_checks=skip_lock_checks,
     )
     _validate_references(tasks, task_ids, index_path, report)
     _validate_orphans(base_dir, tasks, index_path, report)
@@ -470,6 +487,8 @@ def _validate_tasks(
     index_path: Path,
     schema_version: int,
     report: Report,
+    *,
+    skip_lock_checks: bool = False,
 ) -> set[str]:
     """Per-task validation (invariants 3, 7, 8, 9, 10) and ID matching.
 
@@ -482,7 +501,9 @@ def _validate_tasks(
         and isinstance(p.get("number"), (int, float))
         and not isinstance(p.get("number"), bool)
     }
-    locks_dir = _resolve_canonical_locks_dir(project_root)
+    # Under skip_lock_checks the locks dir is not even resolved: no git probe and
+    # no listing, so "lock state was not read" is literally true.
+    locks_dir = None if skip_lock_checks else _resolve_canonical_locks_dir(project_root)
     base_tasks_real = os.path.realpath(base_dir)
 
     seen_ids: set[str] = set()
@@ -604,8 +625,8 @@ def _validate_tasks(
             elif not os.path.isfile(real_candidate):
                 report.error(loc_id, f"archive_summary file does not exist: {_sanitize_log(archive_summary)}")
 
-        # Invariant 9: in_progress requires lock
-        if status == "in_progress" and tid_for_use is not None:
+        # Invariant 9: in_progress requires lock (off under skip_lock_checks)
+        if locks_dir is not None and status == "in_progress" and tid_for_use is not None:
             lock_path = locks_dir / f"{tid_for_use}.lock"
             if not _is_file(lock_path):
                 report.error(
@@ -623,11 +644,12 @@ def _validate_tasks(
     # placeholder, and a BATCH-<N>.lock has no tasks/index.yml entry to reach it
     # through the loop above. Other locks with no in_progress task are NOT read
     # here: that is a different defect (an orphan lock), not an unannotated one.
+    # It is part of Invariant 9's warn-only half, so skip_lock_checks skips it too.
     try:
         batch_locks = sorted(
             p for p in locks_dir.iterdir()
             if _BATCH_LOCK_NAME_RE.match(p.name) and _is_file(p)
-        ) if locks_dir.is_dir() else []
+        ) if locks_dir is not None and locks_dir.is_dir() else []
     except OSError:
         batch_locks = []  # an unreadable locks dir is not this warning's to report
     for batch_lock in batch_locks:
@@ -776,6 +798,16 @@ def _check_status_consistency(task: dict, status: object, loc: str, report: Repo
     if status in ("open", "in_progress", "deferred"):
         if not has_body:
             report.error(loc, f"status={status} requires 'body' field")
+        # A date on a task that is not done is read by nothing (the readers filter
+        # on status: done), so it warns rather than blocks. Any non-null value
+        # counts: an unquoted `2026-01-15` parses to a date object, not a string.
+        stray_date = task.get("completed_date")
+        if stray_date is not None and stray_date != "":
+            report.warn(
+                loc,
+                f"status={status} carries completed_date {_sanitize_log(stray_date)}; "
+                "only a done task's completed_date is read, so remove it or close the task",
+            )
 
     if status in ("open", "in_progress"):
         if not has_effort:
@@ -797,6 +829,15 @@ def _check_status_consistency(task: dict, status: object, loc: str, report: Repo
             report.error(
                 loc,
                 f"'completed_date' must be ISO YYYY-MM-DD, got {_sanitize_log(task['completed_date'])}",
+            )
+        elif not has_completed_date and task.get("completed_date") not in (None, ""):
+            # Present but not a string: an unquoted `2026-01-15` parses to a date
+            # object. Saying "has no completed_date" there was false. Still a
+            # warning, since a missing date is one.
+            report.warn(
+                loc,
+                f"status=done has completed_date {_sanitize_log(task['completed_date'])} "
+                "that is not a quoted string — write it as \"YYYY-MM-DD\"",
             )
         elif not has_completed_date:
             report.warn(loc, "status=done has no completed_date — git-blame backfill recommended")
@@ -1075,7 +1116,18 @@ def _check_secret_line(path: Path, lineno: int, line: str, report: Report) -> No
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
+LOCK_SKIP_NOTICE = (
+    "[NOTICE] Invariant 9 skipped (--skip-lock-checks): lock state under "
+    "sysop/runtime/locks/ was not read, so no in_progress task's lock and no "
+    "expired lock was examined. The flag turns off no other check."
+)
+
+
 def render(report: Report, quiet: bool) -> None:
+    # Printed on every run that skipped, --quiet included, and on stdout like
+    # every other line here. It is not a finding and does not touch the exit code.
+    if report.lock_checks_skipped:
+        print(LOCK_SKIP_NOTICE)
     if not quiet or not report.ok:
         for f in report.errors:
             print(f.format())
@@ -1823,12 +1875,21 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Path to a tasks/ directory (default: <repo>/tasks), e.g. an "
         "export of the staged tree. Every invariant still applies, including "
-        "the in-progress lock check.",
+        "the in-progress lock check, unless --skip-lock-checks is also given.",
     )
     parser.add_argument(
         "--quiet",
         action="store_true",
-        help="Only print on failure (suitable for pre-commit hooks).",
+        help="Only print on failure (suitable for pre-commit hooks); the "
+        "--skip-lock-checks notice still prints.",
+    )
+    parser.add_argument(
+        "--skip-lock-checks",
+        action="store_true",
+        help="Skip Invariant 9 (in_progress requires a lock, and the expired-lock "
+        "warning) without reading sysop/runtime/locks/, for a tree with no lock "
+        "state such as a CI checkout. No other invariant is affected, and errors "
+        "still set the exit code; a notice that the skip happened prints on every run.",
     )
     parser.add_argument(
         "--self-test",
@@ -1842,6 +1903,8 @@ def main(argv: list[str] | None = None) -> int:
 
     base_dir = Path(args.path).resolve() if args.path else _default_tasks_dir()
     if not base_dir.is_dir():
+        if args.skip_lock_checks:
+            print(LOCK_SKIP_NOTICE)
         print(f"ERROR: tasks directory not found: {base_dir}")
         return 2
 
@@ -1857,14 +1920,21 @@ def main(argv: list[str] | None = None) -> int:
     #     tree, where a bare export has none, so every in_progress task fails.
     #
     # Sysop's pre-commit example (`git-hooks/examples/pre-commit-tasks-validate.example`)
-    # handles the second case by copying the real locks in beside its export.
-    # A caller that wants the gate without lock state (CI, where the locks are
-    # gitignored runtime) gets no escape hatch here, and must not read one in.
+    # handles the second case by copying the real locks in beside its export, and
+    # passes no skip flag: a local commit has real locks to check.
+    # A caller with no lock state at all (CI, where the locks are gitignored
+    # runtime) passes --skip-lock-checks, which turns off Invariant 9 alone and
+    # prints LOCK_SKIP_NOTICE on every run, so the gate never reads as having
+    # checked locks it did not read. Seeding stub locks instead measures the stubs.
     project_root = base_dir.parent
 
     try:
-        report = validate(base_dir, project_root=project_root)
+        report = validate(
+            base_dir, project_root=project_root, skip_lock_checks=args.skip_lock_checks
+        )
     except Exception as e:  # noqa: BLE001 — top-level safety net
+        if args.skip_lock_checks:
+            print(LOCK_SKIP_NOTICE)
         # Sanitize before printing in case the exception message embeds paths
         # or other untrusted strings.
         print(f"ERROR: validator crashed: {_sanitize_log(str(e)[:500])}")

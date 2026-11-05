@@ -94,7 +94,7 @@ LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard plan-revie
 # Companion scripts excluded from loop mode (lifecycle-coupled). Kept: run_checks*
 # (+ run_checks/ dir), _log.py, review_index.py, archive_review_tasks.py and the
 # _tracker_lock.py it imports,
-# install_hooks.sh, sysop-update.sh, the model-role set (_model_roles.py,
+# install_hooks.sh, sysop-update.sh, the model-role set (_model_roles.py, _skill_walk.py,
 # resolve/check/migrate_skill_model.py — mode-agnostic; operate on shipped skills),
 # _git_lib.sh (Phase 368, `Q-376`: the pre-merge-commit hook, armed in both
 # modes, sources it to resolve the protected branch) and default_branch.sh (the
@@ -236,6 +236,20 @@ declare -A SYSOP_PROJECT_SUFFIXES=(
 # in MANAGED_PATHS, byte-faithful to consumer authoring. See WORKFLOW.md
 # § 8.2c (Phase 25 paragraph).
 SYSOP_SUBSTITUTIONS_FILE=".claude/substitutions.project.yml"
+# The consumer's layer files: never written by the installer, each read by it to
+# shape a managed output. The role override re-resolves skill pins, the three
+# overlays above are appended or merged onto the concat outputs, and the
+# substitutions file rewrites checks.yml's `paths:` tokens. The pre-overwrite
+# divergence check rebuilds the old install with these as they stood when each
+# committed path was last written, so content the consumer's own layers produced
+# is not reported as a local edit.
+SYSOP_LAYER_FILES=(
+  ".claude/served_models.local.yml"
+  ".claude/convention_map.project.md"
+  ".claude/security_map.project.md"
+  ".claude/checks.project.yml"
+  "$SYSOP_SUBSTITUTIONS_FILE"
+)
 SUBSTITUTION_KEYS_LOADED=0
 SUBSTITUTION_KEYS_LIST=()
 declare -A SUBSTITUTION_USAGE_COUNT=()
@@ -257,6 +271,24 @@ DIVERGENCE_SHADOW=""
 DIVERGENCE_WORKTREE=""
 DIVERGENCE_WORKTREE_REPO=""
 DIVERGENCE_STDERR_TMP=""
+# The layer-aware comparison's scratch (detect_committed_divergence only; copy_file
+# never reads it): one directory holding each shadow rebuilt with a set of the
+# consumer's layer files, the layer sets themselves, and a python3 wrapper. Cleaned
+# by _cleanup_install_temp. DIVERGENCE_LAYER_SHADOWS maps a layer-set key (one
+# blob id or `-` per SYSOP_LAYER_FILES entry) to the shadow built from it, or to ""
+# when that build failed. DIVERGENCE_ANCHOR_SHADOW is _divergence_anchor_shadow's
+# return slot: a command substitution would build in a subshell, outside the trap.
+DIVERGENCE_LAYER_TMP=""
+DIVERGENCE_LAYER_SEQ=0
+DIVERGENCE_LAYER_NOTED=0
+DIVERGENCE_PACKS_CSV=""
+DIVERGENCE_COMPARE_BASE=""
+DIVERGENCE_ANCHOR_SHADOW=""
+declare -A DIVERGENCE_LAYER_SHADOWS=()
+# Layer files present in the working tree but absent from HEAD. No commit can say
+# when they took effect, so every anchor takes them as in effect throughout, the
+# assumption the shadow made before the comparison was layer-aware.
+declare -A DIVERGENCE_LAYER_UNTRACKED=()
 OLD_COMMIT=""
 PRESERVED_PATHS=()
 declare -A ACCEPT_UPSTREAM=()
@@ -542,6 +574,7 @@ _target_tree_state() {
 # as the EXIT trap in main(); a single trap avoids sites clobbering each other's.
 _cleanup_install_temp() {
   [[ -n "$DIVERGENCE_SHADOW" ]] && rm -rf "$DIVERGENCE_SHADOW"
+  [[ -n "$DIVERGENCE_LAYER_TMP" ]] && rm -rf "$DIVERGENCE_LAYER_TMP"
   [[ -n "$DIVERGENCE_STDERR_TMP" ]] && rm -f "$DIVERGENCE_STDERR_TMP"
   [[ -n "$LOOP_SETTINGS_TMP" ]] && rm -f "$LOOP_SETTINGS_TMP"
   [[ -n "$BRANCH_SETTINGS_TMP" ]] && rm -f "$BRANCH_SETTINGS_TMP"
@@ -1649,17 +1682,30 @@ DIVERGED_PATHS=()
 # reachable, the worktree-add fails, or the OLD install.sh exits non-zero.
 # Callers should fall through to "skip pre-overwrite detection" on failure.
 #
-# Args: <old_commit> <shadow_target> <packs_csv>
+# With a fourth argument, a directory holding layer files at their target-relative
+# paths (SYSOP_LAYER_FILES), the shadow is seeded with exactly those instead of the
+# consumer's current override, the OLD installer finds python3 through
+# DIVERGENCE_LAYER_TMP/bin when that wrapper exists, and its notes name the layered
+# build. Only the layer-aware comparison passes it; DIVERGENCE_SHADOW, the shadow
+# copy_file preserves against, is always built with three.
+#
+# Args: <old_commit> <shadow_target> <packs_csv> [<layers_dir>]
 reconstruct_old_install() {
-  local old_commit="$1" shadow="$2" packs_csv="$3"
+  local old_commit="$1" shadow="$2" packs_csv="$3" layers="${4:-}"
+  local tag="divergence detection" run_path="$PATH"
+  if [[ -n "$layers" ]]; then
+    tag="divergence detection (with your .claude layer files)"
+    [[ -n "$DIVERGENCE_LAYER_TMP" && -x "$DIVERGENCE_LAYER_TMP/bin/python3" ]] \
+      && run_path="$DIVERGENCE_LAYER_TMP/bin:$PATH"
+  fi
 
   if [[ -z "$old_commit" ]] || [[ "$old_commit" == "unknown" ]]; then
-    note "divergence detection: lock has no sysop_commit anchor — skipping" >&2
+    note "$tag: lock has no sysop_commit anchor — skipping" >&2
     return 1
   fi
 
   if ! git -C "$REPO_ROOT" rev-parse --verify "${old_commit}^{commit}" >/dev/null 2>&1; then
-    note "divergence detection: ${SYSOP_SRC_CLONE:-$REPO_ROOT} missing commit ${old_commit:0:12} — skipping" >&2
+    note "$tag: ${SYSOP_SRC_CLONE:-$REPO_ROOT} missing commit ${old_commit:0:12} — skipping" >&2
     note "  (try: git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} fetch, then re-run --update)" >&2
     return 1
   fi
@@ -1677,7 +1723,7 @@ reconstruct_old_install() {
   if ! git -C "$REPO_ROOT" worktree add --detach --quiet "$tmp_worktree" "$old_commit" 2>/dev/null; then
     # Kept registered with the trap: a git that registered the worktree and still
     # failed would otherwise leak it, and removing a path never created is harmless.
-    note "divergence detection: failed to materialise Sysop at ${old_commit:0:12} — skipping" >&2
+    note "$tag: failed to materialise Sysop at ${old_commit:0:12} — skipping" >&2
     return 1
   fi
 
@@ -1685,7 +1731,7 @@ reconstruct_old_install() {
   local rc=0
 
   if [[ ! -f "$tmp_worktree/install.sh" ]]; then
-    note "divergence detection: ${old_commit:0:12} pre-dates the bash installer — skipping" >&2
+    note "$tag: ${old_commit:0:12} pre-dates the bash installer — skipping" >&2
     rc=1
   else
     # Shadow target needs to be a clean git repo so OLD install.sh's
@@ -1699,8 +1745,22 @@ reconstruct_old_install() {
     # role-overridden skill would then be misreported as a committed local edit.
     # Seed the override into the shadow so the OLD installer's resolver (if it
     # has one) resolves identically to what the consumer committed. Harmless when
-    # the OLD installer predates the resolver (the file is simply ignored).
-    if [[ -f "$TARGET/.claude/served_models.local.yml" ]]; then
+    # the OLD installer predates the resolver (the file is simply ignored). This is
+    # copy_file's shadow; the warning's own comparison, which also covers an
+    # override that postdates the committed skills, builds its shadows with four
+    # arguments (_divergence_prepare_layers).
+    if [[ -n "$layers" ]]; then
+      # A layer that fails to copy would build a shadow without it, which reads as
+      # that layer's absence; fail the build instead, so the caller falls back.
+      local _lf
+      for _lf in "${SYSOP_LAYER_FILES[@]}"; do
+        [[ -f "$layers/$_lf" ]] || continue
+        if ! { mkdir -p "$(dirname "$shadow/$_lf")" && cp "$layers/$_lf" "$shadow/$_lf"; } 2>/dev/null; then
+          note "$tag: could not seed $_lf into the shadow — skipping" >&2
+          rc=1
+        fi
+      done
+    elif [[ -f "$TARGET/.claude/served_models.local.yml" ]]; then
       mkdir -p "$shadow/.claude"
       cp "$TARGET/.claude/served_models.local.yml" "$shadow/.claude/served_models.local.yml" 2>/dev/null || true
     fi
@@ -1711,7 +1771,9 @@ reconstruct_old_install() {
     # dirty repo; --no-arm-hooks skips hook installation (harmless against
     # the shadow but pointless); --yes skips prompts.
     local old_stderr; old_stderr="$(mktemp)"; DIVERGENCE_STDERR_TMP="$old_stderr"
-    if ! bash "$tmp_worktree/install.sh" "$shadow" \
+    if [[ "$rc" -ne 0 ]]; then
+      :
+    elif ! PATH="$run_path" bash "$tmp_worktree/install.sh" "$shadow" \
            --packs "$packs_csv" \
            --force --no-arm-hooks --yes \
            >/dev/null 2>"$old_stderr"; then
@@ -1719,16 +1781,16 @@ reconstruct_old_install() {
       # commit (9953f11, the only pre-Phase-5 commit where install.sh existed)
       # would reject the flag. Retry once without it.
       if grep -qE "Unknown option:.*--no-arm-hooks|invalid option.*--no-arm-hooks" "$old_stderr"; then
-        note "divergence detection: OLD install.sh (${old_commit:0:12}) pre-dates --no-arm-hooks — retrying without it" >&2
-        if ! bash "$tmp_worktree/install.sh" "$shadow" \
+        note "$tag: OLD install.sh (${old_commit:0:12}) pre-dates --no-arm-hooks — retrying without it" >&2
+        if ! PATH="$run_path" bash "$tmp_worktree/install.sh" "$shadow" \
                --packs "$packs_csv" \
                --force --yes \
                >/dev/null 2>"$old_stderr"; then
-          note "divergence detection: OLD install.sh (${old_commit:0:12}) exited non-zero on retry — skipping" >&2
+          note "$tag: OLD install.sh (${old_commit:0:12}) exited non-zero on retry — skipping" >&2
           rc=1
         fi
       else
-        note "divergence detection: OLD install.sh (${old_commit:0:12}) exited non-zero — skipping" >&2
+        note "$tag: OLD install.sh (${old_commit:0:12}) exited non-zero — skipping" >&2
         rc=1
       fi
     fi
@@ -1738,7 +1800,7 @@ reconstruct_old_install() {
   # Loud, not `|| true`: a failed removal leaves a registered worktree in the Sysop
   # source's `git worktree list`, and nothing else would ever say so.
   if ! git -C "$REPO_ROOT" worktree remove --force "$tmp_worktree" >/dev/null 2>&1; then
-    note "divergence detection: could not remove its temporary worktree $tmp_worktree" >&2
+    note "$tag: could not remove its temporary worktree $tmp_worktree" >&2
     # The clone, not $REPO_ROOT: under --ref that is a temp worktree the EXIT trap
     # deletes, so a remedy naming it could not run (Phase 370's round).
     note "  remove it by hand: git -C ${SYSOP_SRC_CLONE:-$REPO_ROOT} worktree remove --force $tmp_worktree" >&2
@@ -1753,6 +1815,20 @@ reconstruct_old_install() {
 # preserves user edits there) and any path missing from either side
 # (additions / removals are not "consumer edits being overwritten").
 #
+# $shadow is the old install built with the consumer's current layer files
+# (DIVERGENCE_COMPARE_BASE). A path that differs from it gets a second look: the
+# old install built with the layer files as committed at the commit that last
+# changed that path (_divergence_anchor_shadow). Content the old installer
+# produced from the layers in effect when it was written — an override added or
+# changed since, an overlay or substitutions file that was already applied — then
+# matches one of the two, and a hand edit matches neither. The +A / -R counts are
+# taken against the anchored shadow when one was built, since that is the one the
+# committed content came from.
+#
+# HEAD paths are read as `HEAD:./<path>`: a bare `HEAD:<path>` resolves from the
+# repository root, so a target that is a subdirectory of its repo read another
+# tree's files, or none.
+#
 # Args: <shadow_target> <managed_path1> [<managed_path2> ...]
 detect_committed_divergence() {
   local shadow="$1"; shift
@@ -1761,18 +1837,27 @@ detect_committed_divergence() {
     [[ "$mp" == ".claude/settings.json" ]] && continue
     # If the managed path isn't tracked in HEAD, skip (it's a fresh add the
     # consumer hasn't committed yet — Phase 7 snapshot handles uncommitted).
-    if ! git -C "$TARGET" cat-file -e "HEAD:$mp" 2>/dev/null; then
+    if ! git -C "$TARGET" cat-file -e "HEAD:./$mp" 2>/dev/null; then
       continue
     fi
     # If the shadow doesn't have the path, OLD Sysop didn't write it
     # (e.g., this is a newly-added managed path from a new pack version).
     [[ -f "$shadow/$mp" ]] || continue
 
-    consumer_content="$(git -C "$TARGET" show "HEAD:$mp" 2>/dev/null || true)"
+    consumer_content="$(git -C "$TARGET" show "HEAD:./$mp" 2>/dev/null || true)"
     shadow_content="$(cat "$shadow/$mp" 2>/dev/null || true)"
 
     if [[ "$consumer_content" == "$shadow_content" ]]; then
       continue
+    fi
+
+    _divergence_anchor_shadow "$mp"
+    if [[ -n "$DIVERGENCE_ANCHOR_SHADOW" ]] && [[ "$DIVERGENCE_ANCHOR_SHADOW" != "$shadow" ]] \
+       && [[ -f "$DIVERGENCE_ANCHOR_SHADOW/$mp" ]]; then
+      shadow_content="$(cat "$DIVERGENCE_ANCHOR_SHADOW/$mp" 2>/dev/null || true)"
+      if [[ "$consumer_content" == "$shadow_content" ]]; then
+        continue
+      fi
     fi
 
     # Count lines unique to each side via `diff`.
@@ -1784,6 +1869,164 @@ detect_committed_divergence() {
                 | grep -c '^<' 2>/dev/null || true)
     DIVERGED_PATHS+=("$mp"$'\t'"${added:-0}"$'\t'"${removed:-0}")
   done
+}
+
+# The layer-set key of the target's working tree: one blob id per SYSOP_LAYER_FILES
+# entry, `-` for an absent file. Hashed with the path's filters, as `git add` would.
+_layer_key_worktree() {
+  local f oid key=""
+  for f in "${SYSOP_LAYER_FILES[@]}"; do
+    if [[ -f "$TARGET/$f" ]]; then
+      oid="$(git -C "$TARGET" hash-object -- "$f" 2>/dev/null)" || oid=""
+      key+="${oid:-unhashed},"
+    else
+      key+="-,"
+    fi
+  done
+  printf '%s' "$key"
+}
+
+# The layer-set key at <commit>, in _layer_key_worktree's shape. A layer that is not
+# a file at that commit counts as absent, as the installer's own `-f` test would;
+# an untracked one (DIVERGENCE_LAYER_UNTRACKED) is its working-tree copy.
+_layer_key_at() {
+  local c="$1" f oid key=""
+  for f in "${SYSOP_LAYER_FILES[@]}"; do
+    oid=""
+    if [[ -n "${DIVERGENCE_LAYER_UNTRACKED[$f]:-}" ]]; then
+      oid="$(git -C "$TARGET" hash-object -- "$f" 2>/dev/null)" || oid=""
+      key+="${oid:-unhashed},"
+      continue
+    fi
+    if [[ "$(git -C "$TARGET" cat-file -t "$c:./$f" 2>/dev/null)" == "blob" ]]; then
+      oid="$(git -C "$TARGET" rev-parse --verify -q "$c:./$f" 2>/dev/null)" || oid=""
+    fi
+    key+="${oid:--},"
+  done
+  printf '%s' "$key"
+}
+
+# Write the layer files as committed at <commit> under <dir>, at their paths.
+_layer_materialise_at() {
+  local c="$1" dir="$2" f
+  mkdir -p "$dir" || return 1
+  for f in "${SYSOP_LAYER_FILES[@]}"; do
+    if [[ -n "${DIVERGENCE_LAYER_UNTRACKED[$f]:-}" ]]; then
+      mkdir -p "$(dirname "$dir/$f")" && cp "$TARGET/$f" "$dir/$f" || return 1
+      continue
+    fi
+    [[ "$(git -C "$TARGET" cat-file -t "$c:./$f" 2>/dev/null)" == "blob" ]] || continue
+    # A committed symlink is a blob holding the link's target path, not the file
+    # the installer read, so this layer set cannot be rebuilt: fail, and the
+    # caller says so and compares without it (a false warning, never a hidden edit).
+    [[ "$(git -C "$TARGET" ls-tree "$c" -- "$f" 2>/dev/null)" != 120000* ]] || return 1
+    mkdir -p "$(dirname "$dir/$f")" || return 1
+    git -C "$TARGET" cat-file blob "$c:./$f" >"$dir/$f" 2>/dev/null || return 1
+  done
+  return 0
+}
+
+# Said once per run: the comparison falls back to a shadow built without the
+# layers the failed build needed, so a path those layers shaped may be reported.
+_divergence_layer_note() {
+  [[ "$DIVERGENCE_LAYER_NOTED" -eq 1 ]] && return 0
+  DIVERGENCE_LAYER_NOTED=1
+  note "divergence detection: could not rebuild the old install with your .claude layer files (see above);" >&2
+  note "  a managed path they shaped may be listed below although you did not edit it" >&2
+}
+
+# Build the old install seeded with the layer files under <layers_dir>, and record
+# it under <key>; record "" when the build fails.
+_divergence_build_layer_shadow() {
+  local key="$1" layers="$2" shadow
+  DIVERGENCE_LAYER_SEQ=$((DIVERGENCE_LAYER_SEQ + 1))
+  shadow="$DIVERGENCE_LAYER_TMP/shadow-$DIVERGENCE_LAYER_SEQ"
+  if mkdir -p "$shadow" \
+     && reconstruct_old_install "$OLD_COMMIT" "$shadow" "$DIVERGENCE_PACKS_CSV" "$layers"; then
+    DIVERGENCE_LAYER_SHADOWS[$key]="$shadow"
+    return 0
+  fi
+  DIVERGENCE_LAYER_SHADOWS[$key]=""
+  return 1
+}
+
+# Set up the layer-aware comparison once DIVERGENCE_SHADOW is built, and set
+# DIVERGENCE_COMPARE_BASE, the shadow detect_committed_divergence reads first: the
+# old install built with the consumer's current layer files when any exists, else
+# DIVERGENCE_SHADOW (which then has no layer seeded, so is the same build). The
+# layered builds find a PyYAML-capable python3 the way the real run does, through
+# the consumer's venv: the shadow has no venv of its own, and without PyYAML the
+# old installer skips the role override and fails the checks.yml overlay merge and
+# the substitution step (the markdown overlays are a plain append and need none).
+# Nothing here can stop the update; a failure degrades to DIVERGENCE_SHADOW.
+#
+# Args: <packs_csv>
+_divergence_prepare_layers() {
+  DIVERGENCE_PACKS_CSV="$1"
+  DIVERGENCE_COMPARE_BASE="$DIVERGENCE_SHADOW"
+  DIVERGENCE_LAYER_SHADOWS=()
+  DIVERGENCE_LAYER_UNTRACKED=()
+  local f
+  for f in "${SYSOP_LAYER_FILES[@]}"; do
+    if [[ -f "$TARGET/$f" ]] && ! git -C "$TARGET" cat-file -e "HEAD:./$f" 2>/dev/null; then
+      DIVERGENCE_LAYER_UNTRACKED[$f]=1
+    fi
+  done
+  DIVERGENCE_LAYER_TMP="$(mktemp -d 2>/dev/null)" || DIVERGENCE_LAYER_TMP=""
+  [[ -n "$DIVERGENCE_LAYER_TMP" ]] || return 0
+  local py
+  if py="$(pick_python_with_yaml)" && [[ "$py" == /* ]]; then
+    # Guarded whole: errexit is on here, and a wrapper that cannot be written only
+    # costs the layered builds their PyYAML (reconstruct_old_install tests `-x`).
+    if ! { mkdir -p "$DIVERGENCE_LAYER_TMP/bin" \
+           && printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$py" >"$DIVERGENCE_LAYER_TMP/bin/python3" \
+           && chmod +x "$DIVERGENCE_LAYER_TMP/bin/python3"; } 2>/dev/null; then
+      rm -f "$DIVERGENCE_LAYER_TMP/bin/python3" 2>/dev/null || true
+    fi
+  fi
+  local key; key="$(_layer_key_worktree)"
+  local empty=""
+  for f in "${SYSOP_LAYER_FILES[@]}"; do empty+="-,"; done
+  if [[ "$key" == "$empty" ]]; then
+    DIVERGENCE_LAYER_SHADOWS[$key]="$DIVERGENCE_SHADOW"
+    return 0
+  fi
+  local cur="$DIVERGENCE_LAYER_TMP/layers-current"
+  mkdir -p "$cur" || { DIVERGENCE_LAYER_SHADOWS[$key]="$DIVERGENCE_SHADOW"; return 0; }
+  for f in "${SYSOP_LAYER_FILES[@]}"; do
+    [[ -f "$TARGET/$f" ]] || continue
+    mkdir -p "$(dirname "$cur/$f")" && cp "$TARGET/$f" "$cur/$f" || {
+      DIVERGENCE_LAYER_SHADOWS[$key]="$DIVERGENCE_SHADOW"; _divergence_layer_note; return 0; }
+  done
+  if _divergence_build_layer_shadow "$key" "$cur"; then
+    DIVERGENCE_COMPARE_BASE="${DIVERGENCE_LAYER_SHADOWS[$key]}"
+  else
+    DIVERGENCE_LAYER_SHADOWS[$key]="$DIVERGENCE_SHADOW"
+    _divergence_layer_note
+  fi
+}
+
+# Set DIVERGENCE_ANCHOR_SHADOW to the old install built with the layer files as
+# committed at the commit that last changed <managed_path>, building it on first
+# use (one build per distinct layer set). Empty when there is no such commit, the
+# comparison was never set up, or the build failed.
+_divergence_anchor_shadow() {
+  DIVERGENCE_ANCHOR_SHADOW=""
+  [[ -n "$DIVERGENCE_LAYER_TMP" ]] || return 0
+  local mp="$1" c key
+  c="$(git -C "$TARGET" log -1 --format=%H -- "$mp" 2>/dev/null)" || return 0
+  [[ -n "$c" ]] || return 0
+  key="$(_layer_key_at "$c")"
+  if [[ -z "${DIVERGENCE_LAYER_SHADOWS[$key]+set}" ]]; then
+    local dir="$DIVERGENCE_LAYER_TMP/layers-at-${c:0:12}"
+    if _layer_materialise_at "$c" "$dir"; then
+      _divergence_build_layer_shadow "$key" "$dir" || _divergence_layer_note
+    else
+      DIVERGENCE_LAYER_SHADOWS[$key]=""
+      _divergence_layer_note
+    fi
+  fi
+  DIVERGENCE_ANCHOR_SHADOW="${DIVERGENCE_LAYER_SHADOWS[$key]}"
 }
 
 # Print the pre-overwrite divergence warning block. No-op if DIVERGED_PATHS
@@ -1803,7 +2046,7 @@ report_pre_overwrite_divergence() {
   done
   say ""
   say "  Before committing the update, recover any lost content via:"
-  say "    git -C $TARGET show HEAD:<path>"
+  say "    git -C $TARGET show HEAD:./<path>"
   say ""
 }
 
@@ -3885,13 +4128,31 @@ resolve_skill_models() {
   # a verdict invented out of a code the gate does not understand. Unreachable
   # with today's checker (0/1/2 only), and the point is that a future one degrades
   # to "no verdict" instead of to "your mapping is wrong". Only rc 1 is a verdict.
-  local _checker
+  local _checker _skips_shown=0
   if _checker="$(_model_role_checker_path vendored)"; then
     local _chk _rc=0
     _chk="$(_check_model_roles "$_py" "$_checker" "$skills" "$config" "$localcfg")" || _rc=$?
     case "$_rc" in
       0)
-        : # the mapping resolves; fall through to the rewrite
+        # The mapping resolves; fall through to the rewrite. `Q-349`: a pass over a partial
+        # scan says so. The checker's green line then ends `(<what> skipped).` and its
+        # `note:` lines name the files and directories; this arm used to discard both.
+        local _ok="" _scope="" _l
+        while IFS= read -r _l; do
+          if [[ "$_l" == "OK: "* ]]; then _ok="$_l"; fi
+        done <<<"$_chk"
+        if [[ "$_ok" == *" skipped)." ]]; then
+          _scope="${_ok##*") ("}"
+          _scope="${_scope%")."}"
+        fi
+        if [[ -n "$_scope" && "$_scope" != "$_ok" ]]; then
+          note "⚠ the model-role check passed over what it could read ($_scope):"
+          while IFS= read -r _l; do
+            if [[ "$_l" == "note: "* ]]; then printf '    %s\n' "$_l"; fi
+          done <<<"$_chk"
+          record "model-roles: check passed over what it could read ($_scope; see warning above)"
+          _skips_shown=1
+        fi
         ;;
       1)
         # The one real verdict: the checker read everything it needed and the
@@ -3963,6 +4224,19 @@ resolve_skill_models() {
   if _out="$(PYTHONDONTWRITEBYTECODE=1 "$_py" "$script" --root "$skills" --config "$config" --local "$localcfg" --apply --quiet 2>&1)"; then
     MODEL_ROLES_APPLIED=1
     record "model-roles: $(printf '%s' "$_out" | tail -1)"
+    # `Q-349`: the summary above carries the resolver's `(<what> skipped)`, and its `note:`
+    # lines name what; `tail -1` drops them. Shown here unless the check already named them.
+    case "$(printf '%s' "$_out" | tail -1)" in
+      *" skipped).")
+        if [[ "$_skips_shown" -eq 0 ]]; then
+          local _rl
+          note "⚠ the model-role rewrite skipped what it could not read:"
+          while IFS= read -r _rl; do
+            if [[ "$_rl" == "  note: "* ]]; then printf '    %s\n' "${_rl#  }"; fi
+          done <<<"$_out"
+        fi
+        ;;
+    esac
     # Phase 381 (`Q-675`): a resolver from before per-role efforts (a preserved
     # consumer-modified copy) applies the models and leaves every effort segment as
     # shipped, at exit 0. Its summary carries no `effort(s)` count; say so.
@@ -4947,7 +5221,7 @@ _ns_move_issues_log() {
 # delta report (which runs after the move) joins against new-layout paths, and
 # copy_file's preservation (keyed on the moved shadow ancestor) lines up. Called
 # AFTER report_pre_overwrite_divergence (which needs old spellings for its
-# `git show HEAD:<path>` recovery hints).
+# `git show HEAD:./<path>` recovery hints).
 _ns_remap_diverged_paths() {
   (( ${#DIVERGED_PATHS[@]} == 0 )) && return 0
   local i entry mp added removed
@@ -6201,7 +6475,11 @@ main() {
       else
         _dc_managed=("${old_managed[@]}")
       fi
-      detect_committed_divergence "$DIVERGENCE_SHADOW" "${_dc_managed[@]}"
+      # The warning compares against shadows rebuilt with the consumer's layer
+      # files (_divergence_prepare_layers); DIVERGENCE_SHADOW itself stays as built
+      # above, because copy_file's sysop/scripts preservation reads it.
+      _divergence_prepare_layers "$divergence_packs_csv"
+      detect_committed_divergence "$DIVERGENCE_COMPARE_BASE" "${_dc_managed[@]}"
       if (( ${#DIVERGED_PATHS[@]} == 0 )); then
         note "no committed local edits detected"
       else
@@ -6273,7 +6551,7 @@ main() {
   # (keyed on the moved shadow ancestor) and the obsolete sweep both operate on
   # new-layout paths with zero special-casing. Ordering is load-bearing — the
   # remap runs AFTER report_pre_overwrite_divergence (which needs old spellings
-  # for its `git show HEAD:<path>` hints) and BEFORE report_post_overwrite_deltas.
+  # for its `git show HEAD:./<path>` hints) and BEFORE report_post_overwrite_deltas.
   if [[ "$MIGRATION_MODE" -eq 1 ]] && [[ "$DRY_RUN" -eq 0 ]]; then
     hdr "namespace migration (Phase 128)"
     note "moving ${#NS_MOVE_OLD[@]} vendor path(s) into sysop/"
@@ -6410,7 +6688,7 @@ main() {
       hdr "obsolete files"
       if [[ "$DOWNGRADE" -eq 1 ]]; then
         note "full → loop: these are the lifecycle paths. One you edited goes too; the"
-        note "  committed copy stays in git history (git show HEAD:<path>)."
+        note "  committed copy stays in git history (git show HEAD:./<path>)."
       fi
       for d in "${to_remove[@]}"; do
         note "remove: $d"

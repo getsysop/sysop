@@ -8,8 +8,10 @@
 # ──────────────────────────────────────────────────────────────
 # Worked example (Python web service + Next.js frontend).
 #
-# This file is the original gdp-shaped pre-merge-commit preserved
-# verbatim for reference. The shipped skeleton lives one directory
+# This file began as the original gdp-shaped pre-merge-commit, kept
+# for reference. It is no longer verbatim: pytest now runs on the
+# main checkout's venv, and the .env source is guarded (the comments
+# at each say why). The shipped skeleton lives one directory
 # up at core/companion/git-hooks/pre-merge-commit. Helper conventions
 # in this file (agent/*.py, frontend/app/, migrations/*.sql,
 # __tests__/, npm run build) reflect the source project's layout —
@@ -50,15 +52,56 @@ FAILED=false
 # ── Backend tests (if any .py files changed) ─────────────────
 if echo "$CHANGED" | grep -q '\.py$'; then
   echo "🐍 Python files changed — running pytest..."
-  # Activate venv if available (degrades gracefully if absent)
-  if [[ -f "$REPO_ROOT/.venv/bin/activate" ]]; then
-    # shellcheck disable=SC1091
-    source "$REPO_ROOT/.venv/bin/activate"
+  # Python resolution order:
+  #   1. <main-repo-root>/.venv/bin/python3 when this is a linked
+  #      worktree, resolved via `git rev-parse --git-common-dir`. Only
+  #      one checkout can hold main, and when it is a linked worktree,
+  #      --show-toplevel names the worktree, which usually has no .venv
+  #      of its own.
+  #   2. This checkout's own .venv/bin/python3 (differs from 1 only in
+  #      a linked worktree).
+  #   3. python3 on PATH, for a fresh clone with no venv yet.
+  # The resolved venv's activate is sourced too, so anything the tests
+  # run by bare name (python3, a venv console script) finds the venv.
+  # Only a linked worktree's git dir differs from the common dir, so only
+  # there is the main checkout looked up. In the main checkout REPO_ROOT is
+  # already right, and the common dir's parent is not the checkout when the
+  # repository uses --separate-git-dir.
+  GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || true)
+  GIT_DIR_NOW=$(git rev-parse --git-dir 2>/dev/null || true)
+  MAIN_REPO_ROOT=""
+  if [[ -n "$GIT_COMMON_DIR" ]] && [[ -n "$GIT_DIR_NOW" ]]; then
+    COMMON_ABS="$(CDPATH= cd "$GIT_COMMON_DIR" 2>/dev/null && pwd -P)" || COMMON_ABS=""
+    GIT_DIR_ABS="$(CDPATH= cd "$GIT_DIR_NOW" 2>/dev/null && pwd -P)" || GIT_DIR_ABS=""
+    if [[ -n "$COMMON_ABS" ]] && [[ -n "$GIT_DIR_ABS" ]] && [[ "$COMMON_ABS" != "$GIT_DIR_ABS" ]]; then
+      MAIN_REPO_ROOT="$(dirname "$COMMON_ABS")"
+    fi
   fi
-  # Load DB_PASS and other secrets required for DB-dependent tests
-  # shellcheck disable=SC1091
-  source "$REPO_ROOT/.env" 2>/dev/null || true
-  if (cd "$REPO_ROOT" && APP_ENV=test python3 -m pytest -q 2>&1); then
+  PYTHON3=""
+  VENV_DIR=""
+  for CANDIDATE in "$MAIN_REPO_ROOT" "$REPO_ROOT"; do
+    if [[ -n "$CANDIDATE" ]] && [[ -x "$CANDIDATE/.venv/bin/python3" ]]; then
+      VENV_DIR="$CANDIDATE/.venv"
+      PYTHON3="$VENV_DIR/bin/python3"
+      break
+    fi
+  done
+  if [[ -z "$PYTHON3" ]]; then
+    PYTHON3=python3
+  fi
+  if [[ -n "$VENV_DIR" ]] && [[ -f "$VENV_DIR/bin/activate" ]]; then
+    # shellcheck disable=SC1091
+    source "$VENV_DIR/bin/activate"
+  fi
+  # Load DB_PASS and other secrets required for DB-dependent tests.
+  # The -f guard is needed beside `|| true`: bash 3.2 (macOS /bin/bash)
+  # under set -e exits the shell when `source` cannot read its file,
+  # `|| true` or not, so a checkout without .env ended the hook here.
+  if [[ -f "$REPO_ROOT/.env" ]]; then
+    # shellcheck disable=SC1091
+    source "$REPO_ROOT/.env" 2>/dev/null || true
+  fi
+  if (cd "$REPO_ROOT" && APP_ENV=test "$PYTHON3" -m pytest -q 2>&1); then
     echo "✅ pytest passed."
   else
     echo "❌ pytest FAILED. Merge blocked."

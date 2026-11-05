@@ -11,8 +11,8 @@
 # and frontend-build commands based on the conventions in
 # CLAUDE.md and convention_map.md.
 # See core/companion/git-hooks/examples/pre-merge-commit-python.example
-# for a worked example (Python web service + Next.js frontend). It is kept
-# verbatim and still hard-codes `main`: copy its checks, not its branch line —
+# for a worked example (Python web service + Next.js frontend). It still
+# hard-codes `main`: copy its checks, not its branch line —
 # the resolution block below is what gates a `master`-default repository.
 #
 # SECURITY: this hook intentionally does NOT source .env (or any
@@ -91,13 +91,35 @@ FAILED=false
 # === BLOCKING CHECKS ===
 
 # Backend tests — uncomment and adapt to your stack.
+# The interpreter is the MAIN checkout's venv, found through --git-common-dir:
+# a linked worktree holding the protected branch has no .venv of its own, so a
+# --show-toplevel lookup misses it and pytest runs on whatever python3 is on PATH.
+# The lookup runs only in a linked worktree (its git dir differs from the common
+# dir), because under --separate-git-dir the common dir's parent is not the checkout.
 # if echo "$CHANGED" | grep -q '\.py$'; then
 #   echo "🐍 Python files changed — running pytest..."
-#   if [[ -f "$REPO_ROOT/.venv/bin/activate" ]]; then
-#     # shellcheck disable=SC1091
-#     source "$REPO_ROOT/.venv/bin/activate"
+#   GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || true)
+#   GIT_DIR_NOW=$(git rev-parse --git-dir 2>/dev/null || true)
+#   MAIN_REPO_ROOT=""
+#   if [[ -n "$GIT_COMMON_DIR" ]] && [[ -n "$GIT_DIR_NOW" ]]; then
+#     COMMON_ABS="$(CDPATH= cd "$GIT_COMMON_DIR" 2>/dev/null && pwd -P)" || COMMON_ABS=""
+#     GIT_DIR_ABS="$(CDPATH= cd "$GIT_DIR_NOW" 2>/dev/null && pwd -P)" || GIT_DIR_ABS=""
+#     if [[ -n "$COMMON_ABS" ]] && [[ -n "$GIT_DIR_ABS" ]] && [[ "$COMMON_ABS" != "$GIT_DIR_ABS" ]]; then
+#       MAIN_REPO_ROOT="$(dirname "$COMMON_ABS")"
+#     fi
 #   fi
-#   if (cd "$REPO_ROOT" && APP_ENV=test python3 -m pytest -q 2>&1); then
+#   PYTHON3=""; VENV_DIR=""
+#   for CANDIDATE in "$MAIN_REPO_ROOT" "$REPO_ROOT"; do
+#     if [[ -n "$CANDIDATE" ]] && [[ -x "$CANDIDATE/.venv/bin/python3" ]]; then
+#       VENV_DIR="$CANDIDATE/.venv"; PYTHON3="$VENV_DIR/bin/python3"; break
+#     fi
+#   done
+#   [[ -n "$PYTHON3" ]] || PYTHON3=python3
+#   if [[ -n "$VENV_DIR" ]] && [[ -f "$VENV_DIR/bin/activate" ]]; then
+#     # shellcheck disable=SC1091
+#     source "$VENV_DIR/bin/activate"
+#   fi
+#   if (cd "$REPO_ROOT" && APP_ENV=test "$PYTHON3" -m pytest -q 2>&1); then
 #     echo "✅ pytest passed."
 #   else
 #     echo "❌ pytest FAILED. Merge blocked."

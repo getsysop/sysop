@@ -76,6 +76,8 @@ LOOP_SCRIPTS = {
     "round_receipt.py",
     # Phase 461 (`Q-404`): the tracker write mutex `archive_review_tasks.py` imports.
     "_tracker_lock.py",
+    # Phase 466 (`Q-350`): the skills walk the three model-role scripts import.
+    "_skill_walk.py",
 }
 EXCLUDED_SCRIPTS = {
     # Phase 386 (`Q-409` P3): heredocs of `/review-close` (1-pre, 3c, 3b, 4c) and

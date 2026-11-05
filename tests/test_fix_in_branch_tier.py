@@ -3107,7 +3107,7 @@ PIN_HASHES = {
     "review-close 2b twin spawn": "2ea6d8761b288253",  # Phase 421 (`Q-665`): the twin's scratch directory comes from `review_pins.py add`; Phase 389: `security-gate` follows `reasoning` (opus, `high`) after the replay; Phase 381: the twin pins `security-gate` (`Q-669`)
     "review-close 2b lookup": "3597203303ea6c0f",  # Phase 394 (`Q-667`)
     "review-close 2b twin lookup": "38521f0c4fee36b3",  # Phase 394 (`Q-667`); Phase 395 moved its end anchor, not its text
-    "review-close 2b no-conventions stub and arm": "67616c079205ef84",  # Phase 421 (`Q-665`): the heading check greps `^#+`, since `{1,6}` binds no rule; Phase 406 (P5)
+    "review-close 2b no-conventions stub and arm": "84193cbe8f847fe2",  # Phase 465 (`Q-361`): the measurement skips fenced lines, so the zero check reads each grep hit three ways; Phase 421 (`Q-665`): the heading check greps `^#+`, since `{1,6}` binds no rule; Phase 406 (P5)
     "review-close 2b large-diff stub and arm": "49dde0b8255d3381",  # Phase 421 (`Q-665`): the retrieval command runs through `git_ro.py`; Phase 406 (P5)
     "review-close 2b leak stub and arm": "cae75ec76b7b8740",  # Phase 421's round (lens B, dimension 10): the arm's note on reading the baselines by relative path moved to REFERENCE.md; Phase 421 (`Q-665`): pins under `sysop/runtime/pins/`, `review_pins.py check` and `restore-hooks-path`; Phase 406 (P5)
     "review-close 2b twin-spawn stub": "3cbbb8cdf487487a",  # Phase 406 (P5)

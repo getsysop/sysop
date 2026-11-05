@@ -1653,3 +1653,84 @@ def test_a_current_resolver_does_not_warn_about_efforts(tmp_path):
     result = _run_install(root, "--packs", "python", "--no-arm-hooks")
     assert "predates per-role efforts" not in result.stdout
     assert "effort(s)" in result.stdout, _model_role_block(result.stdout)
+
+
+# ── `Q-349` + `Q-350` (Phase 466): a passing gate states what it skipped, where it is read ──
+# The checker's `note:` and its green line's `(… skipped)` suffix were discarded on rc 0,
+# and the resolver's note was dropped by `tail -1`. Driven from a source copy: an
+# `--update` from the working tree could register worktrees in its shared `.git`.
+
+_SKIP_HEADLINE = "⚠ the model-role check passed over what it could read"
+
+
+def _summary(stdout):
+    return [ln for ln in stdout.splitlines() if ln.startswith("  • model-roles: ")]
+
+
+def test_a_skipped_file_reaches_the_update_output_and_its_summary(tmp_path):
+    src = _source_copy(tmp_path)
+    root = _make_consumer(tmp_path / "consumer")
+    first = _run_install_from(src / "install.sh", root, "--packs", "python", "--no-arm-hooks")
+    assert _SKIP_HEADLINE not in first.stdout, "a clean install claimed a skip"
+    assert not any("skipped" in ln for ln in _summary(first.stdout)), first.stdout
+    (root / ".claude/skills/my-own").mkdir(parents=True)
+    (root / ".claude/skills/my-own/NOTES.md").write_bytes(
+        "# Notas del café, año 2026\n".encode("latin-1"))
+
+    out = _run_install_from(src / "install.sh", root, "--update", "--no-arm-hooks").stdout
+
+    assert f"{_SKIP_HEADLINE} (1 unreadable file(s) skipped):" in out, out
+    assert any(ln.strip().startswith("note: skipped 1 file(s)") and "my-own/NOTES.md" in ln
+               for ln in _indented_payload(out)), "the checker's note did not name the file"
+    summary = _summary(out)
+    assert any(ln.startswith("  • model-roles: check passed over what it could read "
+                             "(1 unreadable file(s) skipped;") for ln in summary), summary
+    assert any(ln.startswith("  • model-roles: APPLIED:")
+               and ln.endswith("(1 unreadable file(s) skipped).") for ln in summary), summary
+    assert "the model-role rewrite skipped" not in out, "the same skip was shown twice"
+
+
+def test_an_unlistable_directory_reaches_the_update_output_and_its_summary(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root lists a mode-000 directory, so the fixture cannot reproduce")
+    src = _source_copy(tmp_path)
+    root = _make_consumer(tmp_path / "consumer")
+    _run_install_from(src / "install.sh", root, "--packs", "python", "--no-arm-hooks")
+    locked = root / ".claude/skills/my-locked"
+    locked.mkdir(parents=True)
+    (locked / "SKILL.md").write_text("---\nname: mine\nmodel: opus\n---\n")
+    locked.chmod(0o000)
+    try:
+        out = _run_install_from(src / "install.sh", root, "--update", "--no-arm-hooks").stdout
+    finally:
+        locked.chmod(0o755)
+
+    assert f"{_SKIP_HEADLINE} (1 unlistable directory skipped):" in out, out
+    assert any(ln.strip().startswith("note: could not list 1 directory") and "my-locked" in ln
+               for ln in _indented_payload(out)), "the checker's note did not name the directory"
+    summary = _summary(out)
+    assert any("check passed over what it could read (1 unlistable directory skipped;" in ln
+               for ln in summary), summary
+    assert any(ln.startswith("  • model-roles: APPLIED:")
+               and ln.endswith("(1 unlistable directory skipped).") for ln in summary), summary
+
+
+def test_with_no_gate_the_resolvers_skip_is_shown(tmp_path):
+    """With the checker absent (or unusable) the resolver's note is the only one; it is
+    shown under its own headline rather than left to the summary's count."""
+    src = _source_copy(tmp_path)
+    (src / "core/companion/scripts/check_skill_models.py").unlink()
+    _commit_source(src)
+    root = _make_consumer(tmp_path / "consumer")
+    _run_install_from(src / "install.sh", root, "--packs", "python", "--no-arm-hooks")
+    (root / ".claude/skills/my-own").mkdir(parents=True)
+    (root / ".claude/skills/my-own/NOTES.md").write_bytes(
+        "# Notas del café, año 2026\n".encode("latin-1"))
+
+    out = _run_install_from(src / "install.sh", root, "--update", "--no-arm-hooks").stdout
+
+    assert "not present in the source tree or the vendor dir" in out, "vacuity: the gate ran"
+    assert "⚠ the model-role rewrite skipped what it could not read:" in out, out
+    assert any(ln.strip().startswith("note: skipped 1 file(s)") and "my-own/NOTES.md" in ln
+               for ln in _indented_payload(out)), "the resolver's note did not name the file"
+    assert _SKIP_HEADLINE not in out

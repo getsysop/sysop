@@ -684,3 +684,131 @@ def test_pip_audit_console_crash_surfaces_real_error_not_path_warn(tmp_path, cap
     assert "dependency audit did NOT run" in captured.err
     assert "pip_audit._vendor.x" in captured.err
     assert "not on PATH" not in captured.err
+
+
+# ── `severity` is warn-only validated (Q-284) ────────────────────────────────
+# A `severity` outside low/medium/high/critical warns on stderr, once per run,
+# and changes nothing else: exit code, findings and rendering stay as they were,
+# so an overlay with a private vocabulary still runs.
+
+import glob  # noqa: E402
+
+import yaml  # noqa: E402
+
+import run_checks.config as rc_config  # noqa: E402
+
+
+def _sev_check(cid, **extra):
+    check = {
+        "id": cid,
+        "paths": ["src/"],
+        "include": ["*.py"],
+        "pattern": r"eval\(",
+        "description": "eval",
+        "used_by": ["security-audit"],
+    }
+    check.update(extra)
+    return check
+
+
+def _sev_repo(tmp_path, checks):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "checks.yml").write_text(
+        yaml.safe_dump({"checks": checks}, sort_keys=False))
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text('x = eval("1")\n')
+
+
+def _sev_cli(tmp_path, monkeypatch, *extra, mode="both"):
+    monkeypatch.setattr(sys, "argv", ["run_checks", "--repo-root", str(tmp_path),
+                                      "--mode", mode, *extra])
+    try:
+        rci.main()
+    except SystemExit as e:
+        return e.code if e.code is not None else 0
+    return 0
+
+
+_TYPO_WARN = "warn: check typo-sev: severity 'hgh' is not one of low, medium, high, critical"
+
+
+def test_unknown_severity_warns_once_and_the_run_is_unchanged(tmp_path, monkeypatch, capsys):
+    _sev_repo(tmp_path, [_sev_check("typo-sev", severity="hgh")])
+    code = _sev_cli(tmp_path, monkeypatch)
+    out, err = capsys.readouterr()
+    assert code == 0
+    assert err.count(_TYPO_WARN) == 1, err
+    # Still runs, still renders the value as written (upper-cased).
+    assert "[typo-sev] HGH src/a.py:1 — eval" in out
+    assert "1 executed / 0 skipped / 0 failed" in err
+    # stdout carries findings only; the warning never reaches it.
+    assert "warn:" not in out
+
+
+def test_unknown_severity_warns_under_every_verb_and_mode(tmp_path, monkeypatch, capsys):
+    """Read against the whole registry: a mode that filters the check out, and
+    the baseline verbs that return before the mode pass, still warn, once."""
+    _sev_repo(tmp_path, [_sev_check("typo-sev", severity="hgh")])
+    for extra, mode in (((), "quality"), (("--update-baseline",), "both"),
+                        (("--print-keys",), "both")):
+        _sev_cli(tmp_path, monkeypatch, *extra, mode=mode)
+        out, err = capsys.readouterr()
+        assert err.count(_TYPO_WARN) == 1, (extra, mode, err)
+        assert "warn:" not in out, (extra, mode, out)
+
+
+def test_known_severities_in_any_case_and_absent_do_not_warn(tmp_path, monkeypatch, capsys):
+    checks = [_sev_check("a", severity="low"), _sev_check("b", severity="MEDIUM"),
+              _sev_check("c", severity="High"), _sev_check("d", severity="critical"),
+              _sev_check("e")]
+    _sev_repo(tmp_path, checks)
+    assert _sev_cli(tmp_path, monkeypatch) == 0
+    out, err = capsys.readouterr()
+    assert "severity" not in err, err
+    assert "[c] HIGH src/a.py:1" in out
+    assert "[e] MEDIUM src/a.py:1" in out
+
+
+def test_non_string_severity_warns_and_fails_no_more_than_before(tmp_path, monkeypatch, capsys):
+    """A number, a bool, an empty `severity:` and a list are not in the
+    vocabulary. The grep stage already fails such a check (it upper-cases the
+    value); the warning names why, and nothing else changes."""
+    lines = rc_config.severity_warnings([{"id": "n", "severity": 3}, {"id": "b", "severity": True},
+                               {"id": "z", "severity": None},
+                               {"id": "l", "severity": ["high"]}])
+    assert lines == [
+        f"warn: check {cid}: severity {shown} is not one of low, medium, high, critical"
+        for cid, shown in (("n", "3"), ("b", "True"), ("z", "None"), ("l", "['high']"))
+    ]
+    _sev_repo(tmp_path, [_sev_check("n", severity=3)])
+    assert _sev_cli(tmp_path, monkeypatch) == 0
+    _out, err = capsys.readouterr()
+    assert "warn: check n: severity 3 is not one of" in err
+    assert "warn: check n failed: 'int' object has no attribute 'upper'" in err
+
+
+def test_severity_warning_strips_control_characters():
+    (line,) = rc_config.severity_warnings([{"id": "x\x1b[31m", "severity": "\x1b[31mhigh\nnext"}])
+    assert "\x1b" not in line and "\n" not in line, repr(line)
+
+
+
+def test_severity_warning_caps_a_long_value():
+    """A pasted paragraph in `severity:` is named, not reprinted whole."""
+    (line,) = rc_config.severity_warnings([{"id": "x", "severity": "y" * 500}])
+    assert "y" * 81 not in line, len(line)
+    assert len(line) < 200, len(line)
+
+def test_every_shipped_fragment_uses_the_warned_vocabulary():
+    """The set a warning is measured against is the set the packs ship."""
+    root = os.path.join(os.path.dirname(__file__), "..")
+    frags = [os.path.join(root, "core", "companion", "checks.yml.fragment")]
+    frags += sorted(glob.glob(os.path.join(root, "packs", "*", "companion",
+                                           "checks.yml.fragment")))
+    seen = set()
+    for frag in frags:
+        with open(frag, encoding="utf-8") as fh:
+            checks = yaml.safe_load(fh)["checks"]
+        assert rc_config.severity_warnings(checks) == [], frag
+        seen |= {c["severity"] for c in checks if "severity" in c}
+    assert seen == set(rc_config.SEVERITIES), seen

@@ -121,6 +121,35 @@ def _validate_check(check, idx):
             )
 
 
+# The `severity` vocabulary the shipped fragments use (WORKFLOW.md § 6.5).
+SEVERITIES = ("low", "medium", "high", "critical")
+
+
+def severity_warnings(checks):
+    """One ``warn:`` line per check whose ``severity`` is present and unknown.
+
+    Warn-only, so a consumer overlay with a private vocabulary still loads and
+    runs; the caller prints the lines to stderr. Case is ignored, because the
+    grep stage upper-cases what it renders. An absent key is not warned (the
+    grep stage reports it as ``MEDIUM``). A non-string value (a number, a
+    bool, an empty ``severity:``) is warned too: the grep stage fails such a
+    check, and the other stages never read the field.
+    """
+    out = []
+    for check in checks:
+        if "severity" not in check:
+            continue
+        sev = check["severity"]
+        if isinstance(sev, str) and sev.lower() in SEVERITIES:
+            continue
+        out.append(
+            f"warn: check {_sanitize_log(check.get('id'))}: severity "
+            f"{_sanitize_log(repr(sev), max_len=80)} is not one of "
+            f"{', '.join(SEVERITIES)}"
+        )
+    return out
+
+
 def path_in_scope(rel_path, paths):
     """True when ``rel_path`` falls under any checks.yml ``paths:`` entry.
 

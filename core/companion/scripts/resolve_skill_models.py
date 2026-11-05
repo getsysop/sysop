@@ -51,6 +51,10 @@ from _model_roles import (  # noqa: E402  (path set above)
 )
 from migrate_skill_model import SKILLS_DIR  # noqa: E402
 
+# From its own module, not `migrate_skill_model`: an update keeps a consumer-modified
+# migrator, and its older walk crashed or went quiet on a directory it could not list.
+from _skill_walk import describe_skipped, walk_skill_files  # noqa: E402
+
 try:
     from _model_roles import managed_pins  # noqa: E402
 except ImportError:
@@ -158,7 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     effort_total = 0
     files_changed = 0
     unreadable: list[Path] = []
-    for path in iter_skill_files(root):
+    paths, unlistable = walk_skill_files(root)
+    for path in paths:
         original = read_skill_text(path)
         if original is None:
             # `Q-346` leg 1, found by running the checker's fix: with the gate no
@@ -191,12 +196,22 @@ def main(argv: list[str] | None = None) -> int:
             + ", ".join(_rel(u) for u in unreadable),
             file=sys.stderr,
         )
+    if unlistable:
+        noun = "directory" if len(unlistable) == 1 else "directories"
+        print(
+            f"  note: could not list {len(unlistable)} {noun}, so no file there was "
+            f"resolved: " + ", ".join(_rel(d) for d in unlistable),
+            file=sys.stderr,
+        )
     mode = "APPLIED" if args.apply else "DRY-RUN (no files written)"
     rolemap = ", ".join(f"{k}={v}" for k, v in sorted(roles.items()))
     effortmap = ", ".join(f"{k}={v}" for k, v in sorted(efforts.items()) if v) or "none"
+    # `Q-349`: the summary is the one line `install.sh` keeps (`tail -1`), so the scope a
+    # skip leaves goes on it, as on the checker's green line.
+    skipped = describe_skipped(unreadable, unlistable)
     print(f"{mode}: {total} pin(s) and {effort_total} effort(s) across {files_changed} file(s) "
           f"resolved [{rolemap}]"
-          f" [efforts: {effortmap}].")
+          f" [efforts: {effortmap}]" + (f" ({skipped})" if skipped else "") + ".")
     if not args.apply and (total or effort_total):
         print("Re-run with --apply to write these changes.")
     return 0

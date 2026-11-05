@@ -420,7 +420,8 @@ def test_the_check_mode_starts_against_an_older_model_roles(tmp_path):
     import shutil
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    for name in ("check_skill_models.py", "_model_roles.py", "migrate_skill_model.py"):
+    for name in ("check_skill_models.py", "_model_roles.py", "migrate_skill_model.py",
+                 "_skill_walk.py"):
         shutil.copy(SCRIPTS / name, scripts / name)
     mr = scripts / "_model_roles.py"
     text = mr.read_text()

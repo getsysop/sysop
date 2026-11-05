@@ -132,6 +132,10 @@ from _model_roles import (  # noqa: E402  (path set above)
 )
 from migrate_skill_model import SKILLS_DIR  # noqa: E402
 
+# From its own module, not `migrate_skill_model`: an update keeps a consumer-modified
+# migrator, and its older walk crashed or went quiet on a directory it could not list.
+from _skill_walk import describe_skipped, walk_skill_files  # noqa: E402
+
 try:
     from _model_roles import managed_pins  # noqa: E402
     _PRESERVED_GATE = False
@@ -291,8 +295,9 @@ def _print_defaults(config_path: Path, local_path: Path | None, root: Path) -> i
     print("To change a role, add one key to .claude/served_models.local.yml, e.g.")
     print("    roles:")
     print(f"      {eg.role}: {alt}")
-    print("then run `bash sysop/scripts/sysop-update.sh`: the skills' model pins are rewritten")
-    print("by the update, so an edit to the file changes nothing until then.")
+    print("then commit it and run `bash sysop/scripts/sysop-update.sh`: the skills' model pins")
+    print("are rewritten by the update, so an edit to the file changes nothing until then, and")
+    print("an uncommitted one makes that update list the skills it moves as local edits.")
     return 1 if failing else 0
 
 
@@ -359,7 +364,10 @@ def main(argv: list[str] | None = None) -> int:
     inline_set = set(inline_models)
 
     if args.list:
-        for path in iter_skill_files(root):
+        paths, unlistable = walk_skill_files(root)
+        for d in unlistable:
+            print(f"  [UNLIST ] {_rel(d)}/  (could not be listed, so no file there was read)")
+        for path in paths:
             text = read_skill_text(path)
             if text is None:
                 print(f"  [UNREAD ] {_rel(path)}  (not valid UTF-8 or not readable)")
@@ -387,7 +395,8 @@ def main(argv: list[str] | None = None) -> int:
     # failed got a clean bill of health from the check that exists to catch it.
     population = 0
     unreadable: list[Path] = []
-    for p in iter_skill_files(root):
+    paths, unlistable = walk_skill_files(root)
+    for p in paths:
         # `Q-346` leg 1: this was an unguarded `read_text`, so a consumer's own
         # latin-1 `.md` anywhere under `.claude/skills/` crashed the checker and
         # `install.sh` printed the traceback as `REFUSED (invalid mapping)`.
@@ -407,10 +416,21 @@ def main(argv: list[str] | None = None) -> int:
             + ", ".join(_rel(u) for u in unreadable),
             file=sys.stderr,
         )
+    if unlistable:
+        # `Q-350`: `rglob` skipped these without a word. Their files are unknown, Sysop's
+        # included, so this is a coverage gap in either mode, and it is never a file count.
+        noun = "directory" if len(unlistable) == 1 else "directories"
+        print(
+            f"note: could not list {len(unlistable)} {noun} under {root}, so no file there "
+            f"was checked: " + ", ".join(_rel(d) for d in unlistable),
+            file=sys.stderr,
+        )
     if population == 0:
         scope = "Sysop-managed " if args.managed_only else ""
-        print(f"error: no {scope}model pins found under {root} — nothing to validate. "
-              f"A skills tree with no pins to check is a broken install, not a "
+        listed = (f" ({len(unlistable)} unlistable director"
+                  f"{'y' if len(unlistable) == 1 else 'ies'} not read)" if unlistable else "")
+        print(f"error: no {scope}model pins found under {root}{listed} — nothing to "
+              f"validate. A skills tree with no pins to check is a broken install, not a "
               f"passing check.", file=sys.stderr)
         return 2
 
@@ -462,7 +482,9 @@ def main(argv: list[str] | None = None) -> int:
                   "`inline_models:` if your harness really accepts the value.")
         return 1
 
-    scope_note = f" ({len(unreadable)} unreadable file(s) skipped)" if unreadable else ""
+    # The installer reads this suffix back off the line's end, `(` to ` skipped).`.
+    skipped = describe_skipped(unreadable, unlistable)
+    scope_note = f" ({skipped})" if skipped else ""
     print(f"OK: all skill model pins resolve to served models "
           f"({', '.join(f'{k}={v}' for k, v in sorted(roles.items()))})"
           f"{scope_note}.")
