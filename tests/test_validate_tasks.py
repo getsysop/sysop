@@ -20,6 +20,8 @@ import sys
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 import validate_tasks as vt
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1169,3 +1171,229 @@ def test_the_comment_no_longer_claims_the_exemption():
     assert "migration script" not in src, (
         "no task-migration script ships with Sysop; the --path caller is the "
         "pre-commit example's staged-tree export")
+
+
+# ── Q-076 (a) — `--skip-lock-checks`: the gate in CI, saying what it skipped ──
+#
+# `sysop/runtime/` is gitignored, so a CI checkout has no lock and every
+# in_progress task was a phantom ERROR with no way to turn Invariant 9 off. The
+# flag skips Invariant 9 (both halves) and nothing else, and prints a notice on
+# every run, --quiet included: a silent skip would read as a pass that checked
+# locks. Pinned through the real CLI, in a subprocess, beside the tree with no
+# lock (pytest's tmp_path is outside every repo, so the lookup is beside it).
+
+
+def _cli(tasks_dir: Path, *flags: str):
+    return subprocess.run(
+        [_sys.executable, str(_VALIDATOR), "--path", str(tasks_dir), *flags],
+        capture_output=True, text=True, env=_clean_env(), timeout=60)
+
+
+def _notice_lines(text: str) -> list[str]:
+    return [ln for ln in text.splitlines() if ln.startswith("[NOTICE]")]
+
+
+def test_the_notice_names_invariant_9_the_flag_and_that_locks_were_not_read():
+    n = vt.LOCK_SKIP_NOTICE
+    assert "Invariant 9" in n and "--skip-lock-checks" in n
+    assert "not read" in n
+    assert "checked" not in n, "the notice must not claim a check it did not run"
+
+
+def test_without_the_flag_a_missing_lock_still_fails_quiet_or_not(tmp_path):
+    bare = tmp_path / "ci"
+    _make_tasks_tree(bare)
+    for flags in ((), ("--quiet",)):
+        r = _cli(bare / "tasks", *flags)
+        assert r.returncode == 1, (flags, r.stdout + r.stderr)
+        assert "lock file missing" in r.stdout, flags
+        assert _notice_lines(r.stdout) == [], "no skip happened, so no notice"
+
+
+def test_the_flag_skips_the_lock_error_and_says_so_on_stdout(tmp_path):
+    bare = tmp_path / "ci"
+    _make_tasks_tree(bare)
+    r = _cli(bare / "tasks", "--skip-lock-checks")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "lock file missing" not in r.stdout
+    assert _notice_lines(r.stdout) == [vt.LOCK_SKIP_NOTICE], r.stdout
+    assert "[NOTICE]" not in r.stderr, "every line render() prints goes to stdout"
+    # Not a finding: the summary's warning count does not include it.
+    assert "0 errors, 0 warnings" in r.stdout, r.stdout
+
+
+def test_the_flag_still_says_so_under_quiet(tmp_path):
+    bare = tmp_path / "ci"
+    _make_tasks_tree(bare)
+    r = _cli(bare / "tasks", "--skip-lock-checks", "--quiet")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.splitlines() == [vt.LOCK_SKIP_NOTICE], r.stdout
+
+
+def test_the_flag_leaves_every_other_invariant_setting_the_exit_code(tmp_path):
+    bare = tmp_path / "ci"
+    tasks_dir = _make_tasks_tree(bare)
+    index = tasks_dir / "index.yml"
+    edited = index.read_text(encoding="utf-8").replace("    effort: Medium\n", "")
+    assert "effort:" not in edited, "fixture edit did not apply"
+    index.write_text(edited, encoding="utf-8")
+    for flags in (("--skip-lock-checks",), ("--skip-lock-checks", "--quiet")):
+        r = _cli(tasks_dir, *flags)
+        assert r.returncode == 1, (flags, r.stdout + r.stderr)
+        assert "requires 'effort'" in r.stdout, flags
+        assert "lock file missing" not in r.stdout, flags
+        assert _notice_lines(r.stdout) == [vt.LOCK_SKIP_NOTICE], (flags, r.stdout)
+        assert "FAIL: 1 tasks across 1 phases, 1 errors" in r.stdout, flags
+
+
+def test_the_flag_skips_the_warn_only_half_and_the_batch_sweep(tmp_path):
+    """Invariant 9's warn-only half reads lock state too, so the flag skips it:
+    the self-test's placeholder fixture warns for two locks (one a BATCH lock)
+    without the flag, and for none with it."""
+    tasks_dir = vt._build_placeholder_lock_fixture(tmp_path)
+
+    def expired(report):
+        return [w for w in report.warnings if "expired" in w.message]
+
+    plain = vt.validate(tasks_dir, project_root=tmp_path)
+    assert len(expired(plain)) == 2, [w.format() for w in plain.warnings]
+    assert any("BATCH-3" in w.message for w in expired(plain))
+    assert plain.lock_checks_skipped is False
+
+    skipped = vt.validate(tasks_dir, project_root=tmp_path, skip_lock_checks=True)
+    assert expired(skipped) == [], [w.format() for w in skipped.warnings]
+    assert skipped.ok and skipped.lock_checks_skipped is True
+
+
+def test_the_flag_does_not_resolve_the_locks_dir(tmp_path):
+    """"Lock state was not read" is literal: no git probe, no listing."""
+    bare = tmp_path / "ci"
+    tasks_dir = _make_tasks_tree(bare)
+
+    def boom(*_a, **_k):
+        raise AssertionError("locks dir resolved under skip_lock_checks")
+
+    with mock.patch.object(vt, "_resolve_canonical_locks_dir", boom):
+        report = vt.validate(tasks_dir, skip_lock_checks=True)
+    assert report.ok, [e.format() for e in report.errors]
+
+
+def test_validate_keeps_its_default_for_existing_callers(tmp_path):
+    bare = tmp_path / "ci"
+    tasks_dir = _make_tasks_tree(bare)
+    report = vt.validate(tasks_dir)
+    assert report.lock_checks_skipped is False
+    assert any("lock file missing" in e.message for e in report.errors)
+
+
+# ── Q-754 — a `completed_date` on a task that is not done warns ──────────
+
+
+def _status_tree(root: Path, status: str, extra: str) -> Path:
+    """One task of *status*, with *extra* lines appended to its entry, and a lock
+    beside the tree so an in_progress row passes Invariant 9."""
+    folder = {"open": "open", "in_progress": "open", "deferred": "deferred"}.get(status, "archive")
+    tasks_dir = root / "tasks"
+    (tasks_dir / folder).mkdir(parents=True)
+    (tasks_dir / "index.yml").write_text(
+        "schema_version: 1\nphases:\n  - number: 1\n    title: \"P\"\n"
+        "    status: in_progress\n    current_focus: true\ntasks:\n"
+        "  - id: FEAT-DATE\n    title: \"t\"\n    phase: 1\n"
+        f"    status: {status}\n    effort: Low\n    user_action: false\n"
+        f"    depends_on: []\n    surfaced_by: []\n    body: {folder}/FEAT-DATE.md\n"
+        + extra, encoding="utf-8")
+    (tasks_dir / folder / "FEAT-DATE.md").write_text("# FEAT-DATE\n\nbody.\n", encoding="utf-8")
+    locks = root / "sysop/runtime/locks"
+    locks.mkdir(parents=True)
+    (locks / "FEAT-DATE.lock").write_text("lock\n", encoding="utf-8")
+    return tasks_dir
+
+
+def _date_findings(report):
+    return [f.format() for f in report.errors + report.warnings if "completed_date" in f.message]
+
+
+
+@pytest.mark.parametrize("status", ["open", "in_progress", "deferred"])
+@pytest.mark.parametrize("value", ['"2026-01-15"', "2026-01-15", '"yesterday"'])
+def test_a_date_on_a_task_that_is_not_done_warns(tmp_path, status, value):
+    tasks_dir = _status_tree(tmp_path, status, f"    completed_date: {value}\n")
+    report = vt.validate(tasks_dir, project_root=tmp_path)
+    assert report.ok, [e.format() for e in report.errors]
+    found = [w.format() for w in report.warnings if "completed_date" in w.message]
+    assert len(found) == 1, found
+    assert f"status={status} carries completed_date" in found[0], found
+    assert _date_findings(report) == found, "a stray date is a warning, never an error"
+
+
+@pytest.mark.parametrize("status", ["open", "in_progress", "deferred"])
+@pytest.mark.parametrize("extra", ["", "    completed_date: null\n", '    completed_date: ""\n'])
+def test_no_date_on_a_task_that_is_not_done_is_silent(tmp_path, status, extra):
+    tasks_dir = _status_tree(tmp_path, status, extra)
+    report = vt.validate(tasks_dir, project_root=tmp_path)
+    assert report.ok, [e.format() for e in report.errors]
+    assert _date_findings(report) == []
+
+
+@pytest.mark.parametrize("extra, errors, warnings", [
+    ('    completed_date: "2026-01-15"\n', 0, 0),
+    ("", 0, 1),                                   # absent: the backfill warning
+    ('    completed_date: "15/01/2026"\n', 1, 0),  # malformed: an error
+])
+def test_a_done_tasks_date_handling_is_unchanged(tmp_path, extra, errors, warnings):
+    tasks_dir = _status_tree(tmp_path, "done", extra)
+    report = vt.validate(tasks_dir, project_root=tmp_path)
+    errs = [e.format() for e in report.errors if "completed_date" in e.message]
+    warns = [w.format() for w in report.warnings if "completed_date" in w.message]
+    assert (len(errs), len(warns)) == (errors, warnings), errs + warns
+    assert not any("carries completed_date" in m for m in errs + warns)
+
+
+def test_a_stray_date_warns_through_the_cli_and_exits_0(tmp_path):
+    tasks_dir = _status_tree(tmp_path, "open", '    completed_date: "2026-01-15"\n')
+    r = _cli(tasks_dir)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[WARNING]" in r.stdout and "status=open carries completed_date 2026-01-15" in r.stdout
+    assert "0 errors, 1 warnings" in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("extra, shown", [
+    ("    completed_date: 2026-01-15\n", "2026-01-15"),  # YAML reads a date object
+    ("    completed_date: 20260115\n", "20260115"),      # an int
+])
+def test_a_done_tasks_unquoted_date_is_named_not_called_missing(tmp_path, extra, shown):
+    # The "has no completed_date" warning used to fire on a value that is present
+    # but not a string. It is still a warning, and it now says what is there.
+    tasks_dir = _status_tree(tmp_path, "done", extra)
+    report = vt.validate(tasks_dir, project_root=tmp_path)
+    assert report.ok, [e.format() for e in report.errors]
+    warns = [w.message for w in report.warnings if "completed_date" in w.message]
+    assert len(warns) == 1, warns
+    assert "has no completed_date" not in warns[0], warns
+    assert f"completed_date {shown}" in warns[0] and "not a quoted string" in warns[0], warns
+
+
+def test_the_flag_still_says_so_when_the_validator_crashes(tmp_path, capsys, monkeypatch):
+    # The crash path prints its own ERROR line and exits 2 without reaching render(),
+    # so the notice there has its own print.
+    tasks_dir = _status_tree(tmp_path, "open", "")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("synthetic")
+
+    monkeypatch.setattr(vt, "validate", boom)
+    assert vt.main(["--path", str(tasks_dir), "--skip-lock-checks", "--quiet"]) == 2
+    out = capsys.readouterr().out
+    assert vt.LOCK_SKIP_NOTICE in out and "validator crashed" in out, out
+    assert vt.main(["--path", str(tasks_dir), "--quiet"]) == 2
+    assert vt.LOCK_SKIP_NOTICE not in capsys.readouterr().out
+
+
+def test_the_flag_still_says_so_when_the_tasks_dir_is_missing(tmp_path, capsys):
+    # The not-found exit returns before validate(), so it has its own print too.
+    missing = tmp_path / "nope"
+    assert vt.main(["--path", str(missing), "--skip-lock-checks", "--quiet"]) == 2
+    out = capsys.readouterr().out
+    assert vt.LOCK_SKIP_NOTICE in out and "tasks directory not found" in out, out
+    assert vt.main(["--path", str(missing), "--quiet"]) == 2
+    assert vt.LOCK_SKIP_NOTICE not in capsys.readouterr().out

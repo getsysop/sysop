@@ -47,7 +47,7 @@ from .baseline import (
     unregistered_entries,
     write_baseline,
 )
-from .config import parse_checks_yml
+from .config import parse_checks_yml, severity_warnings
 from .coverage import _run_coverage
 from .grep import run_check
 from .lint import _run_eslint
@@ -290,6 +290,9 @@ def main():
     )
 
     all_checks = parse_checks_yml(checks_file)
+    # Read against every defined check, not this --mode's: the file is the fault.
+    for line in severity_warnings(all_checks):
+        print(line, file=sys.stderr)
 
     # --update-baseline short-circuits BEFORE the mode-filtered pass and runs
     # ONLY the all-checks pass (spec §2). The old code ran the mode-filtered

@@ -76,8 +76,9 @@ checks:
 ```
 
 > **Use these field names exactly.** `pattern` is singular, `paths` and `include` are both
-> required, and there is no `tier` field — severity is `low` / `medium` / `high` / `critical`,
-> and `blocking: true` is the separate flag that fails the run. An entry with unrecognised keys
+> required, and there is no `tier` field — severity is `low` / `medium` / `high` / `critical`
+> (any other word draws a `warn:` line on stderr, and the check still runs), and
+> `blocking: true` is the separate flag that fails the run. An entry with unrecognised keys
 > **still parses and still validates**, and then matches nothing: a check with no `pattern` and
 > no `paths` is a silent no-op, not an error. The full field table is
 > [`WORKFLOW.md` § 6.5](../core/companion/docs/WORKFLOW.md).
@@ -183,7 +184,7 @@ Finer still exists in the skill files themselves — a trailing `<!-- sysop:role
 
 That split comes from one project over one window, running the stock mapping, and its `fix` and `verify` rows recorded no spend at all — a gap in what that project logged, not a free phase. Read it as a rough shape, not a budget.
 
-Local keys win, updates never touch the file, and sunset fixes keep flowing through the managed default map. The mapping is applied by the install-time resolver — after creating or changing the file, run `bash sysop/scripts/sysop-update.sh` (or `install.sh <target> --update`) to rewrite the skills' pins. (`fable` needs Claude Code ≥ 2.1.170; where a pinned model isn't available, the session silently keeps its current model.)
+Local keys win, updates never touch the file, and sunset fixes keep flowing through the managed default map. The mapping is applied by the install-time resolver — after creating or changing the file, commit it, then run `bash sysop/scripts/sysop-update.sh` (or `install.sh <target> --update`) to rewrite the skills' pins. Commit it first because an uncommitted layer file has no commit to date it: that first update's divergence check then lists the skills the override moves as local edits, which they are not. (`fable` needs Claude Code ≥ 2.1.170; where a pinned model isn't available, the session silently keeps its current model.)
 
 ## Skills — direct edits do not persist, by design
 

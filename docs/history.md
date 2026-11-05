@@ -22,7 +22,8 @@ maintainer's working record and is not in the public tree.
   published with its limits stated, and the project is renamed twice (wade-flow → jig → sysop)
   after name collisions.
 - **2026-07-13** — Public cut as [getsysop/sysop](https://github.com/getsysop/sysop), MIT.
-  71 review rounds and 3,298 findings behind it; 78 promoted conventions shipping as packs.
+  71 review rounds, 3,298 findings and 78 promoted conventions behind it on the source project,
+  which the python, postgres, nextjs-react and llm packs were mined from.
 - **Jul 2026** — Cold-read exercises (fresh-context model readers simulating first-time
   adopters) consistently name adoption weight as the reason to pass,
   so the convention loop becomes separately installable: `--mode loop`, the smallest install

@@ -1277,10 +1277,10 @@ one. `gate_verdict.py` keys each gate's `APPROVED` to every input the review dep
   security gate hashes the security map and its overlay, and `security_map_filter.py`, which cuts
   the agent's copy of them. The sources are hashed, not the runner's
   copy, because the paste arm has no file. They are whole files because the first build cut
-  sections as `convention_size.py` measures them, and the review round reused a verdict over
-  each shape that cut misses: a fenced `## ` line ending the cut early, a heading with trailing
+  sections as `convention_size.py` then measured them, and the review round reused a verdict over
+  each shape that cut missed: a fenced `## ` line ending the cut early, a heading with trailing
   space, the second of two same-named sections, and a section step 0 added that the runner left
-  off the command. Any edit to the file runs the gate again, which errs the same way as the step's
+  off the command. The measurement has since learnt the first three; no cut can see the fourth. Any edit to the file runs the gate again, which errs the same way as the step's
   text below.
 - **The step's own text.** The whole `### 2b.` section of the installed `SKILL.md`, which holds both
   prompts, is hashed, so a Sysop update that changes the step changes every key. It is coarser than

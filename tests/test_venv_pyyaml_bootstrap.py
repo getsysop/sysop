@@ -204,8 +204,9 @@ def consumer(tmp_path):
     """A consumer-shaped tree: <root>/sysop/scripts/ with the real scripts."""
     root = tmp_path / "proj"
     (root / "sysop" / "scripts").mkdir(parents=True)
-    # check_skill_models.py imports the last two.
-    for name in [*FATAL, SOFT, "_log.py", "_model_roles.py", "migrate_skill_model.py"]:
+    # check_skill_models.py imports the last three.
+    for name in [*FATAL, SOFT, "_log.py", "_model_roles.py", "migrate_skill_model.py",
+                 "_skill_walk.py"]:
         (root / "sysop" / "scripts" / name).write_bytes((SCRIPTS / name).read_bytes())
     subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(root)],
                    check=True, capture_output=True)

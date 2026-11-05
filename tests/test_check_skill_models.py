@@ -7,7 +7,10 @@ model. The sysop-original guard at the bottom (`test_sysop_own_skills_all_roles_
 is the real CI value — it goes red if Sysop's own core/skills/ ever pins an
 un-roled, undefined, or unserved (sunset) model. See tests/PORT_LOG.md.
 """
+import os
 from pathlib import Path
+
+import pytest
 
 import check_skill_models as c
 
@@ -332,3 +335,94 @@ def test_an_effort_literal_gets_no_role_remedy(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "INLINE pin carries the effort 'turbo'" in out, out
     assert "map the role" not in out and "For the INLINE failures" not in out, out
+
+
+# ── `Q-350` (Phase 466): a directory the walk cannot list is reported, not dropped ──────
+# `rglob` skipped it without a word, so its files reached no read guard and the green line
+# stated a scope wider than the scan. The fixture's mode is restored in `finally`: pytest
+# cannot remove a mode-000 directory under `tmp_path`.
+
+
+def _locked(root, name="locked", body=GOOD):
+    if os.geteuid() == 0:
+        pytest.skip("root lists a mode-000 directory, so the fixture cannot reproduce")
+    d = root / name
+    d.mkdir()
+    (d / "SKILL.md").write_text(body)
+    d.chmod(0o000)
+    return d
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_an_unlistable_directory_reaches_the_green_line_and_the_note(tmp_path, capsys, managed):
+    root = _skill(tmp_path, GOOD)
+    cfg = _cfg(tmp_path, CFG)
+    locked = _locked(root)
+    try:
+        argv = ["--root", str(root), "--config", str(cfg)] + (["--managed-only"] if managed else [])
+        assert c.main(argv) == 0
+    finally:
+        locked.chmod(0o755)
+    out = capsys.readouterr()
+    assert out.out.rstrip().endswith("(1 unlistable directory skipped)."), out.out
+    assert "could not list 1 directory" in out.err and str(locked) in out.err, out.err
+    assert "file(s) skipped" not in out.out, "a directory was reported as a file count"
+
+
+def test_two_unlistable_directories_are_counted_not_a_literal(tmp_path, capsys):
+    root = _skill(tmp_path, GOOD)
+    cfg = _cfg(tmp_path, CFG)
+    a, b = _locked(root, "a"), _locked(root, "b")
+    try:
+        assert c.main(["--root", str(root), "--config", str(cfg)]) == 0
+    finally:
+        a.chmod(0o755)
+        b.chmod(0o755)
+    out = capsys.readouterr()
+    assert "(2 unlistable directories skipped)." in out.out, out.out
+    assert "could not list 2 directories" in out.err, out.err
+
+
+def test_an_unreadable_file_and_an_unlistable_directory_are_counted_apart(tmp_path, capsys):
+    """No double count: the file is a file the walk saw and could not read; the
+    directory's files were never seen, so they are not in any file count."""
+    root = _skill(tmp_path, GOOD)
+    (root / "s" / "NOTES.md").write_bytes(LATIN1)
+    cfg = _cfg(tmp_path, CFG)
+    locked = _locked(root)
+    try:
+        assert c.main(["--root", str(root), "--config", str(cfg)]) == 0
+    finally:
+        locked.chmod(0o755)
+    out = capsys.readouterr()
+    assert out.out.rstrip().endswith(
+        "(1 unreadable file(s) skipped; 1 unlistable directory skipped)."), out.out
+    assert "skipped 1 file(s)" in out.err and "NOTES.md" in out.err, out.err
+
+
+def test_list_mode_marks_an_unlistable_directory(tmp_path, capsys):
+    root = _skill(tmp_path, GOOD)
+    cfg = _cfg(tmp_path, CFG)
+    locked = _locked(root)
+    try:
+        assert c.main(["--root", str(root), "--config", str(cfg), "--list"]) == 0
+    finally:
+        locked.chmod(0o755)
+    out = capsys.readouterr().out
+    assert f"[UNLIST ] {locked}/" in out, out
+
+
+def test_an_unlistable_root_is_not_a_passing_check_and_says_why(tmp_path, capsys):
+    """The root itself passes `is_dir()` at mode 000; the population guard still fires,
+    and the error says a directory went unread rather than only that none had pins."""
+    if os.geteuid() == 0:
+        pytest.skip("root lists a mode-000 directory, so the fixture cannot reproduce")
+    root = _skill(tmp_path, GOOD)
+    cfg = _cfg(tmp_path, CFG)
+    root.chmod(0o000)
+    try:
+        assert c.main(["--root", str(root), "--config", str(cfg)]) == 2
+    finally:
+        root.chmod(0o755)
+    err = capsys.readouterr().err
+    assert "(1 unlistable directory not read)" in err and str(root) in err, err

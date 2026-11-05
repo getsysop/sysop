@@ -60,6 +60,13 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from _skill_walk import (  # noqa: F401  (re-exported: callers import these from here)
+    _GONE,
+    describe_skipped,
+    iter_skill_files,
+    walk_skill_files,
+)
+
 # Installed-layout defaults: when this script ships into a consumer project it
 # lives at ``<repo>/sysop/scripts/migrate_skill_model.py`` (Phase 128), so
 # ``parents[2]`` is the
@@ -90,17 +97,12 @@ class ModelPin:
     kind: str  # "frontmatter" | "inline"
 
 
-def iter_skill_files(root: Path):
-    """Yield every markdown file under *root* in stable order."""
-    return sorted(p for p in root.rglob("*.md") if p.is_file())
-
-
 def read_skill_text(path: Path) -> str | None:
     """Return *path*'s text, or ``None`` when it cannot be decoded or read.
 
-    Lives beside ``iter_skill_files`` because it is the other half of the same
-    walk: every consumer of that iterator reads what it yields, and each one of
-    them used a bare ``read_text(encoding="utf-8")``.
+    The other half of the skills walk (``_skill_walk.iter_skill_files``): every
+    consumer of that iterator reads what it yields, and each one of them used a
+    bare ``read_text(encoding="utf-8")``.
 
     ``.claude/skills/`` is Claude Code's standard USER skill directory, so a
     consumer's own files sit beside the shipped ones. An unguarded read there
@@ -244,7 +246,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Scanning: {_rel(root)}/\n")
 
     unreadable: list[Path] = []
-    for path in iter_skill_files(root):
+    paths, unlistable = walk_skill_files(root)
+    for path in paths:
         original = read_skill_text(path)
         if original is None:
             # Same class as the checker's and the resolver's (`Q-346` leg 1): a
@@ -276,6 +279,12 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"  note: skipped {len(unreadable)} file(s) that are not valid UTF-8 "
             f"or not readable: " + ", ".join(_rel(u) for u in unreadable),
+            file=sys.stderr,
+        )
+    if unlistable:
+        print(
+            f"  note: could not list {len(unlistable)} director{'y' if len(unlistable) == 1 else 'ies'}"
+            f", so no file there was read: " + ", ".join(_rel(d) for d in unlistable),
             file=sys.stderr,
         )
     mode = "APPLIED" if args.apply else "DRY-RUN (no files written)"

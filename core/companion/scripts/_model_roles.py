@@ -23,8 +23,9 @@ override), and resolving a role to a model. Consumed by:
   * check_skill_models.py   — CI/pre-commit guard: every pin's role resolves to a served model.
 
 `migrate_skill_model.py` remains the home of the bare-alias pin regexes; this
-module imports `iter_skill_files` / `REPO_ROOT` / `SKILLS_DIR` from it and layers
-roles on top, so the migrator's API (and its tests) are untouched.
+module imports `REPO_ROOT` / `read_skill_text` from it and layers roles on top. The
+skills walk, `iter_skill_files`, comes from `_skill_walk.py`, so a consumer-modified
+migrator an update preserves does not put the judges back on its older walk.
 """
 from __future__ import annotations
 
@@ -35,9 +36,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from migrate_skill_model import (  # noqa: E402  (path set above)
+from _skill_walk import iter_skill_files  # noqa: E402  (path set above)
+from migrate_skill_model import (  # noqa: E402
     REPO_ROOT,
-    iter_skill_files,
     read_skill_text,
 )
 

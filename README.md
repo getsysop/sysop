@@ -42,7 +42,7 @@ Sysop pays for itself in specific situations and asks more than it's worth in ot
 
 ## What you get
 
-- **Deterministic enforcement** — recurring findings become grep and Semgrep AST rules in a shared registry, alongside a language-server pass (`pyright`/`tsc`) and a diff-coverage gate on the paths you mark critical — enforced identically on every run, with a false-positive ledger that flags stale rules for demotion.
+- **Deterministic enforcement** — recurring findings become grep and Semgrep AST rules in a shared registry, alongside a language-server pass (`pyright`/`tsc`) and a diff-coverage gate on the paths you mark critical — enforced identically on every run. The review rounds keep a false-positive ledger of checks that fired wrongly, and `/codebase-review` brings a rule it marks stale to you to demote.
 - **A full lifecycle to grow into, not a review bolt-on** — `/intake` turns a brain-dump into a validated task queue (`/onboard` brings an existing project in); plans get adversarial review before code; every task builds in an isolated git worktree; documentation is deferred and batched; dual-mode review (`/codebase-review` for quality, `/security-audit` for OWASP) feeds the convention loop; `/review-close` is the human merge gate, unless you arm the opt-in unattended land.
 - **Parallel building under one reviewer** — locks and worktrees let `/auto-build` build batches of tasks concurrently while you stay the merge gate (unless you arm the opt-in unattended land for a declared class of changes).
 - **A feedback loop you control** — a full install seeds `SYSOP_ISSUES.md`, a friction log (a loop install creates it at your first captured issue); `/report-issues` files the pain upstream and `/share-wins` shares what worked, each entry only with your explicit consent. It points outward too: things that have been considered and parked are published in [Ideas](https://github.com/getsysop/sysop/discussions/categories/ideas), each with an honest note on why it isn't built — 👍 is prioritization signal, not a promise.
@@ -91,7 +91,7 @@ The full walkthrough — including the manual reversal path when PyYAML is missi
 
 ## Support expectations
 
-Sysop is built for my own daily use and published in that spirit. Issues and PRs are welcome and reviewed as time permits — there is no SLA, no roadmap commitment, and no backwards-compatibility guarantee during early development. Plugin manifests stay unversioned by design (every commit is the latest); the bash installer's `--ref` flag pins an install to any rev — today that means a commit SHA, since no release tag exists yet (see [SECURITY.md](SECURITY.md)). If it's useful to you, use it and fork freely — it's MIT-licensed.
+Sysop is built for my own daily use and published in that spirit. Issues and PRs are welcome and reviewed as time permits — there is no SLA, no roadmap commitment, and no backwards-compatibility guarantee during early development. Plugin manifests stay unversioned by design (every commit is the latest); the bash installer's `--ref` flag pins an install to any rev — a release tag, or a commit SHA between tags ([SECURITY.md](SECURITY.md) lists the tags and how to pin). If it's useful to you, use it and fork freely — it's MIT-licensed.
 
 ## Prior art
 
