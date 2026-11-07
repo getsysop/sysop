@@ -193,6 +193,27 @@ class RunReport:
         # reaches the baseline at either end, so it has no identity to carry
         # and inventing an empty one would imply it could be baselined.
         self._waived = []
+        # check_id -> set of repo-relative paths the check's stage did not read.
+        self._skipped_paths = {}
+
+    def record_skipped_paths(self, check_ids, paths):
+        """Record files a check's stage did not read, although it ran.
+
+        Not a terminal state: the check stays ``executed`` (its silence is
+        evidence for every other file), and the stage prints its own warning.
+        The set exists so a baseline entry anchored in one of these files is
+        held, not judged — `baseline.skip_held_entries` reads it. ``paths`` are
+        repo-relative, in the same form a finding's ``file_line`` carries.
+        """
+        paths = set(paths)
+        if not paths:
+            return
+        for cid in check_ids:
+            self._skipped_paths.setdefault(cid, set()).update(paths)
+
+    def skipped_paths(self):
+        """``{check_id: frozenset(path, ...)}`` for every check that skipped a file."""
+        return {cid: frozenset(p) for cid, p in self._skipped_paths.items()}
 
     def record_waived(self, check_id, file_line, message):
         """Record a finding suppressed by an inline ``no-check:`` marker.
@@ -315,7 +336,9 @@ class RunReport:
         (`baseline.unmatched_entries`) asks it per baseline entry. Both read it
         here so the two can never disagree about which checks ran. A
         ``degraded`` check is deliberately absent: it may simply not have
-        reached the file an entry names.
+        reached the file an entry names. An ``executed`` check that skipped
+        named files (`skipped_paths`) stays here; only its entries anchored in
+        those files are held.
         """
         return {cid for cid in self._order if self.status_of(cid) == EXECUTED}
 

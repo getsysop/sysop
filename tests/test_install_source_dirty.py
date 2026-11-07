@@ -517,6 +517,10 @@ def test_the_prescribed_command_carries_the_mode_it_was_printed_in(source, tmp_p
     adp = _run(source, tgt2, "--adopt", "--packs", "python", "--no-arm-hooks")
     assert "--ref is not valid with --adopt" in adp.stdout, adp.stdout
     assert "--adopt --ref" not in adp.stdout
+    # `_run` passes --yes; adopt copies no files and rejects --ref, so neither the
+    # "applies the working tree" sentence nor a --ref re-run may reach it.
+    assert "applies the working tree" not in adp.stdout, adp.stdout
+    assert "re-run with --ref" not in adp.stdout, adp.stdout
 
 
 def test_the_prescribed_command_is_absolute_and_quotes_the_target(source, tmp_path):
@@ -542,6 +546,105 @@ def test_dry_run_does_not_promise_a_lock_key_or_a_prompt(source, tmp_path):
     assert "dry run: nothing is written" in res.stdout, res.stdout
     assert "will carry" not in res.stdout
     assert "decline below" not in res.stdout
+
+
+def test_an_apply_with_yes_does_not_promise_a_prompt(source, tmp_path):
+    """`_run` passes --yes, so no `Proceed?` follows the warning: "decline below"
+    would name a prompt the run never shows."""
+    _dirty(source)
+    tgt = _target(tmp_path)
+    res = _run(source, tgt, "--packs", "python", "--no-arm-hooks")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert WARN_LINE in res.stdout, res.stdout
+    assert "decline below" not in res.stdout, res.stdout
+    assert "--yes asks nothing" in res.stdout, res.stdout
+
+
+def test_the_prescribed_command_names_yes_when_no_terminal_can_confirm(source, tmp_path):
+    """The remedy is an apply, and an apply with no terminal stops at `Proceed?`
+    unless it carries --yes. A dry run never reaches that prompt, so the line it
+    prints must carry the flag itself. Run with no controlling terminal and
+    without --yes, which is the shape of an agent's tool call."""
+    _dirty(source)
+    tgt = _target(tmp_path)
+    env = dict(os.environ)
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env["PATH"]
+    env.update(_GIT_ISOLATION)
+    res = subprocess.run(
+        ["bash", str(source / "install.sh"), str(tgt), "--packs", "python",
+         "--no-arm-hooks", "--dry-run"],
+        capture_output=True, text=True, env=env, cwd=str(tgt), start_new_session=True,
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
+    line = next(l for l in res.stdout.splitlines() if "--ref HEAD" in l)
+    assert "--ref HEAD --yes" in line, line
+
+
+def test_the_fresh_remedy_runs_as_printed_with_no_terminal(source, tmp_path):
+    """The printed fresh command carries the run's packs and mode: without them
+    the apply stops at the pack picker with no terminal, or installs `full` over
+    a chosen `loop`. Run it exactly as printed."""
+    import shlex
+    _dirty(source)
+    tgt = _target(tmp_path)
+    env = dict(os.environ)
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env["PATH"]
+    env.update(_GIT_ISOLATION)
+
+    def detached(argv):
+        return subprocess.run(argv, capture_output=True, text=True, env=env,
+                              cwd=str(tgt), start_new_session=True)
+
+    dry = detached(["bash", str(source / "install.sh"), str(tgt), "--packs", "python",
+                    "--mode", "loop", "--no-arm-hooks", "--dry-run"])
+    assert dry.returncode == 0, dry.stdout + dry.stderr
+    line = next(l for l in dry.stdout.splitlines() if "--ref HEAD" in l)
+    assert "--packs 'python' --mode loop --ref HEAD --yes" in line, line
+    cmd = line.split("•", 1)[1].split("#", 1)[0] if "•" in line else line.split("#", 1)[0]
+    argv = shlex.split(cmd.strip()) + ["--no-arm-hooks"]
+    applied = detached(argv)
+    assert applied.returncode == 0, applied.stdout + applied.stderr
+    lock = (tgt / ".claude" / "sysop.lock").read_text()
+    assert '"mode": "loop"' in lock, lock
+
+
+def test_an_apply_with_no_terminal_does_not_promise_a_prompt(source, tmp_path):
+    """No terminal and no --yes: the run stops at `Proceed?` without asking, so
+    "decline below" names a prompt it never shows."""
+    _dirty(source)
+    tgt = _target(tmp_path)
+    env = dict(os.environ)
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env["PATH"]
+    env.update(_GIT_ISOLATION)
+    res = subprocess.run(
+        ["bash", str(source / "install.sh"), str(tgt), "--packs", "python",
+         "--no-arm-hooks"],
+        capture_output=True, text=True, env=env, cwd=str(tgt), start_new_session=True,
+    )
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert WARN_LINE in res.stdout, res.stdout
+    assert "decline below" not in res.stdout, res.stdout
+    assert "stops at Proceed? without writing" in res.stdout, res.stdout
+
+
+def test_the_update_remedy_names_yes_when_no_terminal_can_confirm(source, tmp_path):
+    """The `--update` form of the same remedy is a second printed command."""
+    _dirty(source)
+    tgt = _target(tmp_path)
+    assert _run(source, tgt, "--packs", "python", "--no-arm-hooks").returncode == 0
+    _git(tgt, "add", "-A")
+    _git(tgt, "commit", "-qm", "install")
+    env = dict(os.environ)
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env["PATH"]
+    env.update(_GIT_ISOLATION)
+    res = subprocess.run(
+        ["bash", str(source / "install.sh"), str(tgt), "--update", "--no-arm-hooks",
+         "--dry-run"],
+        capture_output=True, text=True, env=env, cwd=str(tgt), start_new_session=True,
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
+    line = next(l for l in res.stdout.splitlines() if "--update --ref HEAD" in l)
+    assert "--update --ref HEAD --yes" in line, line
 
 
 def test_check_reports_an_install_taken_from_a_dirty_source(source, tmp_path):

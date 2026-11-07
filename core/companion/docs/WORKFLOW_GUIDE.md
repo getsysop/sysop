@@ -206,7 +206,7 @@ Write findings to `review_tasks.md` using the batch format documented in WORKFLO
 
 This whole process is what `/review-close` automates; run it by hand when no AI assistant is driving.
 
-1. Review each feature branch: `git diff main...refs/heads/<branch>` (three dots — two compares the tips, so anything `main` gained after the branch was cut looks like the branch deleted it)
+1. Review each feature branch: `git diff "$(git merge-base refs/heads/<branch> main origin/main)" refs/heads/<branch>` (drop `origin/main` when there is no remote). It diffs from the merge-base, not the tips: `main..<branch>` compares the tips, so anything `main` gained after the branch was cut looks like the branch deleted it, and `main...<branch>` over a local `main` behind `origin` shows upstream work as the branch's own
 2. Cross-check changes against applicable conventions
 3. **Verify the test-decision record** — read the branch's `## Test decision` back against the diff ("plan said test X — is it here?" / "no-test-because-Z — does Z still hold?"). Halt for a human decision on a mismatch. This *verifies the record*; it does not re-judge whether the test strategy was right (that was the plan-time reviewer's job).
 4. Run a cheap pre-merge pass of the verification commands — but know what it can reach: you are still on `main`, so it verifies `main`, not the branches. Their files are not in your tree yet.\

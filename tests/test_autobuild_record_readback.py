@@ -381,3 +381,168 @@ def test_an_unreadable_record_fails_the_task():
     # The source, not just the token: "leaving its `Notes` empty" kept the token (Phase 371's round).
     assert re.search(r"\bits printed lines as the `Notes`", m.group(1)), (
         "the `UNREADABLE` arm no longer names its own printed lines as its `Notes`")
+
+
+# --- Phase 7's recovered arm runs item `1‑record` -------------------------------------------
+#
+# A task whose envelope never parsed reaches `EXECUTED (envelope-recovered)` on filesystem
+# evidence alone -- a commit and a pending doc -- and that agent is the one least likely to
+# have run its own record check. Phase 7 runs item `1‑record` for it, by reference: the block
+# has one copy, pinned identical to `/claim-task` Step 8's above.
+
+
+def _phase7() -> str:
+    whole = BUILD.read_text(encoding="utf-8")
+    # The heading at a line start: item 1 and item `1‑record` cite it in backticks, earlier.
+    start = whole.find("\n## Phase 7: Envelope Recovery\n")
+    assert start != -1, "COULD NOT LOCATE `## Phase 7: Envelope Recovery`; re-point this helper"
+    assert whole.count("\n## Phase 7: Envelope Recovery\n") == 1, "two Phase 7 headings"
+    end = whole.find("\n## Step 8", start)
+    assert end != -1, "COULD NOT LOCATE `## Step 8` after Phase 7; re-point this helper"
+    return whole[start:end]
+
+
+def _phase7_block() -> str:
+    t = _phase7()
+    start = t.find("```bash\n", t.find("### Phase 7 procedure"))
+    assert start != -1, "COULD NOT LOCATE Phase 7's procedure block; re-point this helper"
+    end = t.find("\n```", start + 8)
+    return t[start + 8:end]
+
+
+def test_phase_7_runs_item_1_record_by_reference_not_by_copy():
+    t = _phase7()
+    flat = " ".join(t.split())
+    assert "run item `1‑record` of `### Rolling-window refill on completion` for this task" in flat, (
+        "Phase 7's recovered arm no longer runs item `1‑record`, so a task recovered on a "
+        "commit and a pending doc counts as executed with its record never read")
+    # One copy: a second would drift from the pinned one, which is worse than none.
+    for copy_marker in ("<<'RECORD_PY'", "RECORD_PY", "def fence_mark", "git rev-parse --git-common-dir"):
+        assert copy_marker not in t, f"Phase 7 carries a copy of the record block ({copy_marker!r})"
+    # The routing, by name: every verdict that fails a task on the refill path fails it here.
+    m = re.search(r"\*\*Apply that item's outcomes as written there\.\*\*(.*?)Only `test-decision record present`", flat)
+    assert m, "Phase 7's arm no longer says to apply item `1‑record`'s outcomes"
+    for verdict in ("`MISSING`", "`TEMPLATE`", "`NOT ON BRANCH`", "`UNREADABLE`"):
+        assert verdict in m.group(1), f"Phase 7's arm no longer fails a recovered task on {verdict}"
+    assert "Step 8 status `FAILED`" in m.group(1) and "printed lines as its `Notes`" in m.group(1)
+    sentence = m.group(1).lower()
+    found = [v for v in _REVERSAL_VOCABULARY + _REPUDIATION if v in sentence]
+    assert not found, f"Phase 7's routing sentence carries reversal vocabulary {found!r}"
+
+
+def test_phase_7_substitutes_the_claimed_branch_not_its_sanitized_name():
+    """`BRANCH_NAME` in Phase 7 is `branch --show-current | tr / -`: the pending-doc stem.
+
+    `1‑record` builds `refs/heads/<BRANCH_NAME>` from what it is handed, so passing Phase 7's
+    name fails every slashed branch as `UNREADABLE` -- see the executed row below."""
+    flat = " ".join(_phase7().split())
+    assert "**For `<BRANCH_NAME>`, substitute the branch Step 5 claimed for this task**" in flat
+    assert "`(task_id, worktree_path, branch_name)` tuple" in flat
+    assert "This block's `BRANCH_NAME` is not it." in flat, (
+        "Phase 7 no longer says its own sanitized `BRANCH_NAME` is the wrong value to substitute")
+
+
+def test_the_record_steps_scope_names_the_recovered_route():
+    step = _refill_step()
+    sentence = " ".join(_sentence_with(step, "only when its envelope says `STATUS: EXECUTED`").split())
+    assert "`## Phase 7: Envelope Recovery`" in sentence and "`EXECUTED (envelope-recovered)`" in sentence, (
+        "item `1‑record`'s scope no longer names the Phase 7 route, so a reader of the item "
+        "alone skips the recovered population:\n\n  " + sentence[:400])
+
+
+def test_item_1_runs_phase_7_on_a_parse_miss():
+    """Timing: the read-back lands at recovery, as the refill collects each envelope."""
+    whole = BUILD.read_text(encoding="utf-8")
+    start = whole.find("1. Collect that agent's result.")
+    end = whole.find("1‑record. **Re-read", start)
+    assert start != -1 and end != -1, "COULD NOT LOCATE refill item 1; re-point this helper"
+    assert "If neither yields an envelope that parses, run `## Phase 7: Envelope Recovery` for this task now." in whole[start:end]
+
+
+def test_step_8_reporting_names_the_failed_read_back():
+    t = " ".join(_phase7().split())
+    assert "A recovered task the read-back failed appears as `FAILED`" in t
+    assert "whose record read back present MUST appear" in t
+
+
+class TestTheRecoveredArmEndToEnd:
+    """Phase 7's block run as written, then item `1‑record`'s block with each branch value."""
+
+    def _recovered(self, repo, tmp_path, body):
+        wt = tmp_path / "wt"
+        _git(repo, "worktree", "add", "-q", "-b", "tech/tech-w", str(wt), "main")
+        pre = subprocess.run(["git", "-C", str(wt), "rev-parse", "HEAD"], check=True,
+                             capture_output=True, text=True).stdout.strip()
+        (wt / "tasks" / "open").mkdir(parents=True, exist_ok=True)
+        (wt / "tasks" / "open" / "T.md").write_text(body, encoding="utf-8")
+        _git(wt, "add", "-A")
+        _git(wt, "commit", "-qm", "work")
+        pending = wt / "sysop" / "runtime" / "pending-docs"
+        pending.mkdir(parents=True)
+        (pending / "tech-tech-w.md").write_text("doc\n", encoding="utf-8")
+        block = _phase7_block().replace("<worktree path>", str(wt)).replace("<pre-exec head>", pre)
+        r = subprocess.run(["bash", "-c", block], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        return r.stdout
+
+    def test_the_block_prints_its_verdict(self, repo, tmp_path):
+        """No variable outlives the block, so a verdict it does not print is unreadable."""
+        out = self._recovered(repo, tmp_path, "# T\n\n## Test decision\ntest t.py proves it\n")
+        assert "RECOVERED_STATUS=EXECUTED (envelope-recovered)" in out, repr(out)
+        assert "NEW_COMMITS=1" in out, repr(out)
+        assert "RECOVERED_ERROR=none" in out, "the failure reason must be printed too: " + repr(out)
+
+    def test_the_claimed_branch_reads_the_record_and_the_sanitized_name_cannot(self, repo, tmp_path):
+        self._recovered(repo, tmp_path, "# T\n\n## Test decision\ntest t.py proves it\n")
+        rc, out = _run(repo, "tech/tech-w")
+        assert rc == 0 and out.startswith("test-decision record present"), (rc, out)
+        rc, out = _run(repo, "tech-tech-w")
+        assert rc == 0 and out.startswith("UNREADABLE"), (
+            "the sanitized name should fail the read -- the trap Phase 7's arm names: " + repr((rc, out)))
+
+    def test_a_recovered_task_with_no_record_is_missing(self, repo, tmp_path):
+        out = self._recovered(repo, tmp_path, "# T\n\n## Requirements\n1. thing\n")
+        assert "RECOVERED_STATUS=EXECUTED (envelope-recovered)" in out, repr(out)
+        rc, out = _run(repo, "tech/tech-w")
+        assert rc == 1 and out.startswith("MISSING"), (rc, out)
+
+
+def test_phase_7_reads_back_before_step_8_and_never_writes_the_record():
+    """The read-back is placed before Step 8, which reports its outcome, and the refill
+    item's ban on composing the record from the plan carries to the recovered arm: a
+    recovered task is the one most tempting to "repair"."""
+    flat = " ".join(_phase7().split())
+    assert "for this task, before Step 8**" in flat, (
+        "Phase 7's read-back is no longer placed before Step 8")
+    assert "Its prohibition on writing the record yourself holds here too." in flat, (
+        "Phase 7's arm no longer carries the ban on writing the record yourself")
+
+
+def _section(title: str) -> str:
+    t = _phase7()
+    start = t.find(f"\n### {title}\n")
+    assert start != -1 and t.count(f"\n### {title}\n") == 1, f"COULD NOT LOCATE ### {title}"
+    end = t.find("\n### ", start + 1)
+    return t[start:end if end != -1 else len(t)]
+
+
+#: The recovered arm's whole text, hash-pinned: its condition, its substitution and its routing
+#: each changed alone, and a needle test passed on a negated or inverted sentence (Phase 474's
+#: round, lens 2). Re-pin only for an intended change, and say so in the commit.
+READ_BACK_SHA16 = "4470e66bdbfbc667"
+
+
+def test_the_recovered_arm_text_is_pinned():
+    import hashlib
+    got = hashlib.sha256(_section("Read back a recovered task's record").encode("utf-8")).hexdigest()[:16]
+    assert got == READ_BACK_SHA16, f"Phase 7's recovered arm changed (sha {got}); re-pin only if intended"
+
+
+def test_item_1_runs_phase_7_now_and_reporting_fails_a_failed_read_back():
+    whole = " ".join(BUILD.read_text(encoding="utf-8").split())
+    assert ("If neither yields an envelope that parses, run `## Phase 7: Envelope Recovery` for this "
+            "task now. After consuming the JSON file,") in whole
+    rep = " ".join(_section("Reporting in Step 8").split())
+    assert ("A recovered task the read-back failed appears as `FAILED`, its `Notes` naming the "
+            "recovery and then the read-back's printed lines.") in rep
+    assert rep.count("`FAILED`") == 1, "Step 8's reporting text offers a second status for a failed read-back"

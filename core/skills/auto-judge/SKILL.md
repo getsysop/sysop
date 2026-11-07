@@ -46,7 +46,7 @@ Parse `$ARGUMENTS`:
 - **`--dry-run`** → report without claiming or fixing. Stops after Step 3.
 - **`--merge`** → process only overlapping batches, sequentially. Concurrency cap ignored.
 - **`--batches <selector>`** → narrow this run to the named batches. The selector is comma-separated bare integers and inclusive `<lo>-<hi>` ranges: `--batches 563-584`, `--batches 563,570,580-584`. Applied at Step 1d — after the pool is selected and before Step 4's lane split — so it can only ever narrow what the pool already holds. Omitted, nothing is narrowed. **It is a flag rather than a bare argument on purpose:** a bare integer is already this skill's concurrency cap, so `/auto-judge 563` would set a 563-way cap, and nothing in the invocation would say which of the two was meant. That is the one thing `/auto-build`'s positional task-ID grammar (`auto-build:40`) cannot be copied on — its bare integer and its `^[A-Z]`-shaped IDs are structurally disjoint, and two integers are not.
-- **Resuming a killed run** is what the selector is mostly for. `--merge` is sequential and a rate-limit death mid-run leaves the batches it already claimed flipped to `In Progress`, so a bare re-invocation skips exactly the ones that need finishing. `/auto-judge --merge --batches <first-unfinished>-<last>` re-enters at the right place. **It does not recover the stranded batch itself:** the 1a pool requires `Pending`, and naming a batch never overrides that (1d), so an `In Progress` batch stays excluded — and is reported as such rather than silently skipped. Recovering it is a separate step, and **which command depends on whether the killed run had already finished any task**: `bash sysop/scripts/batch_work.sh --release <N>` removes the worktree and reverts the status, but it **exits 1 when the batch contains any `- [x]` task** — which is precisely what a run killed part-way through produces. The script states the boundary itself: *"`/review-close` owns a batch that has results; `--release` owns one that does not."* So route a batch with finished work through `/review-close` on its branch; use `--release <N>` for a batch claimed but not yet worked, and `--release --force <N>` only to abandon finished work deliberately (it also removes a worktree holding the batch branch at an unexpected path). Then include the batch in the selector.
+- **Resuming a killed run** is what the selector is mostly for. `--merge` is sequential and a rate-limit death mid-run leaves the batches it already claimed flipped to `In Progress`, so a bare re-invocation skips exactly the ones that need finishing. `/auto-judge --merge --batches <first-unfinished>-<last>` re-enters at the right place. **It does not recover the stranded batch itself:** the 1a pool requires `Pending`, and naming a batch never overrides that (1d), so an `In Progress` batch stays excluded — and is reported as such rather than silently skipped. Recovering it is a separate step, and **which command depends on whether the killed run had already finished any task**: `bash sysop/scripts/batch_work.sh --release <N>` removes the worktree and reverts the status, but it **exits 1 when the batch contains any `- [x]` task** — which is precisely what a run killed part-way through produces. Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock. The script states the boundary itself: *"`/review-close` owns a batch that has results; `--release` owns one that does not."* So route a batch with finished work through `/review-close` on its branch; use `--release <N>` for a batch claimed but not yet worked, and `--release --force <N>` only to abandon finished work deliberately (it also removes a worktree holding the batch branch at an unexpected path). Then include the batch in the selector.
 
 ## Step 0.5: Triage Prerequisite
 
@@ -120,6 +120,24 @@ Requested but not in the pool: <number> — <reason: status is `<Status>`, not P
 
 If the intersection is empty, stop and print the requested numbers with the reason each was excluded — do **not** fall through to the "no batches" message below, which describes an empty queue rather than an empty selection, and would send the operator looking for work that is sitting right there.
 
+### 1e. Recompute overlap (every run)
+
+Compute overlap yourself for every pool batch, even when its `Overlap:` tag is present. The tag is a generator's result and can be wrong; this is where a wrong one is caught.
+
+1. **Population.** Compare against every batch in the 1a index whose status is not `Merged`, `Complete` or `Ready for Review` — not only this run's pool. That includes `/auto-fix`'s unflagged batches, `In Progress` and `Review Ready` batches, and batches `--batches` left out: each can run beside this one, or has a branch still waiting to merge.
+2. **File sets.** For each population batch, collect the file paths from its task anchors (the `<file:line>` on each task's detail line) and strip the line numbers. A batch 1b already read needs nothing more. For any other, read only its anchors, over the same `<START>`/`<END>` range as 1b:
+
+   ```bash
+   sed -n '<START>,<END>p' review_tasks.md | grep -oE '^[[:space:]]+[^[:space:]]+:[0-9]+'
+   ```
+
+   Each hit is the first token of an indented task detail line, so a path a description
+   mentions is not read. Drop the indent, the surrounding backtick and the line number.
+3. **Computed overlap.** Two batches overlap if they share any file path. A pool batch's computed overlap is `none` when it shares no path with another population batch, otherwise a `batch-<N>` list in the declared grammar (`WORKFLOW.md` § Batch metadata fields).
+4. **Compare with the tag.** Tag and recompute **agree** when both say `none` (the tag tested whole, after trimming) or when neither does. Otherwise they **disagree**; a missing tag counts as one that does not say `none`. Only a batch where both say `none` runs in the parallel lane (Step 4b).
+
+Show the result in the `Overlap` column of Step 3's plan table and Step 5's Deferred table: the computed value when tag and recompute agree, and both values when they disagree or the tag is missing — `none (tag) / batch-424 (computed)`, `— (no tag) / none (computed)`. Hold all of it in memory. **Never write it to `review_tasks.md`**: `/codebase-review` and `/security-audit` are the tag's only writers.
+
 ## Step 2: Categorize Flags
 
 For each flagged batch, read the `Flag:` reason and assign a **category** used only to prime the agent prompt:
@@ -142,17 +160,19 @@ Print a classification table:
 | Batch | Title | Tasks | Judgment | Category | Overlap | Flag Reason |
 |-------|-------|-------|----------|----------|---------|-------------|
 | 421   | Backend Auth & Middleware | 10 | 2 of 10 | verification | none | TASK-2283/2285: judgment call on benign race; design choices... |
-| 424   | Backend Payments stripe_service | 8 | 3 of 8 | design-choice | batch-425 | TASK-2312/2313: alerting design; TASK-2314: when to validate... |
-| 427   | Backend SQL & Data Layer cache | 9 | 9 of 9 | investigation | none | TASK-2329: requires investigation of SET LOCAL pattern |
+| 424   | Backend Payments stripe_service | 8 | 3 of 8 | design-choice | batch-425, batch-427 | TASK-2312/2313: alerting design; TASK-2314: when to validate... |
+| 427   | Backend SQL & Data Layer cache | 9 | 9 of 9 | investigation | none (tag) / batch-424 (computed) | TASK-2329: requires investigation of SET LOCAL pattern |
 
 <if no --merge>
 Processing: <N> parallel batches (concurrency: <cap>)
 Deferred:  <M> overlapping batches (run /auto-judge --merge)
+           of those, <D> have a tag that disagrees with the recompute
 Estimated: <N> reasoning-role agent runs
 </if>
 
 <if --merge>
 Processing: <N> overlapping batches (sequential)
+           of those, <D> have a tag that disagrees with the recompute
 Skipped:   <M> non-overlapping batches
 Estimated: <N> reasoning-role agent runs
 </if>
@@ -163,7 +183,7 @@ Triaged: task list — either the judgment was not attributable per task, or
 the verdict predates task-granular flags.
 ```
 
-The **Judgment** column is `<len(judgment set)> of <batch task count>`. A row reading `<T> of <T>` is the degraded case, not an error.
+The **Judgment** column is `<len(judgment set)> of <batch task count>`. A row reading `<T> of <T>` is the degraded case, not an error. The **Overlap** column and the lane counts come from Step 1e, so a tag that disagrees with the recompute shows here, before you confirm — and in a `--dry-run`.
 
 If no eligible batches for the current mode, report and stop:
 - Without `--merge`: "No non-overlapping flagged batches. Run `/auto-judge --merge` for overlapping."
@@ -182,23 +202,16 @@ tree. If not, stop. Resolve the name with `bash sysop/scripts/default_branch.sh`
 rather than assuming `main` — `batch_work.sh` refuses the claim off that branch, so
 checking against the wrong name here just moves the failure one step later.
 
-### 4a. Compute Overlap (if missing)
+### 4a. Route on the recomputed overlap
 
-For each flagged batch, check if its `Overlap:` tag was extracted in Step 1. If any lack the tag, compute overlap dynamically:
-
-1. Extract all `file:line` references from task lines
-2. Strip line numbers to get file paths
-3. Two batches overlap if they share any file path
-4. Assign computed overlap: `none` or a `batch-<N>` list in the declared grammar (`WORKFLOW.md` § Batch metadata fields)
-
-Store in memory — do not write back to `review_tasks.md`.
+Step 1e recomputed every pool batch's overlap and compared it with the tag. Step 4b routes on both values. Never route on the tag alone, and never write either value to `review_tasks.md`.
 
 ### 4b. Claim and Execute
 
 Determine eligible batches. **Test the value whole, never as a substring** (`WORKFLOW.md` § Batch metadata fields):
 
-- **Without `--merge`**: only batches whose `Overlap:` value, trimmed of surrounding whitespace, is **exactly** `none`.
-- **With `--merge`**: every other batch — anything that is not exactly `none`.
+- **Without `--merge`**: only batches whose `Overlap:` value, trimmed of surrounding whitespace, is **exactly** `none` **and** whose Step 1e recompute is `none`.
+- **With `--merge`**: every other batch — a tag that is not exactly `none`, a missing tag, or a recompute that is not `none`.
 
 **Anything you cannot parse counts as overlapping.** A value in an undeclared shape, a trailing comment, `none (batch 5 shares tests/)` — all of them are *overlapping*, because a substring match on `none` there would route a genuinely conflicting batch into the parallel lane. The asymmetry is deliberate: serialising a batch that could have run in parallel costs wall-clock; parallelising one that really overlaps costs a merge conflict and the rework behind it.
 
@@ -207,6 +220,8 @@ To claim a batch:
 ```bash
 bash sysop/scripts/batch_work.sh <BATCH_NUMBER>
 ```
+
+Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock.
 
 Parse the output for the **Worktree path** (`Path:`) and **Branch name** (`Branch:`). If the script exits non-zero, report the error, **skip this batch**, and continue.
 
@@ -450,6 +465,7 @@ After all batches are processed:
 ### Deferred (overlapping — use --merge)        <if no --merge, omit if empty>
 | Batch | Title | Overlaps With |
 |-------|-------|---------------|
+| 427   | Backend SQL & Data Layer cache | none (tag) / batch-424 (computed) |
 
 ### Failed (needs investigation)
 | Batch | Title | Error |

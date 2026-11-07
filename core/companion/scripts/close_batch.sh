@@ -49,7 +49,7 @@ _SYSOP_GIT_LIB="$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh"
 # `||` arm runs, so the remedy below printed only on bash 4+.
 { [[ -f "$_SYSOP_GIT_LIB" && -r "$_SYSOP_GIT_LIB" ]] && source "$_SYSOP_GIT_LIB"; } || {
   echo "❌ _git_lib.sh is missing or unreadable beside close_batch.sh — it ships with every install." >&2
-  echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
+  echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh (with --yes in a non-interactive shell)" >&2
   exit 1
 }
 DEFAULT_BRANCH="$(resolve_default_branch "$REPO_ROOT" 2>/dev/null)" || DEFAULT_BRANCH=""
@@ -396,7 +396,7 @@ _read_merge_policy() {
     return 1
   fi
   if [[ ! -f "$here/close_arms.py" ]]; then
-    echo "close_arms.py is missing beside close_batch.sh: run sysop/scripts/sysop-update.sh" >&2
+    echo "close_arms.py is missing beside close_batch.sh: run sysop/scripts/sysop-update.sh (with --yes in a non-interactive shell)" >&2
     return 1
   fi
   python3 "$here/close_arms.py" read-policy "$REPO_ROOT"

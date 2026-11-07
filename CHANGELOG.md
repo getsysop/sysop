@@ -7,6 +7,160 @@ a check that now runs. Each entry is dated by the snapshot's publication and nam
 private development phases it carries. The per-phase journal those phases were recorded in is the
 maintainer's working record and is not in the public tree.
 
+## 2026-11-07 — v0.2.5, private phases 469–475
+
+- **`v0.2.5`.** This snapshot is tagged `v0.2.5`, with a GitHub Release carrying this entry.
+  The next bullet is an instruction; the rest are what changed, each a fix to shipped behaviour.
+  `--ref` pins to it as it does to the earlier tags, once the tag is fetched into your clone.
+- **Run `install.sh --update` when the plugin updates to this snapshot.** Most of the fixes below
+  are in scripts under `sysop/scripts/` or in the packs' check fragments, and several change a
+  skill's text together with the script it calls. The plugin delivers the skills; only the bash
+  installer's `--update` (or `sysop/scripts/sysop-update.sh`) delivers the rest. Until you run it,
+  every `/review-close`, in every mode, stops before Step 1: `close_arms.py begin` exits 2 and
+  says the skill and `sysop/scripts/` are from different versions, with the update command
+  (measured with `v0.2.4`'s `close_arms.py` under this snapshot's `begin` line). The later stops
+  two of the bullets below describe, at Step 2a and Step 3b, sit behind that one. `/sitrep`,
+  `/next-task`, `/auto-build`, `/auto-fix`, `/auto-judge` and `/pr-dependabot` keep running on
+  the older scripts, without the script half of their fixes.
+- **`/sitrep` sees the work in a `--clone` claim.** A claim made with `claim_task.sh --clone`
+  read `planning` for its whole life, before and after a push: the survey counted the branch in
+  the main checkout, where it stays at the point it was cut. It now counts in the claim's own
+  clone when the lock's workspace is one, and falls back to the main checkout's remote-tracking
+  copy of the branch when the local branch is gone. A clone whose own default branch is missing is
+  counted in the main checkout, as before. The count is in `sitrep_survey.py`, so an install
+  that has not run `install.sh --update` still reads `planning`.
+- **`/sitrep` and `/next-task` put their report in the reply.** `/sitrep` told the agent the human
+  was already reading the same screen, which is false (a command's output is shown to the agent,
+  not reliably to the human), and an agent that believed it could reply with nothing. Both skills
+  now say to put the script's output, verbatim and complete, first in the reply, in one fenced
+  code block, with any line of the agent's own after it. Skill text only: the plugin update
+  carries it, and a bash-installed copy takes it with `install.sh --update`.
+- **`/auto-build` re-reads the test-decision record of a task it recovered.** A task whose
+  executor returned no readable envelope can still count as executed when its commit and pending
+  doc landed (`EXECUTED (envelope-recovered)`); its `## Test decision` record was then never
+  read back, though that executor is the one least likely to have checked it. The recovery now
+  runs the same read-back as an executed task, and fails the task if the record is missing,
+  still the template, absent from the branch, or unreadable. Skill text only.
+- **`/pr-dependabot --execute` no longer closes unrelated PRs as superseded.** A PR whose title
+  the classifier cannot read for a version (Dependabot's default `Bump X from A to B`, with no
+  `chore(...)` prefix, is one) was grouped with every other such PR, so `--execute` closed all
+  but one of them as "superseded". A PR with no target version, or a grouped title (`bump a
+  and b …`, with or without versions), is never part of a duplicate set now. An install that has not run `install.sh --update` still has the old script and still
+  closes them.
+- **`/pr-dependabot` checks whether GitHub can already merge for you.** It reads the repo's
+  native auto-merge setting and prints `native auto-merge: allowed`, `not allowed` or
+  `unknown (<reason>)` with every plan. When it is allowed, the skill asks an explicit question
+  before `--execute` merges anything, since the sweep would be a second merge actor, and it no
+  longer suggests retiring an auto-merge workflow. A setting it cannot read is `unknown`, and
+  the sweep runs as before. With no `--repo`, it reads the repository (and host) the listed PRs
+  belong to, and `--repo` also takes a URL. `--json` is now an object (`native_auto_merge`, `plans`) rather than
+  a list. With the plugin updated and the scripts not, the old script prints no reading line and
+  the skill treats that as `unknown`; run `install.sh --update` with the plugin update.
+- **The python and postgres packs' grep checks skip test files by name, not by substring.** Five
+  checks (`sql-fstring` and `missing-writer-engine-guard` among them, both critical) excluded
+  `*test*`, which skipped production files such as `stress_test.py` and `latest_rates.py`. On
+  macOS it was worse: the system grep matches that glob against the whole path, so a checkout
+  under any directory containing "test" (`latest/`, a user named `tester`) ran these checks
+  over nothing and reported 0 findings. They now exclude `test_*.py` and `conftest.py` and the
+  `tests/` and `test/` directories. A `.py` file named `*_test.py` outside those directories is
+  now scanned, and production code inside a directory named `test/` or `tests/` no longer is. The nextjs-react `createobjecturl-leak` check's `*__tests__*` glob, which skipped
+  nothing on Linux, is now a directory exclude. `.claude/checks.yml` is rebuilt from the packs
+  by `install.sh --update`, so a plugin update alone does not change it; an entry overridden in
+  `.claude/checks.project.yml` keeps the glob you wrote there.
+- **`run_checks` with a relative `--repo-root` finds grep matches again.** It resolved each
+  `paths:` entry from the current directory and then ran grep from the root, so every grep check
+  read `executed` with 0 findings. `run_checks.sh` passes an absolute root and was not affected.
+- **Shell scripts no longer miss a match early in a large input.** Under `set -o pipefail`, a
+  `| grep -q` that stops reading at its first match can make the writer fail, and the pipeline
+  then reads as no match. `install.sh`'s report of armed hooks and settings that still name the
+  old `scripts/` paths, and `self_check.sh`'s armed-hook check, missed a match on the first line
+  of a file from about 24 KB on macOS (missed 20 of 40 times at 24 KB, every time from 48 KB); a batch claim read its batch as not found in a tracker of 1,500
+  batches (it held at 700); and `pre-merge-commit-python.example` could skip pytest on a large
+  merge. Each now reads its input to the end. The `pre-commit-python.example` hook's multi-line
+  `logger.*(…, exc_info=True)` check, which had never fired, now warns when a call left open on
+  one added line has `exc_info=True` on the next added line of the same hunk. The examples are not installed: a copy you armed keeps its old text.
+- **`/review-close` reviews a branch from where it left either copy of the default branch.**
+  Step 2's diffs ran three dots from local `main`, so a local `main` behind `origin` handed the
+  reviewers the upstream commits a branch was cut over as the branch's own: extra findings, a
+  docs-only skip lost to someone else's code, and more agents spawned. Worse, a branch that
+  removed a line one of those upstream commits added showed no change to that file, so every
+  Step 2 gate could pass it unseen. Each branch's diffs, its commit list, its ignored-file check
+  and its verdict key now start at its newest common ancestor with `main` or `origin/main`
+  (`feature_branch.py base`), at its merge-base with `origin/main` when there are two such
+  ancestors, and at its merge-base with `main` when there is no `origin/main`. A branch cut from
+  a local-only `main` commit still leaves that commit to the unpushed-main review. The first
+  close after you update re-runs every Step 2b gate once, because the verdict key covers Step
+  2b's text, which this changes. Run `install.sh --update` with the plugin update. Behind the
+  stop at `close_arms.py begin` (second bullet), the older `feature_branch.py` would stop the
+  close at the first `feature_branch.py base` it runs (Step 2a's first command, or a resume's
+  re-run of Step 2b): it prints a usage line that does not list `base`, and exits 2. The skill's instruction to run `sysop-update.sh` when a script is missing
+  now names `--yes` for a non-interactive shell.
+- **A dry run's closing line names `--yes` when the apply would need it.** An apply with no
+  terminal (an agent's tool call, CI) stops at `Proceed?` and exits 1 without `--yes`, and the dry
+  run said only "Re-run without --dry-run to apply." It now adds "and with --yes" when no terminal
+  can be opened or `--yes` was given, at the fresh, `--update` and `--adopt` closing lines and in
+  the dirty-source remedy's printed `--ref HEAD` command. The install docs say `--yes` is required
+  in a non-interactive shell; it is not remembered between runs.
+- **`run_checks` no longer calls a baseline entry dead when semgrep or grep skipped its file.**
+  semgrep's directory scan skips `vendor/`, `build/`, `dist/`, `node_modules/` and the rest of its
+  built-in ignore list (when you have no `.semgrepignore`) and any file over 1,000,000 bytes, and
+  grep does not quote a match in a file it reads as binary (a NUL byte, for one). The stage still
+  read `executed`, the stale-entry warning named those entries, and `--update-baseline` deleted
+  them. semgrep and grep now each name the files once per run, the warning lists their entries
+  apart as not judged, and
+  `--update-baseline` and `--migrate-baseline` keep them. A semgrep rule that times out on a file
+  now makes the stage `degraded` and names the file, where it read `executed`. GNU grep's binary
+  notice, printed on stderr, is now read too. A consumer with large non-code files sees one more
+  warning line per run.
+- **`/auto-fix` and `/auto-judge` recompute batch overlap every run.** They trusted a present
+  `Overlap:` tag, so a wrong `none` sent conflicting batches into the parallel lane. A batch now
+  runs in parallel only when its tag is `none` and the recompute, over every open batch, agrees;
+  otherwise it runs sequentially and the plan table shows both values. A batch with no tag now
+  always runs sequentially. Run `install.sh --update` with the plugin update: the skills' new
+  step reads only the tracker, so it runs on older scripts, and the `run_checks` change arrives
+  only with the update.
+- **`/review-close` checks the main checkout for edited tracked files before it moves anything.**
+  An uncommitted edit there, such as the `SYSOP_ISSUES.md` entry a close's friction capture leaves,
+  made Step 4a's rebase, a dropped close-time fix and Step 6's re-sync refuse partway through,
+  after Step 3b had already removed the approved worktrees. Step 1b now lists any such file
+  (`git_check.py tracked-clean`), with any untracked files the commit would leave out, and asks:
+  commit them as their own `docs:` commit, which Step 2 then reviews with the other unpushed main
+  commits, or stop. It offers only the stop when the checkout is not on the default branch, or
+  when an edited `tasks/index.yml` sits beside an untracked task body. An unattended run stops
+  and reports them, and never commits. A `--resume` whose Step 1 makes that commit now re-runs
+  Step 2c on it as well as Step 2b. Step 3b checks again before the first worktree is
+  removed, and stops on an edit made while the reviews ran. Run `install.sh --update` with the
+  plugin update: until you do, the close stops before Step 1, at `close_arms.py begin`, with
+  "the skill and sysop/scripts/ are from different versions".
+- **`/review-close` stops refusing a held doc whose branch a close rebased.** A close rebases each
+  branch it merges, so a doc it held recorded a `branch_tip:` that is no longer an ancestor of the
+  branch. The next close counted the merge target's commits and the rebased copies as drift
+  (`PENDING-DOC STALE`, exit 6). Step 3b now finds the doc's commits on the branch by patch, as one
+  run in their order, and counts only what came after that run, so real work after the rebase
+  still refuses. What sits under the run must be the merge target's (the default branch, its copy
+  on `origin`, or a `pr` close's recorded head), so work slipped in under the doc's commits
+  refuses too. When any of
+  that cannot be proven, after an amended commit for example, it refuses as before. A commit
+  reworded after `/document-work`, its change untouched, no longer refuses.
+- **An older held doc beside a newer one is no longer stale.** When a close holds a doc,
+  `/document-work` writes a `<name>--<n>.md` beside it for later work. Step 3b now reads the pair
+  as one set: the older doc prints `PENDING-DOC COVERED:` and goes on when the newer one is
+  current, including after a later close has rebased both. Before, re-running `/document-work`, the only remedy the refusal named, wrote another
+  sibling and could not clear it.
+- **`/sitrep` agrees with the close on both.** Its "pending doc stale" state uses the same
+  measurement and reads the branch's docs as one set, so it no longer sends you to
+  `/document-work` over a doc the close collects, or calls a branch ready that the close refuses.
+- **A branch with no workspace runs the same test.** Step 3b applied the staleness test by hand
+  when no workspace was found. It now runs `pending_doc_collect.py staleness "<branch>"`, which
+  carries both fixes above. Run `install.sh --update` to get the script and the new
+  `_doc_drift.py` it imports. Behind the stop at `close_arms.py begin` (second bullet), the
+  step's new call would exit 2 (usage) on the previous script, which the step reads as "stop".
+- **Calls that can wait on the tracker lock pass a Bash timeout.** The lock's 120 s wait equals
+  Claude Code's default Bash timeout, so a call that waited it out was killed before it could
+  print who held the lock. `/claim-task`, `/auto-build`, `/auto-fix`, `/auto-judge` and
+  `/review-close` now tell the agent to pass `timeout: 300000` on each such call they make. If you
+  raise `SYSOP_TRACKER_LOCK_WAIT` past about four minutes, those calls can again time out first.
+
 ## 2026-11-05 — v0.2.4, private phases 464–468
 
 - **`v0.2.4`.** This snapshot is tagged `v0.2.4`, with a GitHub Release carrying this entry.

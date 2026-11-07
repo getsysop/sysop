@@ -926,7 +926,7 @@ def test_the_venv_numbers_going_universal_again_is_caught() -> None:
 
 def test_a_HEAD_based_retrieval_command_is_caught() -> None:
     prescribed = ('`python3 sysop/scripts/git_ro.py "<absolute path to the pinned checkout>" diff '
-                  '<default branch>...refs/heads/<branch>`')
+                  '<base> refs/heads/<branch>`')  # Phase 472 (`Q-734`): from the branch's base
     assert prescribed in _rc(), "control anchor is stale -- this control would prove nothing"
     mutated = _rc().replace(prescribed, "`git diff origin/<default branch>...HEAD`").replace(
         "**Write the retrieval command with EXPLICIT refs on both sides, run through "

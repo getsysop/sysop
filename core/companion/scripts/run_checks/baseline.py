@@ -175,7 +175,8 @@ def _anchor_path(file_line):
     return path if sep and path and tail.isdigit() else str(file_line)
 
 
-def unmatched_entries(baseline, all_findings, executed_ids, repo_root):
+def unmatched_entries(baseline, all_findings, executed_ids, repo_root,
+                      skipped_paths=None):
     """Return ``[(entry, anchor_present), ...]`` for entries that matched nothing.
 
     `legacy_entries` reports only a TWO-field entry, so an
@@ -214,11 +215,38 @@ def unmatched_entries(baseline, all_findings, executed_ids, repo_root):
     code. pip-audit's anchor is synthesized (the first requirements file, else
     `pyproject.toml`), so renaming the manifest moves every pip-audit key and
     lands its old entries here, absent — which is the truth.
+
+    ``skipped_paths`` (`RunReport.skipped_paths`) holds back an entry whose
+    anchor file its check did not read this run — a file semgrep's default
+    ignore list or size limit dropped, a file grep read as binary. Such an
+    entry is not named here; `skip_held_entries` returns it instead.
     """
+    return _judge_unmatched(baseline, all_findings, executed_ids, repo_root,
+                            skipped_paths)[0]
+
+
+def skip_held_entries(baseline, all_findings, executed_ids, skipped_paths):
+    """Entries `unmatched_entries` holds back because their check skipped the
+    anchor file. Sorted; the caller names them so a hold is never silent."""
+    return _judge_unmatched(baseline, all_findings, executed_ids, "",
+                            skipped_paths)[1]
+
+
+def held_by_skip(check_id, file_line, skipped_paths):
+    """True when ``check_id``'s stage recorded the file ``file_line`` names as
+    not read this run. One predicate for every baseline reader, so the stale
+    warning, `--update-baseline` and `--migrate-baseline` hold the same set."""
+    if not skipped_paths:
+        return False
+    return _anchor_path(file_line) in skipped_paths.get(check_id, ())
+
+
+def _judge_unmatched(baseline, all_findings, executed_ids, repo_root,
+                     skipped_paths):
     current = {finding_key(c, fl, ident) for c, fl, _msg, ident in all_findings}
     executed = set(executed_ids)
     legacy = set(legacy_entries(baseline, all_findings))
-    out = []
+    out, held = [], []
     for entry in sorted(baseline):
         parts = entry.split("|")
         if len(parts) not in (2, 3):
@@ -227,10 +255,13 @@ def unmatched_entries(baseline, all_findings, executed_ids, repo_root):
         if (check_id not in executed or _is_coverage(check_id)
                 or entry in legacy or entry in current):
             continue
+        if held_by_skip(check_id, parts[1], skipped_paths):
+            held.append(entry)
+            continue
         anchor = _anchor_path(parts[1])
         out.append((entry, bool(anchor)
                     and os.path.exists(os.path.join(repo_root, anchor))))
-    return out
+    return out, held
 
 
 def unregistered_entries(baseline, registered_ids):
@@ -325,7 +356,8 @@ def is_baseline_suppressed(check_id, file_line, blocking_ids, baseline,
     return finding_key(check_id, file_line, identity) in baseline
 
 
-def write_baseline(path, all_findings, blocking_ids, non_executed_ids=()):
+def write_baseline(path, all_findings, blocking_ids, non_executed_ids=(),
+                   skipped_paths=None):
     """Write baseline file containing all current findings. Returns the count.
 
     Atomic rewrite via `<path>.tmp` + `os.replace` so a crash mid-write
@@ -406,12 +438,22 @@ def write_baseline(path, all_findings, blocking_ids, non_executed_ids=()):
     # rewrite below is minted, so the preserved set comes from the file as it
     # was; the order is pinned by a test, because moving the read inside the
     # write block was a silent survivor once.
+    #
+    # ``skipped_paths`` carries forward, per FILE, the entries of a check that
+    # ran but did not read the entry's anchor file (`held_by_skip`). Without it
+    # a `vendor/` or over-size file's accepted verdicts were deleted here while
+    # the check read `executed`.
     preserved = set()
-    if non_executed_ids:
+    if non_executed_ids or skipped_paths:
         non_executed = set(non_executed_ids)
         for key in load_baseline(path):
-            check_id = key.split("|", 1)[0]
-            if check_id in non_executed and not _is_coverage(check_id):
+            parts = key.split("|")
+            check_id = parts[0]
+            if _is_coverage(check_id):
+                continue
+            if check_id in non_executed or (
+                    len(parts) in (2, 3)
+                    and held_by_skip(check_id, parts[1], skipped_paths)):
                 preserved.add(key)
 
     seen = set()
@@ -493,7 +535,7 @@ def _source_line(repo_root, file_line):
 
 
 def migrate_baseline(path, all_findings, repo_root, skipped_ids=(),
-                     incomplete_ids=()):
+                     incomplete_ids=(), skipped_paths=None):
     """Convert a two-field baseline in place. Returns (rows, refusal).
 
     **Line-oriented and comment-preserving.** A consumer's baseline is mostly
@@ -530,6 +572,9 @@ def migrate_baseline(path, all_findings, repo_root, skipped_ids=(),
     check is in ``skipped_ids``, because then there is nothing to convert; a
     global refusal on any single skip made the upgrade path a dead end — see
     the comment at the ``held == entry_checks`` test below.
+
+    ``skipped_paths`` holds, per FILE, a zero-match entry whose check ran but
+    did not read its anchor file (`held_by_skip`): ``kept-skipped``.
     """
     identity_bearing = {
         cid for cid, _fl, _msg, ident in all_findings if ident
@@ -740,6 +785,13 @@ def migrate_baseline(path, all_findings, repo_root, skipped_ids=(),
                 rows.append(("kept-incomplete", line, line,
                              "this check ran over less than its declared inputs "
                              "— held; re-run when the stage completes"))
+                out.append(raw)
+                continue
+            if held_by_skip(cid, file_line, skipped_paths):
+                rows.append(("kept-skipped", line, line,
+                             f"this check ran but did not read {anchor_path} "
+                             "this run — held; its silence there is not "
+                             "evidence"))
                 out.append(raw)
                 continue
             if not os.path.exists(os.path.join(repo_root, anchor_path)):

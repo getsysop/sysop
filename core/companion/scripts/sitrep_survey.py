@@ -145,6 +145,11 @@ except ImportError:
         # was the one script of the five that exited 1 here (Phase 219 round).
         sys.exit(2)
 
+# `/review-close` Step 3b's staleness measurement, imported rather than restated so the survey
+# and the close give one verdict (`Q-738`).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _doc_drift  # noqa: E402
+
 
 # ── Constants ────────────────────────────────────────────────────
 
@@ -479,8 +484,11 @@ def _parse_lock_file(path: Path, unreadable: list | None = None) -> dict[str, An
 
 
 def _read_worktrees(main_root: Path) -> list[Worktree]:
+    """Every worktree of the repository at `main_root`. The listing runs there, not in
+    the process's directory: an in-process caller surveying another repository got the
+    worktrees of whichever repository it was standing in."""
     out: list[Worktree] = []
-    raw = _git(["worktree", "list", "--porcelain"])
+    raw = _git(["worktree", "list", "--porcelain"], cwd=str(main_root))
     if not raw:
         return out
     cur: dict[str, str] = {}
@@ -877,11 +885,38 @@ def _commits_ahead_of_main(branch: str, main_root: Path) -> list[Commit]:
     bases = _default_branch_refs(main_root)
     if not bases:
         return []
-    raw = _git(
-        ["log", "--pretty=format:%H%x1f%s%x1f%aI%x1f%B%x1e", f"refs/heads/{branch}", "--not", *bases,
-         f"--glob={MERGED_PR_HEADS_GLOB}"],
+    ref = _main_branch_ref(branch, main_root)
+    if not ref:
+        return []
+    return _parse_commit_log(_git(
+        ["log", _COMMIT_LOG_FORMAT, ref, "--not", *bases, f"--glob={MERGED_PR_HEADS_GLOB}"],
         cwd=str(main_root),
-    )
+    ))
+
+
+_COMMIT_LOG_FORMAT = "--pretty=format:%H%x1f%s%x1f%aI%x1f%B%x1e"
+
+
+def _main_branch_ref(branch: str, main_root: Path) -> str:
+    """The ref `_commits_ahead_of_main` counts in the main checkout: the local branch, else
+    its copy on the default remote as last fetched, else "" (nothing to count).
+
+    The remote-tracking ref is for a claim whose local branch is gone and whose commits
+    were pushed. Commits counted off it are pushed by definition, which is why
+    `_commits_unpushed` reads 0 for a branch with no local ref."""
+    if not branch:
+        return ""
+    local = f"refs/heads/{branch}"
+    if _git(["rev-parse", "--verify", "--quiet", f"{local}^{{commit}}"], cwd=str(main_root)):
+        return local
+    remote = f"refs/remotes/{_default_remote(main_root) or 'origin'}/{branch}"
+    if _git(["rev-parse", "--verify", "--quiet", f"{remote}^{{commit}}"], cwd=str(main_root)):
+        return remote
+    return ""
+
+
+def _parse_commit_log(raw: str) -> list[Commit]:
+    """`git log` output in `_COMMIT_LOG_FORMAT`, as commits."""
     if not raw:
         return []
     out: list[Commit] = []
@@ -909,6 +944,123 @@ def _commits_ahead_of_main(branch: str, main_root: Path) -> list[Commit]:
             )
         )
     return out
+
+
+def _claim_commits(branch: str, main_root: Path, lock: "Lock | None") -> tuple[list[Commit], int]:
+    """`(commits ahead of the default branch, unpushed count)` for a claim, both read from
+    the one place its work lives, so the two never disagree about which branch they read.
+
+    A `--clone` claim's workspace is a separate repository. `claim_task.sh` creates the
+    branch in the main checkout before it pushes and clones, so the main checkout's
+    `refs/heads/<branch>` stays at the cut point while the commits land in the clone: read
+    there, every clone claim was `planning`. So when the lock's workspace is a separate
+    repository holding the branch, both counts run in it (`_commits_ahead_in_clone`); any
+    other claim, or a clone whose merge target cannot be named, is counted in the main
+    checkout as before."""
+    ws = _clone_workspace(branch, lock, main_root)
+    if ws is not None:
+        commits = _commits_ahead_in_clone(branch, ws, main_root)
+        if commits is not None:
+            return commits, _commits_unpushed_in_clone(branch, ws)
+    return _commits_ahead_of_main(branch, main_root), _commits_unpushed(branch, main_root)
+
+
+def _common_dir(where: Path) -> "Path | None":
+    """The absolute git common directory of the repository at `where`, or None."""
+    raw = _git(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=str(where),
+               hermetic=True)
+    return Path(raw) if raw else None
+
+
+def _clone_workspace(branch: str, lock: "Lock | None", main_root: Path) -> "Path | None":
+    """The lock's workspace when it is a repository of its own (not the main checkout and
+    not a linked worktree of it, which shares the main checkout's refs) that holds
+    `refs/heads/<branch>`; else None."""
+    if not branch or lock is None or not lock.workspace:
+        return None
+    ws = Path(lock.workspace)
+    if not ws.is_absolute():
+        ws = main_root / ws  # a hand-edited lock: relative to the main checkout, not the cwd
+    try:
+        is_dir = ws.is_dir()
+    except (OSError, ValueError):
+        return None
+    if not is_dir or _same_dir(ws, main_root):
+        return None
+    theirs, ours = _common_dir(ws), _common_dir(main_root)
+    if theirs is None or ours is None or _same_dir(theirs, ours):
+        return None
+    if not _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"],
+                cwd=str(ws), hermetic=True):
+        return None
+    return ws
+
+
+def _commits_ahead_in_clone(branch: str, ws: Path, main_root: Path) -> "list[Commit] | None":
+    """The commits on the clone's `refs/heads/<branch>` that neither the clone's merge target
+    nor the main checkout's default branch or recorded PR heads hold; None when the clone's
+    merge target cannot be named, so the caller counts in the main checkout instead.
+
+    The merge target is `_doc_drift._merge_target`'s, the reader `/review-close` measures a
+    clone's pending doc with. The second filter is the main checkout's: the branch is cut
+    from the local default branch, which can hold commits never pushed (a claim commit), and
+    `refs/sysop/merged-pr-heads/*` is never pushed at all. A clone has neither, so without
+    it a fresh claim would count those commits as its own. A commit the main checkout does
+    not have is the clone's own work and is kept. Read-only in both repositories."""
+    targets, _why = _doc_drift._merge_target(branch, ws)
+    bases = [ref for ref in targets or []
+             if _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+                     cwd=str(ws), hermetic=True)]
+    if not bases:
+        return None
+    commits = _parse_commit_log(_git(
+        ["log", _COMMIT_LOG_FORMAT, f"refs/heads/{branch}", "--not", *bases],
+        cwd=str(ws), hermetic=True,
+    ))
+    if not commits:
+        return commits
+    shas = [c.sha for c in commits]
+    present = _git_lines(["rev-list", "--no-walk", "--ignore-missing", *shas], main_root)
+    if not present:
+        return commits  # none of them is in the main checkout, or it could not say
+    live = _git_lines(["rev-list", "--ignore-missing", *present, "--not",
+                       *_default_branch_refs(main_root), f"--glob={MERGED_PR_HEADS_GLOB}"],
+                      main_root)
+    if live is None:
+        return commits
+    held, kept = set(present), set(live)
+    return [c for c in commits if c.sha not in held or c.sha in kept]
+
+
+def _git_lines(args: list[str], main_root: Path) -> "list[str] | None":
+    """A git command's output lines in the main checkout, `[]` for no output, and None when
+    git failed: `_git` returns "" for both, and a filter that read a failure as "nothing
+    is live" would drop every commit."""
+    try:
+        r = subprocess.run(["git", *args], cwd=str(main_root), capture_output=True, timeout=15)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if r.returncode != 0:
+        return None
+    return os.fsdecode(r.stdout).split()
+
+
+def _commits_unpushed_in_clone(branch: str, ws: Path) -> int:
+    """`_commits_unpushed`, read in a `--clone` claim's own repository, where the branch's
+    upstream is: commits on it not on its upstream, or -1 when it has none."""
+    upstream = _git(["for-each-ref", "--format=%(upstream)", f"refs/heads/{branch}"],
+                    cwd=str(ws), hermetic=True).split("\n")[0].strip()
+    if not upstream or not _git(["rev-parse", "--verify", "--quiet", f"{upstream}^{{commit}}"],
+                                cwd=str(ws), hermetic=True):
+        # No upstream, or one whose remote branch was deleted and pruned (`[gone]`): git
+        # cannot count against it, and main's `@{upstream}` fails the same way, reading -1.
+        return -1
+    raw = _git(["rev-list", "--count", f"{upstream}..refs/heads/{branch}"],
+               cwd=str(ws), hermetic=True)
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
 
 
 #: Where `/review-close` Step 4d records each merged PR's head under `pr` policy
@@ -1071,6 +1223,8 @@ def _live_work_past(main_root: Path, branch: str, lock: "Lock | None",
     tips: list[str] = []
     if lock is not None and lock.workspace:
         ws = Path(lock.workspace)
+        if not ws.is_absolute():
+            ws = main_root / ws  # relative to the main checkout, not the process's cwd
         try:
             is_dir = ws.is_dir()
         except (OSError, ValueError):
@@ -1301,7 +1455,12 @@ def _extract_doc_work_trailers(body: str) -> list[str]:
 
 
 def _commits_unpushed(branch: str, main_root: Path) -> int:
-    """Count commits on `branch` not on its upstream. Returns 0 if no upstream."""
+    """Count commits on `branch` not on its upstream; -1 when the local branch has no
+    upstream. 0 when there is no local branch: `_commits_ahead_of_main` then counts the
+    remote-tracking ref, whose commits are pushed by definition."""
+    if not _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"],
+                cwd=str(main_root)):
+        return 0
     upstream = _git(
         ["rev-parse", "--abbrev-ref", f"{branch}@{{upstream}}"], cwd=str(main_root)
     )
@@ -1470,18 +1629,59 @@ class DocDrift:
     why: str = ""
 
 
-def _pending_doc_drift(doc: Path, branch: str) -> DocDrift:
+def _pending_doc_drift(doc: Path, branch: str, also: tuple[Path, ...] = ()) -> DocDrift:
     """How many commits landed on `branch` after `doc`'s `branch_tip:`.
 
     `/review-close` Step 3b's `tip_of()` + `staleness()`, decision for decision: every
     frontmatter shape it reports as `PENDING-DOC STALENESS UNKNOWN` is unknown here, so
     the survey never calls a doc stale that the close would collect. The count runs in
     the workspace the doc was found in — `staleness(where=...)` does the same — because
-    a `--clone` claim's commits exist only in the clone. One `rev-list`, read-only."""
+    a `--clone` claim's commits exist only in the clone. The count is `_doc_drift.measure`,
+    the close's own, so a branch a close rebased is measured by patch here too.
+
+    The close measures a branch's docs as a set, and refuses when any is stale and not
+    covered (`_doc_drift.covering`: an older held doc beside a current `<stem>--<n>.md`). So
+    does this: the population is every regular `*.md` claiming `branch` in the doc's own
+    directory and in each pending-docs directory in `also`, a name already seen winning, as a
+    workspace's doc replaces main's twin in the collect. `doc`'s own unknown verdict stands."""
+    fm, drift = _doc_tip_drift(doc, branch)
+    if drift.commits is None:
+        return drift
+    docs = {doc.name: (doc, fm, drift)}
+    # `also` first (the workspace's directories, then main's), the found doc's own last: a
+    # workspace doc replaces main's same-named twin in the collect, wherever the doc was found.
+    for d in dict.fromkeys([*also, doc.parent]):
+        for other in sorted(d.glob("*.md")) if d.is_dir() else []:
+            # A FIFO blocks `read_text` forever, and only a regular file is a doc.
+            if other.name in docs or other.name == "convention-candidates.md" or not other.is_file():
+                continue
+            ofm = _doc_frontmatter(other)
+            claimed = ofm.get("branch") if isinstance(ofm, dict) else None
+            if isinstance(claimed, str) and claimed.strip() == branch:
+                docs[other.name] = (other, ofm, _doc_tip_drift(other, branch)[1])
+    current = [(p.name, dd.tip) for p, _, dd in docs.values() if dd.commits == 0]
+    uncovered = [dd for p, f, dd in docs.values() if dd.commits and not _doc_drift.covering(
+        p.name, dd.tip, f, current, branch, p.parents[3] if len(p.parents) > 3 else Path("."))]
+    if uncovered:
+        return drift if drift in uncovered else uncovered[0]
+    return DocDrift(0, tip=drift.tip)
+
+
+def _doc_frontmatter(doc: Path):
+    """A doc's parsed frontmatter, or None when it cannot be read or parsed."""
+    try:
+        m = _PENDING_DOC_FM_RE.match(doc.read_text(encoding="utf-8", errors="replace"))
+        return yaml.safe_load(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _doc_tip_drift(doc: Path, branch: str) -> tuple[dict | None, DocDrift]:
+    """One doc's frontmatter (None when it does not parse to a mapping) and its drift."""
     try:
         m = _PENDING_DOC_FM_RE.match(doc.read_text(encoding="utf-8", errors="replace"))
     except OSError as exc:
-        return DocDrift(None, why=f"the pending-doc could not be read ({type(exc).__name__})")
+        return None, DocDrift(None, why=f"the pending-doc could not be read ({type(exc).__name__})")
     fm = None
     if m:
         try:
@@ -1489,25 +1689,23 @@ def _pending_doc_drift(doc: Path, branch: str) -> DocDrift:
         except Exception:
             fm = None  # not only YAMLError: `2026-09-31` raises ValueError, `!!bool x` KeyError
     if not isinstance(fm, dict) or "branch_tip" not in fm:
-        return DocDrift(None, why="the pending-doc has no readable `branch_tip:`")
+        return fm, DocDrift(None, why="the pending-doc has no readable `branch_tip:`")
     tip = fm["branch_tip"]
     if not isinstance(tip, str) or not tip.strip():
-        return DocDrift(None, why="`branch_tip:` is not a string (a bare hex value "
-                                  "reads as a YAML number)")
+        return fm, DocDrift(None, why="`branch_tip:` is not a string (a bare hex value "
+                                      "reads as a YAML number)")
     tip = tip.strip()
     if "<" in tip:
-        return DocDrift(None, why=f"`branch_tip:` is an unsubstituted placeholder ({tip!r})")
+        return fm, DocDrift(None, why=f"`branch_tip:` is an unsubstituted placeholder ({tip!r})")
     if not _BRANCH_TIP_RE.match(tip):
-        return DocDrift(None, why=f"`branch_tip: {tip!r}` is not an object name")
+        return fm, DocDrift(None, why=f"`branch_tip: {tip!r}` is not an object name")
     parents = doc.parents
     where = parents[3] if len(parents) > 3 else Path(".")  # <ws>/sysop/runtime/pending-docs/
-    counted = _git(["rev-list", "--count", f"{tip}..refs/heads/{branch}"], cwd=str(where),
-                   hermetic=True)
-    try:
-        return DocDrift(int(counted.strip()), tip=tip)
-    except ValueError:
-        return DocDrift(None, tip=tip,
-                        why=f"`branch_tip` {tip[:12]} does not resolve in {_printable(where)}")
+    m = _doc_drift.measure(tip, branch, where)
+    if m is None:
+        return fm, DocDrift(None, tip=tip,
+                            why=f"`branch_tip` {tip[:12]} does not resolve in {_printable(where)}")
+    return fm, DocDrift(m[0], tip=tip)
 
 
 
@@ -1536,7 +1734,12 @@ def _measured_drift(doc: Path, branch: str, main_root: Path | None, lock: Lock |
                          "and the branch's workspace is the main checkout, so /review-close does "
                          "not run its Step 3b collect on it")
             return DocDrift(None, why="not measured by the close")
-    drift = _pending_doc_drift(doc, branch)
+    pd = Path("sysop") / "runtime" / "pending-docs"
+    # The workspace's directories first: its docs replace main's twins in the collect.
+    also = tuple(Path(p) / pd for p in ([worktree.path] if worktree is not None else [])
+                 + ([lock.workspace] if lock is not None and lock.workspace else [])
+                 + ([main_root] if main_root is not None else []))
+    drift = _pending_doc_drift(doc, branch, also)
     if drift.commits is None:
         notes.append(f"pending-doc staleness unknown: {drift.why} — "
                      "/review-close collects it without comparing")
@@ -3260,11 +3463,8 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
         worktree = next(
             (w for w in worktrees if w.branch == branch and not w.is_main), None
         )
-        commits = (
-            _commits_ahead_of_main(branch, main_root) if branch else []
-        )
-        unpushed = (
-            _commits_unpushed(branch, main_root) if branch else 0
+        commits, unpushed = (
+            _claim_commits(branch, main_root, lock) if branch else ([], 0)
         )
         # Treat unpushed=-1 (no upstream) as "all ahead-of-main commits are
         # unpushed" for the purpose of state classification.

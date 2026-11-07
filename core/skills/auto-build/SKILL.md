@@ -570,6 +570,8 @@ python3 sysop/scripts/validate_tasks.py
 bash sysop/scripts/claim_task.sh --commit-claim "<TASK_ID>"
 ```
 
+Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock.
+
 Branch-name generation (matches `/claim-task` Step 3): the directory is the id's leading `^[A-Z][A-Z0-9]*` segment lowercased and the leaf is the whole id lowercased (`FEAT-X` → `feat/feat-x`, `OPS-FOO` → `ops/ops-foo`); or honour `branch:` field in `index.yml` if present.
 
 5.4's script also fast-forwards the task's worktree to the default branch, which now holds its claim: 5.2 branched before that commit existed, so without it every worktree read `open` for its own task. A `⚠️` line from 5.4 means it could not, and that it still exited 0 over a committed claim.
@@ -805,8 +807,8 @@ Phase 7 (below) uses this value to distinguish "agent omitted the envelope but t
 
 When a background agent's completion notification arrives in any phase:
 
-1. Collect that agent's result. For Phase 6e, get the envelope by trying — in this order, first hit wins — (a) read `sysop/runtime/subagent-envelopes/<TASK_ID>.json` (`SubagentStop` hook output; resolve `<repo>/sysop/runtime/subagent-envelopes/` against the main repo root via `git rev-parse --git-common-dir`); (b) regex-parse the YAML envelope from the LAST fenced block of the agent's return text (existing behavior — see Step 7c). After consuming the JSON file, `rm -f sysop/runtime/subagent-envelopes/<TASK_ID>.json` to keep the dir clean for in-flight handoff; leave `_unparseable_*.json` diagnostics in place (the hook reclaims them after 7 days; you never delete them).\
-1‑record. **Re-read the `## Test decision` record at the branch tip before this task counts as executed** — for a Phase-6e agent only, and only when its envelope says `STATUS: EXECUTED`. **Numbered `1‑record` rather than renumbered into the sequence**, for the reason item `3‑record` carries in this same file: shifting `2` and `3` down one would rewrite markers other steps cite by number to say nothing new.
+1. Collect that agent's result. For Phase 6e, get the envelope by trying — in this order, first hit wins — (a) read `sysop/runtime/subagent-envelopes/<TASK_ID>.json` (`SubagentStop` hook output; resolve `<repo>/sysop/runtime/subagent-envelopes/` against the main repo root via `git rev-parse --git-common-dir`); (b) regex-parse the YAML envelope from the LAST fenced block of the agent's return text (existing behavior — see Step 7c). If neither yields an envelope that parses, run `## Phase 7: Envelope Recovery` for this task now. After consuming the JSON file, `rm -f sysop/runtime/subagent-envelopes/<TASK_ID>.json` to keep the dir clean for in-flight handoff; leave `_unparseable_*.json` diagnostics in place (the hook reclaims them after 7 days; you never delete them).\
+1‑record. **Re-read the `## Test decision` record at the branch tip before this task counts as executed** — for a Phase-6e agent only, and only when its envelope says `STATUS: EXECUTED`, or when `## Phase 7: Envelope Recovery` reclassifies a task whose envelope never parsed to `EXECUTED (envelope-recovered)` and runs this item for it there; that task is not run through it again here. **Numbered `1‑record` rather than renumbered into the sequence**, for the reason item `3‑record` carries in this same file: shifting `2` and `3` down one would rewrite markers other steps cite by number to say nothing new.
 
 **Why this exists, and what a self-check structurally cannot catch.** `/claim-task` has two layers on this record — the executor's own grep at Step 7e, and **Step 8's authoritative read-back**, which reads the revision that will actually be graded and blocks before `/document-work`. This orchestrator had only the first: item `3‑record` is written by the same agent that reports its own success, so an executor that reports `EXECUTED` without running its check, or that writes the section into the **main checkout** instead of the worktree (on no branch, invisible to `/review-close` Step 2d), produces an envelope indistinguishable from a compliant one. No grep run by the writing agent can see either. This step is the second layer, and it is the same block `/claim-task` Step 8 runs — pinned identical by `tests/test_autobuild_record_readback.py`, because a second copy that drifts is worse than none.
 
@@ -1160,7 +1162,7 @@ ERROR: <error description if FAILED, else "none">
 
 If the consuming project wires up sub-agent cost attribution, also emit `SPEND_USD: <float>` on a line BEFORE the closing envelope. Otherwise omit it — `_shared/adversarial-review.md § Caller contract` documents the opt-in pattern.
 
-Execution agents never emit `STATUS: PARKED_ON_QUESTION` — parking happens at the orchestrator layer in Phase 6d before the execution agent is spawned. A malformed envelope (missing keys, content after the closing backticks, status not in {EXECUTED, FAILED}) causes the orchestrator to classify your run as `FAILED` with reason `envelope parse error` — subject to the **Phase 7: Envelope Recovery** filesystem check below, which can reclassify an envelope-parse miss back to `EXECUTED` when the commit landed and `sysop/runtime/pending-docs/<branch>.md` exists. The valid envelope STATUS enum remains `{EXECUTED, FAILED}`; `EXECUTED (envelope-recovered)` is an orchestrator-synthesized rendering annotation used only in the Step 8 report — execution agents must not emit it.
+Execution agents never emit `STATUS: PARKED_ON_QUESTION` — parking happens at the orchestrator layer in Phase 6d before the execution agent is spawned. A malformed envelope (missing keys, content after the closing backticks, status not in {EXECUTED, FAILED}) causes the orchestrator to classify your run as `FAILED` with reason `envelope parse error` — subject to the **Phase 7: Envelope Recovery** filesystem check below, which can reclassify an envelope-parse miss back to `EXECUTED` when the commit landed, `sysop/runtime/pending-docs/<branch>.md` exists, and your `## Test decision` record reads back present at the branch tip. The valid envelope STATUS enum remains `{EXECUTED, FAILED}`; `EXECUTED (envelope-recovered)` is an orchestrator-synthesized rendering annotation used only in the Step 8 report — execution agents must not emit it.
 
 **END OF EXECUTION AGENT PROMPT**
 
@@ -1208,17 +1210,27 @@ else
   RECOVERED_STATUS="FAILED"
   RECOVERED_ERROR="envelope parse error AND no committed work found"
 fi
+# The verdict is read off stdout: no variable above outlives this block.
+echo "RECOVERED_STATUS=$RECOVERED_STATUS NEW_COMMITS=$NEW_COMMITS PENDING_DOC_EXISTS=$PENDING_DOC_EXISTS RECOVERED_ERROR=${RECOVERED_ERROR:-none}"
 ```
+
+### Read back a recovered task's record
+
+**When the block prints `RECOVERED_STATUS=EXECUTED (envelope-recovered)`, run item `1‑record` of `### Rolling-window refill on completion` for this task, before Step 8** — that item's block exactly as it stands there, as a Bash call of its own; it has one copy, and this is not a second. A task whose envelope never parsed is the one least likely to have run its own check at item `3‑record`, and a commit plus a pending doc is not the record.
+
+**For `<BRANCH_NAME>`, substitute the branch Step 5 claimed for this task**: the `branch_name` in its `(task_id, worktree_path, branch_name)` tuple, which Step 8's `Branch` column shows. This block's `BRANCH_NAME` is not it. `tr / -` makes it the pending-doc file's stem, so `tech/tech-w` becomes `tech-tech-w`, the read asks for `refs/heads/tech-tech-w`, and the task fails `UNREADABLE` on a branch that does not exist. Derive `<BODY_PATH_FROM_REPO_ROOT>` as that item's comment says. When the block prints `RECOVERED_STATUS=FAILED`, the task is `FAILED` with its `RECOVERED_ERROR` as the `Notes`, and nothing is read back.
+
+**Apply that item's outcomes as written there.** `MISSING`, `TEMPLATE`, `NOT ON BRANCH` and `UNREADABLE` make this task's Step 8 status `FAILED`, with the printed lines as its `Notes` after the recovery note, and the batch continues. Only `test-decision record present` keeps it `EXECUTED (envelope-recovered)`. Its prohibition on writing the record yourself holds here too. Its two follow-on lines apply as well: copy any `IGNORED-REF:` lines the agent's return text carries (an agent that returned nothing quoted none), and check `<CLAIM_DIR>/revised-plan.md`.
 
 ### Reporting in Step 8
 
-Tasks reclassified to `EXECUTED (envelope-recovered)` MUST appear in the Step 8 result table with that exact sub-status (not bare `EXECUTED`) so envelope-discipline drift is visible to the human merge-gate. The Notes column should call out the recovery (e.g., `envelope omitted; recovered via filesystem check (N commits, pending-doc found)`).
+Tasks reclassified to `EXECUTED (envelope-recovered)` whose record read back present MUST appear in the Step 8 result table with that exact sub-status (not bare `EXECUTED`) so envelope-discipline drift is visible to the human merge-gate. The Notes column should call out the recovery (e.g., `envelope omitted; recovered via filesystem check (N commits, pending-doc found)`). A recovered task the read-back failed appears as `FAILED`, its `Notes` naming the recovery and then the read-back's printed lines.
 
 ### Acceptance test (manual)
 
 A deliberately broken envelope test — return only the literal text `done.` from the execution agent — should:
 
-- Recover to `EXECUTED (envelope-recovered)` in Step 8 if both the commit and `sysop/runtime/pending-docs/<branch>.md` landed.
+- Recover to `EXECUTED (envelope-recovered)` in Step 8 if both the commit and `sysop/runtime/pending-docs/<branch>.md` landed and item `1‑record` reads the task's record back present; become `FAILED` with that item's printed lines if it does not.
 - Stay `FAILED` with reason `envelope parse error AND no committed work found` if either is missing.
 
 ## Step 8: Final Report

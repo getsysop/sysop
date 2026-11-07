@@ -3,13 +3,16 @@
 
     python3 sysop/scripts/pending_doc_collect.py collect  "<workspace path>" "<branch>"
     python3 sysop/scripts/pending_doc_collect.py rollback "<workspace path>" "<branch>"
+    python3 sysop/scripts/pending_doc_collect.py staleness  "<branch>"
     python3 sysop/scripts/pending_doc_collect.py consume    "<doc>.md" "<doc>.md"
     python3 sysop/scripts/pending_doc_collect.py quarantine "<doc>.md"
 
 Run from the main checkout's top level. `collect` copies the workspace's
 `sysop/runtime/pending-docs/*.md` into main's, provenance-checked by each doc's
 `branch:`. `rollback` undoes this branch's collect when the workspace could not be
-removed. `consume` (Step 4c item 6) deletes the named docs from main's pending-docs and the
+removed. `staleness` runs the collect's exit-6 test over main's docs alone, for a branch with
+no workspace, and collects nothing; the measurement is `_doc_drift.py`'s, which `/sitrep`'s
+survey imports too. `consume` (Step 4c item 6) deletes the named docs from main's pending-docs and the
 directory when it is left empty; `quarantine` (Step 4c item 1b) moves a doc into its
 `quarantine/` subdirectory. Each takes bare file names, never a path, and refuses any other
 operand before it touches anything (exit 3); `consume` also refuses a doc whose frontmatter
@@ -25,9 +28,21 @@ step's two heredocs until Phase 386 (`Q-409` P3), moved verbatim.
 """
 import sys
 
+# `staleness "<branch>"` (`Q-738`) is the collect's exit-6 test over main's docs alone, for a
+# branch Step 0 found no workspace for. It runs inside the collect's own program, with the
+# main checkout as the workspace, so the rule has one reader: it prints the same STALE,
+# COVERED and STALENESS UNKNOWN lines, exits 6 on a stale doc, and collects nothing.
+_STALENESS_ONLY = len(sys.argv) > 1 and sys.argv[1] == 'staleness'
+if _STALENESS_ONLY:
+    if len(sys.argv) != 3:
+        sys.stderr.write('usage: ' + sys.argv[0] + ' staleness "<branch>"\n')
+        sys.exit(2)
+    sys.argv[1:] = ['collect', '.', sys.argv[2]]
+
 _SUBCOMMANDS = ('collect', 'rollback', 'consume', 'quarantine')
 if len(sys.argv) < 2 or sys.argv[1] not in _SUBCOMMANDS:
-    sys.stderr.write('usage: ' + sys.argv[0] + ' {' + '|'.join(_SUBCOMMANDS) + '} <args>\n')
+    sys.stderr.write('usage: ' + sys.argv[0] + ' {' + '|'.join(_SUBCOMMANDS) + '} <args>'
+                     + ' | staleness "<branch>"\n')
     sys.exit(2)
 _SUBCOMMAND = sys.argv.pop(1)
 
@@ -55,6 +70,10 @@ if _SUBCOMMAND == 'collect':
                 _sites += glob.glob(os.path.join(_root, _layout, "lib/python*/site-packages"))
         sys.path[:0] = _sites
         import yaml
+
+    # The staleness measurement is shared with `/sitrep`'s survey (`_doc_drift.py`).
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import _doc_drift
 
     wt      = Path(sys.argv[1])
     branch  = sys.argv[2]          # the branch this iteration is processing
@@ -105,7 +124,32 @@ if _SUBCOMMAND == 'collect':
               f'whether it is main\'s own pending-docs directory is unanswerable — '
               f'refusing rather than proceeding toward a step that deletes by provenance')
         sys.exit(4)
-    if _same_dir:
+    # `staleness` reads `live` relative to the CWD, so from a subdirectory or a linked worktree
+    # it would find no docs and exit 0, a pass on nothing. Refuse anywhere but the main
+    # checkout's top level (the primary worktree: where Step 4c consolidates).
+    if _STALENESS_ONLY:
+        import subprocess
+        try:
+            _rp = subprocess.run(
+                ['git', 'rev-parse', '--show-toplevel', '--git-dir', '--git-common-dir'],
+                capture_output=True, text=True, timeout=10,
+                env=dict((_k, _v) for _k, _v in os.environ.items()
+                         if _k not in ('GIT_DIR', 'GIT_WORK_TREE',
+                                       'GIT_COMMON_DIR', 'GIT_INDEX_FILE')),
+            ).stdout.splitlines()
+        except (OSError, subprocess.SubprocessError):
+            _rp = []
+        # The top level of the PRIMARY worktree: a linked worktree's git dir is not the common
+        # one. `--separate-git-dir` and submodule checkouts pass, whatever their dir is named.
+        _abs = [os.path.realpath(x if os.path.isabs(x) else os.path.join(os.getcwd(), x))
+                for x in _rp]
+        _top = _abs[0] if len(_abs) == 3 and _abs[1] == _abs[2] else None
+        if _top is None or _top != os.path.realpath(Path.cwd()):
+            print(f'PENDING-DOC COLLECT ABORTED: run `staleness` from the main checkout\'s top '
+                  f'level ({_top or "not found"}), not {Path.cwd()} — main\'s pending-docs are '
+                  f'read relative to it, so anywhere else would measure nothing')
+            sys.exit(4)
+    if _same_dir and not _STALENESS_ONLY:
         print(f'PENDING-DOC COLLECT ABORTED: {wt} resolves to the checkout this close is '
               f'running in, so its pending-docs ARE main\'s — already where Step 4c '
               f'looks. Copying them onto themselves raises SameFileError and halts '
@@ -173,49 +217,6 @@ if _SUBCOMMAND == 'collect':
         v = fm.get('hold') if isinstance(fm, dict) else None
         return (str(v).strip() or '(no reason given)') if v else ''
 
-    def _git(*args, where=None):
-        """Read-only git in `where` (default: the WORKSPACE), hermetic, and it FAILS OPEN
-    — it never raises and never halts.
-
-    **`where` exists because the two populations do not live in the same repository.**
-    A doc collected FROM the workspace was stamped there, and the paragraph below is
-    the argument for measuring it there. A doc already on MAIN was authored on the main
-    checkout — that is what `Q-470`'s first reading means — and measuring *it* from a
-    `--clone` workspace asks a repository that need not hold the commits: measured, a
-    main-side drift of 1 read as **0** from the clone, and `rev-list` SUCCEEDED, so the
-    run reported measured-and-clean over a record it had never measured. That is worse
-    than the fail-open UNKNOWN arm because it is silent. Found by Phase 286's round.
-
-    `-C wt`, not the CWD, and that is the whole coverage argument. A `--clone`
-    workspace is a **separate repository** (`claim_task.sh --clone` publishes the
-    branch and clones `origin`), so its commits live in its own object store; measured
-    from the main checkout, a clone-shape doc's `branch_tip` did not resolve, and every
-    clone-shape close took the unknown arm — armed-looking and dead for that
-    whole population. Run from the workspace, the objects are always there: a linked
-    worktree shares the primary's store, and a clone has its own. The branch this asks
-    about is the branch the DOC describes, which is the one the workspace holds.
-
-    The env strip is Phase 124's rule: an inherited `GIT_DIR`/`GIT_WORK_TREE` from the
-    caller's shell overrides `-C` and resolves the wrong repository. Returning None on
-    any failure is deliberate and is stated in the exit table: a missing git, a
-    workspace that is not a repository, or a pruned object must not turn a
-    doc-integrity step into a refusal to close. Every doc written before `branch_tip:`
-    existed reaches the staleness test below with nothing to compare, and that case has
-    to be indistinguishable from a git that would not answer.
-    """
-        import os, subprocess
-        try:
-            r = subprocess.run(
-                ['git', '-C', str(where if where is not None else wt), *args],
-                capture_output=True, text=True, timeout=10,
-                env=dict((_k, _v) for _k, _v in os.environ.items()
-                     if _k not in ('GIT_DIR', 'GIT_WORK_TREE',
-                                   'GIT_COMMON_DIR', 'GIT_INDEX_FILE')),
-            )
-        except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
-            return None
-        return r.stdout if r.returncode == 0 else None
-
     UNUSABLE_TIP = object()   # the key is there and its value cannot be an object name
 
     def tip_of(p):
@@ -261,7 +262,7 @@ if _SUBCOMMAND == 'collect':
 
     SHA_RE = re.compile(r'[0-9a-fA-F]{7,64}\Z')
 
-    def staleness(paths, where=None):
+    def staleness(*groups):
         """`Q-471`'s comparison, over ANY population of docs claiming this branch.
 
     **This lived inside the `src_dir`-present loop and nowhere else, which is the
@@ -284,8 +285,8 @@ if _SUBCOMMAND == 'collect':
     this" outranks "is this record current", which is the ordering the populated
     path's own comment states.
     """
-        unknown, stale = [], []
-        for src in paths:
+        unknown, measured, current = [], [], []
+        for src, where in [(p, w) for paths, w in groups for p in paths]:
             tip = tip_of(src)
             if tip is None:
                 unknown.append(f'{src.name} (no `branch_tip:` — written before the key '
@@ -306,22 +307,36 @@ if _SUBCOMMAND == 'collect':
             elif not SHA_RE.match(tip):
                 unknown.append(f'{src.name} (`branch_tip: {tip!r}` is not an object name)')
             else:
-                counted = _git('rev-list', '--count', f'{tip}..refs/heads/{branch}',
-                           where=where)
-                try:
-                    drift = int((counted or '').strip())
-                except ValueError:
-                    counted = None
-                    drift = 0
-                if counted is None:
+                # `_doc_drift.measure`, shared with `/sitrep`'s survey so the two give one
+                # verdict; it pairs a rewritten branch's commits by patch (`Q-738` (a)).
+                m = _doc_drift.measure(tip, branch, wt if where is None else where)
+                if m is None:
                     unknown.append(f'{src.name} (`branch_tip` {tip[:12]} or `refs/heads/{branch}` does not '
                                        f'resolve here — not evidence either way)')
-                elif drift:
-                    log = (_git('log', '--oneline', '--no-decorate',
-                                f'{tip}..refs/heads/{branch}', where=where)
-                           or '').strip()
-                    stale.append((src.name, tip[:12], drift, log))
-        return unknown, stale
+                elif m[0]:
+                    measured.append((src, tip, where) + m)
+                else:
+                    current.append((src, tip))
+        # A BRANCH'S DOCS ARE MEASURED AS A SET (`Q-738` (b)): an older doc a close holds is
+        # covered by a current `<stem>--<n>.md` beside it. See REFERENCE.md, section
+        # Step 3b — provenance.
+        stale, covered = [], []
+        for src, tip, where, drift, log, how in measured:
+            try:
+                m = fm_re.match(src.read_text(encoding='utf-8', errors='replace'))
+                fm = yaml.safe_load(m.group(1)) if m else None
+            except Exception:
+                fm = None
+            by = _doc_drift.covering(src.name, tip, fm, [(c.name, t) for c, t in current],
+                                     branch, wt if where is None else where)
+            if by:
+                covered.append(
+                    f'{src.name} (branch_tip {tip[:12]}, held by a close) — the {drift} '
+                    f'commit(s) after it are described by {by[0]} (branch_tip '
+                    f'{by[1][:12]}), the newer doc written beside it; not stale')
+            else:
+                stale.append((src.name, tip[:12] + how, drift, log))
+        return unknown, stale, covered
 
     def claimed_ids():
         """`Q-594`. Task ids whose lock names this branch; a review batch's `BATCH-<N>.lock`
@@ -398,7 +413,7 @@ if _SUBCOMMAND == 'collect':
     # a task lock names the branch (`Q-594`). The two states must not be dispositioned
     # differently.
     # See REFERENCE.md, section Step 3b — provenance.
-    if not src_dir.is_dir():
+    if _STALENESS_ONLY or not src_dir.is_dir():
         # The wrong-but-existing directory, refused by the one test that tells it apart
         # from the legitimate state. A HEALTHY workspace is always a checkout — a linked
         # worktree (`.git` file) or a clone (`.git` directory) — and `main-checkout` never
@@ -409,7 +424,7 @@ if _SUBCOMMAND == 'collect':
         # there is no checkout to collect from — which is why the message below names the
         # actual reason instead of reusing the generic one.
         # See REFERENCE.md, section Step 3b — provenance.
-        if not (wt / '.git').exists():
+        if not _STALENESS_ONLY and not (wt / '.git').exists():
             print(f'PENDING-DOC COLLECT ABORTED: {wt} is not a checkout (no .git) and '
                   f'holds no sysop/runtime/pending-docs — nothing here belongs to '
                   f'{branch!r}. Check the workspace this branch\'s lock records.')
@@ -418,7 +433,10 @@ if _SUBCOMMAND == 'collect':
             q.name for q in live.glob('*.md')
             if q.name not in NOT_A_BRANCH_DOC and branch_of(q) == branch
         ) if live.is_dir() else []
-        if on_main:
+        if _STALENESS_ONLY:
+            print(f'PENDING-DOC MEASURED: {len(on_main)} doc(s) on main claim {branch!r}'
+                  + (f' ({", ".join(on_main)})' if on_main else ''))
+        elif on_main:
             print(f'PENDING-DOC COLLECT SKIPPED: no {src_dir} — this branch\'s doc is '
                   f'already on main ({", ".join(on_main)}); nothing to collect')
         else:
@@ -436,10 +454,12 @@ if _SUBCOMMAND == 'collect':
             # Same rule as the populated path below, with an empty incoming set:
             # every doc main holds for this branch survives into Step 4c. Measured
             # in the MAIN checkout, which is where these docs were authored.
-            unknown_here, stale_here = staleness([live / n for n in on_main],
-                                                 where=Path.cwd())
+            unknown_here, stale_here, covered_here = staleness(
+                ([live / n for n in on_main], Path.cwd()))
             for u in unknown_here:
                 print(f'PENDING-DOC STALENESS UNKNOWN: {u}')
+            for u in covered_here:
+                print(f'PENDING-DOC COVERED: {u}')
             if stale_here:
                 for name, tip12, drift, log in stale_here:
                     print(f'PENDING-DOC STALE: {name} — {drift} commit(s) landed on '
@@ -457,7 +477,10 @@ if _SUBCOMMAND == 'collect':
                       f'/document-work on this branch to refresh it (that re-stamps '
                       f'`branch_tip:`), then re-run the close.')
                 sys.exit(6)
-            report_open_claims([live / n for n in on_main])
+            if not _STALENESS_ONLY:
+                report_open_claims([live / n for n in on_main])
+        if _STALENESS_ONLY:
+            sys.exit(0)   # nothing is collected, so there is no collisions line to print
         print('PENDING-DOC COLLISIONS: 0')
         sys.exit(0)
 
@@ -490,10 +513,7 @@ if _SUBCOMMAND == 'collect':
         if q.name not in NOT_A_BRANCH_DOC and q.name not in incoming
         and branch_of(q) == branch
     ] if live.is_dir() else []
-    unknown_tip, stale = staleness(mine, where=wt)
-    _u2, _s2 = staleness(surviving_on_main, where=Path.cwd())
-    unknown_tip += _u2
-    stale += _s2
+    unknown_tip, stale, covered = staleness((mine, wt), (surviving_on_main, Path.cwd()))
     for src in docs:
         # Ground truth is the branch being PROCESSED, not what two docs say about each
         # other. A doc that does not claim this branch is not this branch's to collect.
@@ -525,6 +545,8 @@ if _SUBCOMMAND == 'collect':
                                   f'{src.name}`, then re-run)')
     for u in unknown_tip:
         print(f'PENDING-DOC STALENESS UNKNOWN: {u}')
+    for u in covered:
+        print(f'PENDING-DOC COVERED: {u}')
 
     if collisions:
         for c in collisions:

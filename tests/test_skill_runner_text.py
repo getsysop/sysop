@@ -206,7 +206,7 @@ def test_today_every_skill_is_its_core_but_review_closes_arms():
     cores = sorted(SKILLS.glob("*/SKILL.md"))
     at = cores.index(SKILLS / "review-close" / "SKILL.md") + 1
     steps = [SKILLS / "review-close" / "steps" / f"{a}.md"
-             for a in ("2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions", "2b-twin-spawn",
+             for a in ("1b-dirty-primary", "2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions", "2b-twin-spawn",
                        "3b-collect-exit", "3b-rollback", "3c-signals", "4-pre-pr", "4a-append", "4a-fix", "4a-post-failure", "4a-post-prescan", "4a-published", "4b-batches", "4c-check-exit", "4c-unmerged", "4d-direct", "4d-pr", "6-direct", "6-pr-cleanup", "6-pr-gate", "prepare-resume",
                        "request-review-land")]
     assert RT.runner_files(SKILLS) == cores[:at] + steps + cores[at:]

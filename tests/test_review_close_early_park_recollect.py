@@ -151,8 +151,9 @@ def _empty_ws_arm() -> str:
 
 def test_a_head_moved_between_nights_is_skipped_as_stale(night_one):
     """The collect's `branch_tip:` staleness test (exit 6) never runs on night two, since
-    there is no workspace to collect from. Step 3b step 0's empty-workspace arm applies it by
-    hand: run the command the arm prescribes, and it must see the commit."""
+    there is no workspace to collect from. Step 3b step 0's empty-workspace arm runs it as the
+    collect's `staleness` subcommand: run the command the arm prescribes, and it must see the
+    commit."""
     repo, tmp = night_one
     doc = repo / "sysop/runtime/pending-docs/feat-x.md"
     tip = re.search(r'branch_tip: "([0-9a-f]+)"', doc.read_text()).group(1)
@@ -165,11 +166,13 @@ def test_a_head_moved_between_nights_is_skipped_as_stale(night_one):
     assert _discover(repo) == ("<none>", "<none>")
     arm = _empty_ws_arm()
     assert "When step 0 printed `shape=<none>`" in arm and "exit 6's row" in arm, arm
-    cmds = re.findall(r"`(git rev-list --count [^`]+)`", arm)
-    assert cmds == ['git rev-list --count "<branch_tip>..refs/heads/<branch>"'], cmds
-    cmd = cmds[0].replace("<branch_tip>", tip).replace("<branch>", BRANCH)
-    r = subprocess.run(["bash", "-c", cmd], cwd=str(repo), capture_output=True, text=True)
-    assert r.returncode == 0 and r.stdout.strip() == "1", r.stdout + r.stderr
+    cmds = re.findall(r"`(python3 sysop/scripts/pending_doc_collect\.py staleness [^`]+)`", arm)
+    assert cmds == ['python3 sysop/scripts/pending_doc_collect.py staleness "<branch name>"'], cmds
+    assert re.search(r'branch_tip: "[0-9a-f]+"', doc.read_text()), "the fixture stamps a tip"
+    r = subprocess.run([sys.executable, COLLECT_ARGV[0], "staleness", BRANCH], cwd=str(repo),
+                       capture_output=True, text=True)
+    assert r.returncode == 6, r.stdout + r.stderr
+    assert "PENDING-DOC STALE: feat-x.md — 1 commit(s)" in r.stdout and "feat: y" in r.stdout
 
 
 def test_an_unmoved_head_counts_zero(night_one):

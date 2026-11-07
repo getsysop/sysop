@@ -50,7 +50,7 @@ echo ""
 FAILED=false
 
 # ── Backend tests (if any .py files changed) ─────────────────
-if echo "$CHANGED" | grep -q '\.py$'; then
+if echo "$CHANGED" | grep '\.py$' >/dev/null; then
   echo "🐍 Python files changed — running pytest..."
   # Python resolution order:
   #   1. <main-repo-root>/.venv/bin/python3 when this is a linked
@@ -111,7 +111,7 @@ if echo "$CHANGED" | grep -q '\.py$'; then
 fi
 
 # ── Frontend build (if any frontend/ files changed) ──────────
-if echo "$CHANGED" | grep -q '^frontend/'; then
+if echo "$CHANGED" | grep '^frontend/' >/dev/null; then
   echo "🏗️  Frontend files changed — running build check..."
   if (cd "$REPO_ROOT/frontend" && npm run build 2>&1); then
     echo "✅ Frontend build passed."
@@ -133,7 +133,7 @@ if [[ -n "$BACKEND_SRC" && -z "$BACKEND_TESTS" ]]; then
 fi
 
 # Migrations: broad warning since they can affect any test's assertions
-if echo "$CHANGED" | grep -qE '^migrations/.*\.sql$'; then
+if echo "$CHANGED" | grep -E '^migrations/.*\.sql$' >/dev/null; then
   if [[ -z "$BACKEND_TESTS" ]]; then
     WARN_MSGS+=("  ⚠  Migration files changed — check tests/ for stale assertions on defaults/constraints")
   fi

@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" prepare-resume 42306f89e879eece "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" prepare-resume 859ebf5c0cef210f "<skill directory>"
 ```
 
 It prints `LOADED: prepare-resume`. **Exit 2**: stop and show its stderr.
@@ -123,7 +123,7 @@ Run the default-branch resolve and the permission guard above first. Then, in th
    - `RERUN <branch>: …` — run Steps 2a to 2e for that branch, unless item 3 dropped it.
    - `RERUN ALL: …` — run Steps 2a to 2e for every branch item 3 did not drop.
    - `RERUN 2b: …` — run Step 2b for every target.
-   - `RERUN 3: …` — run Steps 3 and 3c. When the line names local `<default branch>`, also run Step 2b for the unpushed-main group.
+   - `RERUN 3: …` — run Steps 3 and 3c. When the line names local `<default branch>`, also run Steps 2b and 2c for the unpushed-main group.
    - `NOTE: …` — report it on Step 8's `Resumed:` row.
    - `CURRENT` — nothing moved.
    - A branch the prepare SKIP'd as dirty or not brought across that item 2 no longer marks — run Steps 2a to 2e for it.

@@ -38,6 +38,7 @@ counts bad outcomes passes when there are no outcomes at all.
 """
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -797,3 +798,94 @@ class TestDryRunDoesNotTakeTheWriteMutex:
             "the close's tracker_lock_acquire is not gated on DRY_RUN; a preview "
             "that writes nothing must not take a write mutex")
 
+
+
+# `Q-768`: the wait (120 s) equals Claude Code's default Bash timeout, so a runner whose call
+# waited it out was killed about when the refusal would print, never seeing the holder record
+# or the remedy, and a holder that won late was killed mid-commit. Every prescribed call that
+# can wait on the mutex passes a Bash `timeout` above the wait plus the work after it.
+# Every script that takes the mutex: the three bash scripts that call `tracker_lock_acquire`
+# and the four Python writers that import `_tracker_lock.py`.
+_MUTEX_SCRIPTS = (r"(?:bash sysop/scripts/(?:claim_task\.sh --(?:commit-claim|release)|batch_work\.sh"
+                  r"|close_batch\.sh)|python3 sysop/scripts/(?:close_index|clear_user_action"
+                  r"|archive_review_tasks|backfill_completed_dates)\.py)\b")
+_MUTEX_CALL = re.compile(r"^\s*" + _MUTEX_SCRIPTS, re.M)
+_MUTEX_INLINE = re.compile(r"`" + _MUTEX_SCRIPTS + r"[^`]*`")
+_TIMEOUT_LINE = "Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock."
+
+
+def _fenced_mutex_calls():
+    """`(file, fenced block, the text after its closing fence)` for every fenced block in a
+    skill runner that runs a mutex-taking script."""
+    out = []
+    for f in sorted((REPO_ROOT / "core" / "skills").rglob("*.md")):
+        if f.name == "REFERENCE.md":
+            continue
+        text = f.read_text(encoding="utf-8")
+        for m in re.finditer(r"^([ \t]*)```(?:bash|sh)?\n(.*?)^\1```\n", text, re.M | re.S):
+            if _MUTEX_CALL.search(m.group(2)):
+                out.append((f.relative_to(REPO_ROOT), m.group(2), text[m.end():m.end() + 400]))
+    return out
+
+
+def test_every_prescribed_mutex_call_passes_a_bash_timeout_above_the_wait():
+    calls = _fenced_mutex_calls()
+    assert len(calls) >= 10, f"the census found {len(calls)} calls; the pattern has gone stale"
+    # `/auto-build`'s end-of-run report tells the HUMAN how to roll a failed task back; they
+    # run it in their own terminal, where no Bash tool timeout applies.
+    handoff = ("core/skills/auto-build/SKILL.md", "claim_task.sh --release <TASK_ID>\n")
+    missing = [f"{f}: {block.strip().splitlines()[-1]}" for f, block, after in calls
+               if _TIMEOUT_LINE not in after
+               and not (str(f) == handoff[0] and handoff[1] in block
+                        and "For FAILED tasks" in block)]
+    assert not missing, f"mutex-taking calls with no Bash timeout line: {missing}"
+    lib = GIT_LIB.read_text(encoding="utf-8")
+    default = int(re.search(r'SYSOP_TRACKER_LOCK_WAIT:-(\d+)\}', lib).group(1))
+    assert 300 > default + 60, "the timeout must leave the wait plus a slow critical section"
+
+
+# Inline prescriptions a runner does not run itself, each with its reason. A line not named
+# here that prescribes a mutex-taking script in a code span must carry the timeout line.
+_INLINE_EXEMPT = {
+    ("auto-build/SKILL.md", "do not run the checkout at all"): "narrative, no call",
+    ("auto-fix/SKILL.md", "is auto-denied with no prompt"): "an allow-rule, no call",
+    ("auto-fix/SKILL.md", "print an advisory"): "advice printed for the human",
+    ("auto-judge/SKILL.md", "print an advisory"): "advice printed for the human",
+    ("triage/SKILL.md", "This does not block triage"): "advice printed for the human",
+    ("document-work/SKILL.md", "Documentary only"): "narrative, no call",
+    ("review-close/SKILL.md", "documentary only"): "narrative, no call",
+    ("review-close/SKILL.md", "put `--keep-locks` before the ids"): "the fenced call below, which has it",
+    ("roadmap/SKILL.md", "Unblock-the-human-first"): "the human clears the flag",
+}
+
+
+def test_every_inline_mutex_prescription_passes_a_bash_timeout_or_is_named_exempt():
+    skills = REPO_ROOT / "core" / "skills"
+    seen, missing = set(), []
+    for f in sorted(skills.rglob("*.md")):
+        if f.name == "REFERENCE.md":
+            continue
+        rel = str(f.relative_to(skills))
+        fenced = False
+        for n, line in enumerate(f.read_text(encoding="utf-8").split("\n"), 1):
+            if re.match(r"^\s*```", line):
+                fenced = not fenced
+                continue
+            if fenced or not _MUTEX_INLINE.search(line) or _TIMEOUT_LINE in line:
+                continue
+            hit = [k for k in _INLINE_EXEMPT if k[0] == rel and k[1] in line]
+            seen.update(hit)
+            if not hit:
+                missing.append(f"{rel}:{n}")
+    assert not missing, f"inline mutex prescriptions with no Bash timeout: {missing}"
+    assert seen == set(_INLINE_EXEMPT), f"stale exemptions: {set(_INLINE_EXEMPT) - seen}"
+
+
+def test_the_python_writers_wait_no_longer_than_the_bash_one():
+    """The timeout line is written against 120 s. `_tracker_lock.py` carries the Python
+    writers' default; it must stay within what 300000 ms leaves room for."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_tl", SCRIPTS / "_tracker_lock.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert 300 > mod.DEFAULT_WAIT + 60, mod.DEFAULT_WAIT

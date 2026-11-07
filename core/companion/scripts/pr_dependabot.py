@@ -3,10 +3,17 @@ pr_dependabot.py — classify, plan, and (optionally) sweep Dependabot PRs.
 
 A client-side replacement for GitHub's native auto-merge, which is unavailable
 on private repos under the Free plan (`enablePullRequestAutoMerge` is gated
-behind Pro/Team/Enterprise). Because GitHub will not be the merge actor, the
+behind Pro/Team/Enterprise). Where GitHub will not be the merge actor, the
 invoking agent is: this script lists open Dependabot PRs, classifies each by
 ecosystem + semver bump, and either prints a dry-run plan (default) or executes
 the plan (`--execute`) by merging the safe ones and closing the rest.
+
+It does not assume the premise. Every run but `--validate` reads the repo's
+`autoMergeAllowed` setting over GraphQL and prints one line: `allowed` (GitHub
+can merge these PRs itself, so this sweep would be a second merge actor),
+`not allowed`, or `unknown` with a reason (no read access, a gh error, an
+unreadable response). `unknown` never stops the run; the plan proceeds as if the
+setting were off.
 
 Merge policy (validated against ~50 real PRs on the project this was extracted from):
 
@@ -16,7 +23,9 @@ Merge policy (validated against ~50 real PRs on the project this was extracted f
     pip / chore(deps)             -> close   (Python deps owned by pip-compile)
     superseded duplicate          -> close   (older PR for same pkg+dir, lower
                                               target version, both open NOW)
-    grouped / unparseable version -> surface (human decides)
+    grouped / unparseable version -> surface (human decides; never superseded,
+                                              since there is no target version
+                                              to keep the highest of)
 
 Supersession is scoped to the CURRENTLY-OPEN set only — never to history.
 Computed over history it produces false positives (the same package is bumped
@@ -87,7 +96,7 @@ _VALIDATE_EXPECT = {
 # chore(<scope>): bump <pkg> [and <pkg2>] from <X> to <Y> [in /<dir>]
 TITLE_RE = re.compile(
     r"chore\((?P<scope>[\w-]+)\):\s*bump\s+(?P<pkg>\S+?)"
-    r"(?:\s+and\s+\S+)?(?:\s+from\s+(?P<from>[\w.\-]+)\s+to\s+(?P<to>[\w.\-]+))?"
+    r"(?P<also>\s+and\s+\S+)?(?:\s+from\s+(?P<from>[\w.\-]+)\s+to\s+(?P<to>[\w.\-]+))?"
     r"(?:\s+in\s+/(?P<dir>\S+))?$"
 )
 
@@ -96,8 +105,32 @@ PR_FIELDS = (
     "labels,headRefName,url"
 )
 
+# The repo setting the `enablePullRequestAutoMerge` mutation refuses on ("Auto
+# merge is not allowed for this repository"). Read over GraphQL because REST returns
+# `allow_auto_merge: null` to a caller without admin rights, and `gh repo view`
+# has no such field.
+AUTO_MERGE_QUERY = (
+    "query($owner:String!,$name:String!)"
+    "{repository(owner:$owner,name:$name){autoMergeAllowed}}"
+)
+
+AUTO_MERGE_ALLOWED = "allowed"
+AUTO_MERGE_NOT_ALLOWED = "not allowed"
+AUTO_MERGE_UNKNOWN = "unknown"
+
 
 # ── Data model ───────────────────────────────────────────────────
+
+
+@dataclass
+class AutoMergeReading:
+    """The repo's native auto-merge setting, as the probe read it."""
+
+    state: str             # allowed | not allowed | unknown
+    reason: str = ""       # why the reading is `unknown`; empty otherwise
+
+    def to_dict(self) -> dict:
+        return {"state": self.state, "reason": self.reason}
 
 
 @dataclass
@@ -131,7 +164,10 @@ class Plan:
 
 
 def _gh(args: list[str], repo: str | None) -> str:
-    """Run a `gh` command, return stdout. Raises on non-zero exit."""
+    """Run a `gh` command, return stdout. Raises on non-zero exit.
+
+    `repo` is appended as `-R`, which `gh api` rejects: callers of `gh api`
+    pass `repo=None` and name the repo in the request itself."""
     cmd = ["gh", *args]
     if repo:
         cmd += ["-R", repo]
@@ -148,6 +184,84 @@ def _list_prs(repo: str | None, state: str, limit: int = 50) -> list[dict]:
         repo,
     )
     return json.loads(out)
+
+
+_REPO_URL_RE = re.compile(r"https?://([^/\s]+)/([^/\s]+)/([^/\s]+?)(?:\.git)?/?")
+_PR_URL_RE = re.compile(r"https?://([^/\s]+)/([^/\s]+)/([^/\s]+)/pull/\d+")
+
+
+def _auto_merge_args(repo: str | None) -> list[str] | None:
+    """`gh api graphql` arguments naming the repo, or None if `repo` is not
+    `[HOST/]OWNER/REPO` or a URL to one. With no `repo`, gh fills
+    `{owner}`/`{repo}` from the current directory's remote but sends the
+    request to its default host, so `probe_auto_merge` names the repo from
+    the listed PRs first and uses this form only when there are none."""
+    if not repo:
+        return ["-F", "owner={owner}", "-F", "name={repo}"]
+    m = _REPO_URL_RE.fullmatch(repo)
+    parts = list(m.groups()) if m else repo.split("/")
+    if len(parts) not in (2, 3) or not all(parts):
+        return None
+    # `-f` sends the value as the string given; `-F` would retype a name such
+    # as `true` or `123` into a JSON boolean or number.
+    args = ["-f", f"owner={parts[-2]}", "-f", f"name={parts[-1]}"]
+    if len(parts) == 3:
+        args = ["--hostname", parts[0], *args]
+    return args
+
+
+def _repo_from_prs(prs: list[dict]) -> str | None:
+    """`HOST/OWNER/NAME` from the first listed PR's URL: the repo, host
+    included, that `gh pr list` read."""
+    for pr in prs:
+        m = _PR_URL_RE.match(pr.get("url") or "")
+        if m:
+            return "/".join(m.groups())
+    return None
+
+
+def probe_auto_merge(repo: str | None, prs: list[dict] = ()) -> AutoMergeReading:
+    """Read the repo's `autoMergeAllowed`. Any failure is `unknown`; this never
+    raises, so a probe failure cannot stop the sweep. With no `repo`, the repo
+    is the one the listed `prs` belong to."""
+    if not repo:
+        repo = _repo_from_prs(list(prs))
+    target = _auto_merge_args(repo)
+    if target is None:
+        return AutoMergeReading(
+            AUTO_MERGE_UNKNOWN,
+            f"--repo {_sanitize_log(repo, 80)!r} is not OWNER/NAME")
+    try:
+        out = _gh(["api", "graphql", *target,
+                   "-f", f"query={AUTO_MERGE_QUERY}"], None)
+    except (RuntimeError, OSError) as e:
+        # `_gh`'s message is "`<command>` failed: <stderr>"; keep the stderr.
+        detail = _sanitize_log(str(e).split(" failed: ", 1)[-1], 160)
+        return AutoMergeReading(AUTO_MERGE_UNKNOWN,
+                                f"gh could not read it: {detail}")
+    try:
+        value = json.loads(out)["data"]["repository"]["autoMergeAllowed"]
+    except (ValueError, KeyError, TypeError):
+        return AutoMergeReading(AUTO_MERGE_UNKNOWN,
+                                "the response did not carry the setting")
+    if value is True:
+        return AutoMergeReading(AUTO_MERGE_ALLOWED)
+    if value is False:
+        return AutoMergeReading(AUTO_MERGE_NOT_ALLOWED)
+    return AutoMergeReading(AUTO_MERGE_UNKNOWN,
+                            f"the setting read as {json.dumps(value)}")
+
+
+def render_auto_merge(reading: AutoMergeReading) -> str:
+    """The plan header's one line about the premise."""
+    if reading.state == AUTO_MERGE_ALLOWED:
+        return ("native auto-merge: allowed — GitHub can merge these PRs "
+                "itself; this sweep would be a second merge actor.")
+    if reading.state == AUTO_MERGE_NOT_ALLOWED:
+        return ("native auto-merge: not allowed — this sweep is the merge "
+                "actor.")
+    return (f"native auto-merge: unknown ({reading.reason}) — proceeding as "
+            f"if it were not allowed.")
 
 
 # ── Pure classification helpers ──────────────────────────────────
@@ -249,10 +363,20 @@ def mark_superseded(plans: list[Plan]) -> None:
     are still candidates (merge/hold/surface). Keep the highest target version;
     the rest are superseded. Only fires when ≥2 such PRs coexist in the open set
     passed in — never across history.
+
+    A PR with no target version, or a grouped title, never groups: an
+    unparseable title keys as ('?', '?', None) and a grouped title
+    (`bump a and b …`, with or without versions) keys on its first package
+    only, so either would collapse unrelated PRs.
     """
     groups: dict[tuple, list[int]] = {}
     for i, p in enumerate(plans):
         if p.action not in ("merge", "hold", "surface"):
+            continue
+        if p.to_version is None:
+            continue
+        m = TITLE_RE.match(p.title)
+        if m and m.group("also"):
             continue
         groups.setdefault((p.ecosystem, p.pkg, p.directory), []).append(i)
 
@@ -335,12 +459,15 @@ _ICON = {"merge": "✅", "hold": "✋", "surface": "👀",
          "close-pip": "❌", "close-superseded": "❌"}
 
 
-def render_plan(plans: list[Plan], executing: bool) -> str:
+def render_plan(plans: list[Plan], executing: bool,
+                reading: AutoMergeReading | None = None) -> str:
+    probe = [render_auto_merge(reading)] if reading is not None else []
     if not plans:
-        return "No open Dependabot PRs. Nothing to sweep."
+        return "\n".join([*probe, "No open Dependabot PRs. Nothing to sweep."])
     lines = []
     header = "PLANNED ACTIONS" if not executing else "EXECUTING"
     lines.append(header)
+    lines.extend(probe)
     lines.append("-" * 72)
     for p in plans:
         icon = _ICON.get(p.action, "?")
@@ -409,18 +536,23 @@ def main(argv: list[str] | None = None) -> int:
 
         prs = _list_prs(args.repo, "open", args.limit)
         plans = build_plans(prs)
+        reading = probe_auto_merge(args.repo, prs)
 
         if args.json:
-            print(json.dumps([p.to_dict() for p in plans], indent=2))
+            print(json.dumps({"native_auto_merge": reading.to_dict(),
+                              "plans": [p.to_dict() for p in plans]},
+                             indent=2))
             return 0
 
         if args.execute:
-            print(render_plan(plans, executing=True))
+            print(render_plan(plans, executing=True, reading=reading))
             results = execute(plans, args.repo)
             print()
             print("\n".join(results) if results else "Nothing actuated.")
+            if reading.state == AUTO_MERGE_ALLOWED:
+                print(render_auto_merge(reading))
         else:
-            print(render_plan(plans, executing=False))
+            print(render_plan(plans, executing=False, reading=reading))
         return 0
     except RuntimeError as e:
         print(f"ERROR: {_sanitize_log(e)}", file=sys.stderr)

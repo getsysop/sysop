@@ -2556,6 +2556,10 @@ def test_the_collect_prints_no_prefix_without_a_step_8_sink():
         "COLLISIONS": "pending-doc collisions:",
         "STALE": "stale pending-docs:",
         "STALENESS UNKNOWN": "staleness not measured:",
+        # `Q-738`: an older held doc whose drift a newer sibling describes; collected, so
+        # the run's report must still say which doc covered it.
+        "COVERED": "stale pending-docs:",
+        "MEASURED": None,             # the `staleness` subcommand's count line, exit 0
         "MISSING": "undocumented claims:",   # exit 8 (`Q-594`) SKIPs one branch
         "CLAIMS UNREADABLE": "claims unreadable:",
         "OPEN CLAIM": "open claims:",       # report-only, exit 0 (`Q-604`'s report half)
@@ -3090,7 +3094,7 @@ def test_the_staleness_comparison_has_exactly_one_reader():
     helper = helpers[0]
 
     lines = collect.split("\n")
-    absent_at = next(i for i, l in enumerate(lines) if "if not src_dir.is_dir():" in l)
+    absent_at = next(i for i, l in enumerate(lines) if "not src_dir.is_dir():" in l)
     populated_at = next(i for i, l in enumerate(lines)
                         if "docs = [p for p in sorted(src_dir.glob" in l)
     calls = [n.lineno for n in ast.walk(tree)
@@ -3859,3 +3863,728 @@ def test_the_open_claim_rows_keep_their_polarity():
     ws = body[body.index("**If `WS` is empty**"):]
     ws = ws[: ws.index("\n\n")]
     assert "that no such doc names in `roadmap_ids` (or `task_ids`) under Step 8's `Open claims:`" in ws
+
+
+# ------------------------------------------- a rewritten branch and a branch's docs as a set
+#
+# `Q-738`, from two consumer reports (#927, #902). A close rebases a branch at Step 4a item 2
+# and holds its doc; the next close measured that doc's `branch_tip`, no longer an ancestor, as
+# every commit since the old base. And `pending_doc_hold.py guard` writes `<stem>--<n>.md` beside
+# a held doc, so one branch can carry an older doc and a newer one at its head.
+
+
+def _staleness(main: Path, *args: str) -> subprocess.CompletedProcess:
+    """`pending_doc_collect.py staleness "<branch>"`, run from the main checkout as Step 3b does."""
+    return subprocess.run([sys.executable, str(shipped_script(COLLECT_SCRIPT)), "staleness", *args],
+                          cwd=main, capture_output=True, text=True)
+
+
+def _held(path: Path, branch: str, summary: str, tip: str) -> None:
+    """A doc a close is holding: `held_since:` is what `check --stamp` writes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\nheld_since: '2026-11-01'\nbranch: {branch}\nbranch_tip: {tip}\n"
+                    f'type: feature\nsummary: "{summary}"\n---\n', encoding="utf-8")
+
+
+def _rebased(main: Path) -> str:
+    """`_repo`'s feat/x, plus a second commit, then three commits on main and the branch
+    rebased onto them: Step 4a item 2's shape. Returns the pre-rebase tip, the doc's stamp."""
+    _repo(main)
+    _g(main, "checkout", "-q", "feat/x")
+    (main / "h").write_text("c\n", encoding="utf-8")
+    _g(main, "add", "h")
+    _g(main, "commit", "-qm", "more of the work this doc describes")
+    tip = _g(main, "rev-parse", "HEAD").stdout.strip()
+    _g(main, "checkout", "-q", "main")
+    for i in range(3):
+        (main / f"m{i}").write_text(f"{i}\n", encoding="utf-8")
+        _g(main, "add", f"m{i}")
+        _g(main, "commit", "-qm", f"merge target commit {i}")
+    _g(main, "checkout", "-q", "feat/x")
+    _g(main, "rebase", "-q", "main")
+    _g(main, "checkout", "-q", "main")
+    return tip
+
+
+def test_a_held_doc_whose_branch_a_close_rebased_is_current(tmp_path):
+    """#927: every rebased copy is `=`, and the ancestry count read 5 here (6 in the entry's
+    fixture). It must read 0."""
+    main = tmp_path / "main"
+    tip = _rebased(main)
+    assert _g(main, "rev-list", "--count", f"{tip}..refs/heads/feat/x").stdout.strip() == "5", (
+        "the fixture no longer has the shape: the ancestry count must be non-zero")
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 0, f"a rebased, current doc was refused: {r.stdout}"
+    assert "PENDING-DOC STALE" not in r.stdout, r.stdout
+    assert "PENDING-DOC MEASURED: 1 doc(s) on main claim 'feat/x' (feat-x.md)" in r.stdout
+
+
+def test_a_commit_after_the_rebase_is_still_drift_and_only_it_is_counted(tmp_path):
+    """The over-lenient direction: real work after the rebase must still refuse, counted
+    from the newest rebased copy, so the merge target's commits are not in the count."""
+    main = tmp_path / "main"
+    tip = _rebased(main)
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+    _commit_on(main, "the prod write, performed")
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6, f"drift after a rebase was not caught: {r.stdout}"
+    assert "PENDING-DOC STALE: feat-x.md — 1 commit(s) landed" in r.stdout, r.stdout
+    assert "rewritten since, counted from its copy" in r.stdout, r.stdout
+    assert "the prod write, performed" in r.stdout
+    assert "merge target commit" not in r.stdout, "the merge target's commits are not drift"
+
+
+def test_the_collect_measures_a_rebased_doc_on_both_routes(scripts, tmp_path):
+    """The same rule through the collect: the absent-`src_dir` route and the populated one."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    tip = _rebased(main)
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+    wt = _worktree(main, tmp_path / "wt")
+
+    r = _run(collect, main, wt)
+    assert r.returncode == 0, f"absent route refused a rebased current doc: {r.stdout}"
+
+    (wt / "sysop/runtime/pending-docs").mkdir(parents=True)
+    head = _g(main, "rev-parse", "feat/x").stdout.strip()
+    _held(wt / "sysop/runtime/pending-docs/feat-x--2.md", "feat/x", "LATER", head)
+    r = _run(collect, main, wt)
+    assert r.returncode == 0, f"populated route refused a rebased current doc: {r.stdout}"
+    assert "PENDING-DOC STALE" not in r.stdout
+
+
+def test_an_amended_commit_is_still_refused(tmp_path):
+    """A pairing it cannot prove falls back to the ancestry count. Read as unknown, an amend
+    after `/document-work` would route the doc; the count refuses it, as before."""
+    main = tmp_path / "main"
+    tip = _repo(main)
+    _g(main, "checkout", "-q", "feat/x")
+    (main / "g").write_text("changed after the doc\n", encoding="utf-8")
+    _g(main, "commit", "-qa", "--amend", "-m", "the work, amended")
+    _g(main, "checkout", "-q", "main")
+    _tipped(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6, f"an amended commit was read as current or unknown: {r.stdout}"
+    assert "holds no copy of the doc's commits as one run" in r.stdout, r.stdout
+    assert "STALENESS UNKNOWN" not in r.stdout
+
+
+def test_a_merge_on_the_docs_side_falls_back_to_the_count(tmp_path):
+    """A merge commit has no patch to pair, so the measure does not guess."""
+    main = tmp_path / "main"
+    _repo(main)
+    _g(main, "checkout", "-q", "-b", "side", "main")
+    (main / "s").write_text("s\n", encoding="utf-8")
+    _g(main, "add", "s")
+    _g(main, "commit", "-qm", "side work")
+    _g(main, "checkout", "-q", "feat/x")
+    _g(main, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    tip = _g(main, "rev-parse", "HEAD").stdout.strip()
+    _g(main, "reset", "-q", "--hard", "HEAD~1")   # the branch drops the merge: rewritten
+    _commit_on(main, "after the reset")
+    _g(main, "checkout", "-q", "main")
+    _tipped(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6, r.stdout
+    assert "holds a merge commit" in r.stdout, r.stdout
+
+
+def test_an_older_held_doc_is_covered_by_a_current_sibling(tmp_path):
+    """#902: `feat-x.md` held at an older tip, `feat-x--2.md` at the head. Measured one at a
+    time the older one is stale forever; as a set, the newer one describes its drift."""
+    main = tmp_path / "main"
+    old = _repo(main)
+    _commit_on(main, "the second half")
+    head = _g(main, "rev-parse", "feat/x").stdout.strip()
+    _held(_live(main) / "feat-x.md", "feat/x", "FIRST HALF", old)
+    _tipped(_live(main) / "feat-x--2.md", "feat/x", "SECOND HALF", head)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 0, f"a covered held doc was refused: {r.stdout}"
+    assert ("PENDING-DOC COVERED: feat-x.md (branch_tip " in r.stdout
+            and "described by feat-x--2.md" in r.stdout), r.stdout
+    assert "PENDING-DOC STALE" not in r.stdout
+
+
+@pytest.mark.parametrize("shape", ["not held", "no sibling", "sibling is older", "other family"])
+def test_a_stale_doc_outside_the_held_sibling_pair_is_still_refused(tmp_path, shape):
+    """The bar is narrow: any other pair would route a stale doc's summary as written."""
+    main = tmp_path / "main"
+    old = _repo(main)
+    _commit_on(main, "the second half")
+    head = _g(main, "rev-parse", "feat/x").stdout.strip()
+    stale, newer = "feat-x.md", "feat-x--2.md"
+    if shape == "sibling is older":
+        stale, newer = "feat-x--2.md", "feat-x.md"
+    if shape == "other family":
+        newer = "feat-y--2.md"
+    (_tipped if shape == "not held" else _held)(_live(main) / stale, "feat/x", "OLD", old)
+    if shape != "no sibling":
+        _tipped(_live(main) / newer, "feat/x", "NEW", head)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6, f"{shape}: a stale doc was let through: {r.stdout}"
+    assert f"PENDING-DOC STALE: {stale}" in r.stdout and "COVERED" not in r.stdout, r.stdout
+
+
+def test_a_clone_workspaces_newer_doc_covers_nothing_main_cannot_resolve(scripts, tmp_path):
+    """The newer doc's tip is measured in the stale doc's own repository. A `--clone`
+    workspace's head need not exist in the main checkout, and there it covers nothing."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    old = _repo(main)
+    _commit_on(main, "landed on main's copy of the branch")
+    _held(_live(main) / "feat-x.md", "feat/x", "OLD", old)
+    wt = _clone(main, tmp_path / "wt")
+    _commit_on(wt, "only in the clone")
+    head = _g(wt, "rev-parse", "HEAD").stdout.strip()
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x--2.md", "feat/x", "NEW", head)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 6, f"an unresolvable newer tip covered a stale doc: {r.stdout}"
+    assert "PENDING-DOC STALE: feat-x.md" in r.stdout and "COVERED" not in r.stdout, r.stdout
+
+
+def test_the_staleness_subcommand_refuses_a_bad_invocation(tmp_path):
+    main = tmp_path / "main"
+    _repo(main)
+    assert _staleness(main).returncode == 2
+    assert _staleness(main, "a", "b").returncode == 2
+    assert _staleness(main, "<branch name>").returncode == 4
+    r = _staleness(main, "feat/x")
+    assert r.returncode == 0 and "PENDING-DOC MEASURED: 0 doc(s) on main claim" in r.stdout
+    assert "PENDING-DOC COLLISIONS" not in r.stdout, "nothing was collected"
+    assert not _live(main).exists(), "the subcommand writes nothing"
+
+
+def test_step_3b_runs_the_subcommand_rather_than_a_hand_count():
+    """The no-workspace arm used to apply `rev-list --count` by hand, a second copy of the
+    rule; that copy could not pair a rebased branch or read docs as a set."""
+    text = text_of(SKILL)
+    assert text.count('pending_doc_collect.py staleness "<branch name>"') == 1
+    assert 'rev-list --count "<branch_tip>..refs/heads/<branch>"' not in text
+    step8 = text[text.index("Stale pending-docs: <N>"):]
+    assert "PENDING-DOC COVERED:" in step8[:1200], "Step 8 must name the COVERED line"
+
+
+def test_the_populated_route_reads_mains_held_doc_and_the_workspaces_sibling_as_one_set(
+        scripts, tmp_path):
+    """Main holds the older doc; the workspace carries the newer one `guard` wrote. One set,
+    measured in each doc's own repository: a linked worktree shares the store."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    old = _repo(main)
+    wt = _worktree(main, tmp_path / "wt")
+    _commit_on(wt, "the second half")
+    head = _g(wt, "rev-parse", "HEAD").stdout.strip()
+    _held(_live(main) / "feat-x.md", "feat/x", "FIRST HALF", old)
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x--2.md", "feat/x", "SECOND HALF", head)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0, f"a covered held doc was refused: {r.stdout}"
+    assert "PENDING-DOC COVERED: feat-x.md" in r.stdout, r.stdout
+    assert "SECOND HALF" in (_live(main) / "feat-x--2.md").read_text()
+
+
+def test_the_patch_pass_runs_no_program_the_repository_config_names(tmp_path):
+    """`git log -p` would run an external diff, a textconv filter and a signature check if
+    config named them; each would answer for git, and runs with the operator's rights."""
+    main = tmp_path / "main"
+    tip = _rebased(main)
+    marker = tmp_path / "ran"
+    prog = tmp_path / "prog.sh"
+    prog.write_text(f"#!/bin/sh\necho \"$0 $*\" >> '{marker}'\ncat \"$1\" 2>/dev/null\n",
+                    encoding="utf-8")
+    prog.chmod(0o755)
+    _g(main, "config", "diff.external", str(prog))
+    _g(main, "config", "diff.t.textconv", str(prog))
+    _g(main, "config", "log.showSignature", "true")
+    _g(main, "config", "gpg.program", str(prog))
+    (main / ".git" / "info" / "attributes").write_text("* diff=t\n", encoding="utf-8")
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+
+    r = _staleness(main, "feat/x")
+
+    assert not marker.exists(), f"a configured program ran: {marker.read_text()}"
+    assert r.returncode == 0, r.stdout
+
+
+def _revert_pair(main: Path) -> str:
+    """`feat/x` gains a change and its revert after `_repo`'s commit; returns that tip, the
+    doc's stamp. Its commits' patches are then (work, A, revert A)."""
+    tip0 = _repo(main)
+    _g(main, "checkout", "-q", "feat/x")
+    (main / "a").write_text("A\n", encoding="utf-8")
+    _g(main, "add", "a")
+    _g(main, "commit", "-qm", "add A")
+    _g(main, "revert", "--no-edit", "HEAD")
+    tip = _g(main, "rev-parse", "HEAD").stdout.strip()
+    _g(main, "checkout", "-q", "main")
+    assert tip0 != tip
+    return tip
+
+
+def _rebase_onto_new_main(main: Path) -> None:
+    (main / "t").write_text("t\n", encoding="utf-8")
+    _g(main, "add", "t")
+    _g(main, "commit", "-qm", "merge target commit")
+    _g(main, "checkout", "-q", "feat/x")
+    _g(main, "rebase", "-q", "main")
+    _g(main, "checkout", "-q", "main")
+
+
+def test_a_commit_that_reapplies_one_of_the_docs_patches_is_still_drift(tmp_path):
+    """Paired one patch at a time, a commit after the doc that makes a reverted change again
+    stands in for its copy and the drift reads 0. The run must match in order, once."""
+    main = tmp_path / "main"
+    tip = _revert_pair(main)
+    _held(_live(main) / "feat-x.md", "feat/x", "A WAS TRIED AND REVERTED", tip)
+    _rebase_onto_new_main(main)
+    assert _staleness(main, "feat/x").returncode == 0, "control: the rebase alone is current"
+    _g(main, "checkout", "-q", "feat/x")
+    (main / "a").write_text("A\n", encoding="utf-8")
+    _g(main, "add", "a")
+    _g(main, "commit", "-qm", "add A again")
+    _g(main, "checkout", "-q", "main")
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6, f"a re-applied patch hid the drift: {r.stdout}"
+    assert "PENDING-DOC STALE: feat-x.md — 1 commit(s)" in r.stdout and "add A again" in r.stdout
+
+
+def test_the_docs_commits_found_twice_on_the_branch_are_not_paired(tmp_path):
+    """Two runs of the same patches cannot say which one is the copy, so the measure counts
+    by ancestry instead of choosing."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _g(main, "init", "-q", "-b", "main", ".")
+    _g(main, "config", "user.email", "t@example.invalid")
+    _g(main, "config", "user.name", "t")
+    (main / "f").write_text("a\n", encoding="utf-8")
+    _g(main, "add", "f")
+    _g(main, "commit", "-qm", "c1")
+    _g(main, "checkout", "-q", "-b", "feat/x")
+    (main / "a").write_text("A\n", encoding="utf-8")
+    _g(main, "add", "a")
+    _g(main, "commit", "-qm", "add A")
+    _g(main, "revert", "--no-edit", "HEAD")
+    tip = _g(main, "rev-parse", "HEAD").stdout.strip()
+    _g(main, "checkout", "-q", "main")
+    _held(_live(main) / "feat-x.md", "feat/x", "A WAS TRIED AND REVERTED", tip)
+    _rebase_onto_new_main(main)
+    _g(main, "checkout", "-q", "feat/x")
+    _g(main, "cherry-pick", "HEAD~1")
+    _g(main, "revert", "--no-edit", "HEAD")
+    _g(main, "checkout", "-q", "main")
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6, r.stdout
+    assert "holds the doc's commits more than once" in r.stdout, r.stdout
+
+
+def test_a_pair_stamped_before_a_close_rebased_both_still_covers(tmp_path):
+    """Both docs were stamped, then a close rebased the branch: the newer doc is current only
+    by its pairing, and its run starts below the end of the older doc's work, so every commit
+    after the older doc is one it describes. Ancestry alone refused this pair."""
+    main = tmp_path / "main"
+    old = _repo(main)
+    _commit_on(main, "the second half")
+    newer = _g(main, "rev-parse", "feat/x").stdout.strip()
+    _held(_live(main) / "feat-x.md", "feat/x", "FIRST HALF", old)
+    _tipped(_live(main) / "feat-x--2.md", "feat/x", "SECOND HALF", newer)
+    _rebase_onto_new_main(main)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 0, r.stdout
+    assert "PENDING-DOC COVERED: feat-x.md" in r.stdout, r.stdout
+
+
+def test_a_newer_doc_reworded_after_a_close_still_covers_what_its_history_holds(tmp_path):
+    """Round 2's LOW: the newer doc's last commit reworded, so it is current only by a run of
+    that one commit. The older doc's drift sits in the newer doc's own history, which it
+    describes: covered, as it was before the reword."""
+    main = tmp_path / "main"
+    old = _repo(main)
+    _commit_on(main, "between the two docs")
+    _commit_on(main, "the newer doc's own work")
+    newer = _g(main, "rev-parse", "feat/x").stdout.strip()
+    _held(_live(main) / "feat-x.md", "feat/x", "FIRST HALF", old)
+    _tipped(_live(main) / "feat-x--2.md", "feat/x", "SECOND HALF", newer)
+    _g(main, "checkout", "-q", "feat/x")
+    _g(main, "commit", "-q", "--amend", "-m", "the newer doc's own work, reworded")
+    _g(main, "checkout", "-q", "main")
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 0 and "PENDING-DOC COVERED: feat-x.md" in r.stdout, r.stdout
+
+
+def test_drift_outside_the_newer_docs_run_and_history_is_not_covered(tmp_path):
+    """The newer doc was stamped on a line without D; D is on the merge target and so sits under
+    its run. D is drift for the older doc and in neither the newer run nor its history."""
+    main = tmp_path / "main"
+    a = _repo(main)
+    _g(main, "checkout", "-q", "-b", "side", "feat/x")
+    (main / "e").write_text("e\n", encoding="utf-8")
+    _g(main, "add", "e")
+    _g(main, "commit", "-qm", "E, the newer doc's work")
+    e = _g(main, "rev-parse", "HEAD").stdout.strip()
+    _g(main, "checkout", "-q", "feat/x")
+    (main / "d").write_text("d\n", encoding="utf-8")
+    _g(main, "add", "d")
+    _g(main, "commit", "-qm", "D, in neither doc")
+    _g(main, "checkout", "-q", "main")
+    _g(main, "merge", "-q", "--ff-only", "feat/x")      # D is the merge target's now
+    _g(main, "checkout", "-q", "feat/x")
+    _g(main, "cherry-pick", e)
+    _g(main, "checkout", "-q", "main")
+    _g(main, "branch", "-D", "side")
+    _held(_live(main) / "feat-x.md", "feat/x", "FIRST", a)
+    _tipped(_live(main) / "feat-x--2.md", "feat/x", "E", e)
+
+    r = _staleness(main, "feat/x")
+
+    assert "PENDING-DOC STALE: feat-x--2.md" not in r.stdout, f"control: E is current {r.stdout}"
+    assert r.returncode == 6 and "PENDING-DOC STALE: feat-x.md" in r.stdout, r.stdout
+    assert "D, in neither doc" in r.stdout
+
+
+@pytest.mark.parametrize("holder", [
+    "backup-branch", "tag", "prefetch-ref", "worktree-ref", "slash-remote", "pushed-elsewhere"])
+def test_no_copy_of_the_branch_makes_an_inserted_commit_shared(tmp_path, holder):
+    """Round 2: a denylist of the branch's own refs missed every other copy of it. Only the
+    merge target (the default branch, a remote's copy of it, a recorded PR head) counts."""
+    main = tmp_path / "main"
+    tip = _repo(main)
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+    _g(main, "checkout", "-q", "-b", "rebuilt", "main")
+    (main / "n").write_text("n\n", encoding="utf-8")
+    _g(main, "add", "n")
+    _g(main, "commit", "-qm", "PROD WRITE, undocumented")
+    n = _g(main, "rev-parse", "HEAD").stdout.strip()
+    _g(main, "cherry-pick", tip)
+    _g(main, "branch", "-f", "feat/x", "HEAD")
+    _g(main, "checkout", "-q", "main")
+    _g(main, "branch", "-D", "rebuilt")
+    ref = {"backup-branch": "refs/heads/feat/x-backup", "tag": "refs/tags/wip",
+           "prefetch-ref": "refs/prefetch/remotes/fork/feat/x",
+           "worktree-ref": "refs/worktree/keep",
+           "slash-remote": "refs/remotes/wade/fork/feat/x",
+           "pushed-elsewhere": "refs/remotes/origin/wip/x"}[holder]
+    _g(main, "update-ref", ref, n)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6, f"{holder} made an inserted commit read as shared: {r.stdout}"
+
+
+def test_a_remote_copy_of_the_default_branch_is_the_merge_target(tmp_path):
+    """The local default branch need not hold the base: a remote's copy of it is the target."""
+    main = tmp_path / "main"
+    tip = _repo(main)
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+    _g(main, "remote", "add", "origin", str(tmp_path / "nowhere"))
+    _g(main, "checkout", "-q", "-b", "upstream", "main")
+    (main / "u").write_text("u\n", encoding="utf-8")
+    _g(main, "add", "u")
+    _g(main, "commit", "-qm", "upstream work")
+    _g(main, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _g(main, "checkout", "-q", "feat/x")
+    _g(main, "rebase", "-q", "upstream")
+    _g(main, "checkout", "-q", "main")
+    _g(main, "branch", "-D", "upstream")
+
+    assert _staleness(main, "feat/x").returncode == 0
+
+
+def test_work_inserted_under_the_docs_commits_is_drift(tmp_path):
+    """Lens A's H1: `rebase -i` or `pull --rebase` can put a commit below the doc's run. What
+    sits under the run must be held by another ref, or it may be work the doc does not
+    describe; the measure falls back to the ancestry count and refuses."""
+    main = tmp_path / "main"
+    tip = _repo(main)
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+    _g(main, "checkout", "-q", "-b", "rebuilt", "main")
+    (main / "n").write_text("n\n", encoding="utf-8")
+    _g(main, "add", "n")
+    _g(main, "commit", "-qm", "PROD WRITE, undocumented")
+    _g(main, "cherry-pick", tip)
+    _g(main, "branch", "-f", "feat/x", "HEAD")
+    _g(main, "checkout", "-q", "main")
+    _g(main, "branch", "-D", "rebuilt")
+    # A published branch: its own remote copy holds the inserted commit too, and proves nothing.
+    _g(main, "update-ref", "refs/remotes/origin/feat/x", "feat/x")
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6, f"an inserted commit read as the merge target's: {r.stdout}"
+    assert "are not the merge target's" in r.stdout and "PROD WRITE" in r.stdout, r.stdout
+
+
+def test_a_run_on_a_squash_merged_integration_branch_is_held_by_its_recorded_head(tmp_path):
+    """Under `pr`, a close rebases onto an integration branch that is squash-merged and
+    deleted; what sits under the run is then held only by the close's recorded PR head."""
+    main = tmp_path / "main"
+    tip = _repo(main)
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+    _g(main, "checkout", "-q", "-b", "close/1", "main")
+    (main / "o").write_text("o\n", encoding="utf-8")
+    _g(main, "add", "o")
+    _g(main, "commit", "-qm", "another branch's work, merged by the close")
+    _g(main, "checkout", "-q", "feat/x")
+    _g(main, "rebase", "-q", "close/1")
+    _g(main, "checkout", "-q", "main")
+    _g(main, "update-ref", "refs/sysop/merged-pr-heads/1", "feat/x")
+    _g(main, "branch", "-D", "close/1")
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 0, r.stdout
+    _g(main, "update-ref", "-d", "refs/sysop/merged-pr-heads/1")
+    assert _staleness(main, "feat/x").returncode == 6, "control: no ref holds it, so it refuses"
+
+
+def test_the_staleness_subcommand_refuses_to_run_anywhere_but_the_main_top_level(tmp_path):
+    """`live` is read relative to the CWD; from elsewhere it would find nothing and pass."""
+    main = tmp_path / "main"
+    tip = _repo(main)
+    _commit_on(main, "drift")
+    _tipped(_live(main) / "feat-x.md", "feat/x", "STALE", tip)
+    (main / "sub").mkdir()
+    r = subprocess.run([sys.executable, str(shipped_script(COLLECT_SCRIPT)), "staleness",
+                        "feat/x"], cwd=main / "sub", capture_output=True, text=True)
+    assert r.returncode == 4 and "top level" in r.stdout, r.stdout
+    _g(main, "worktree", "add", "-q", "--detach", str(tmp_path / "lw"))
+    r = subprocess.run([sys.executable, str(shipped_script(COLLECT_SCRIPT)), "staleness",
+                        "feat/x"], cwd=tmp_path / "lw", capture_output=True, text=True)
+    assert r.returncode == 4, r.stdout
+    assert _staleness(main, "feat/x").returncode == 6, "control: from the top level it refuses"
+
+
+def test_a_held_pair_inside_a_clone_workspace_is_measured_in_the_clone(scripts, tmp_path):
+    """Both docs live in a `--clone` workspace whose new commits the main checkout lacks: the
+    cover is measured in the stale doc's repository, the clone, where both tips resolve."""
+    collect, _ = scripts
+    main = tmp_path / "main"
+    _repo(main)
+    wt = _clone(main, tmp_path / "wt")
+    old = _g(wt, "rev-parse", "HEAD").stdout.strip()
+    _commit_on(wt, "only in the clone")
+    head = _g(wt, "rev-parse", "HEAD").stdout.strip()
+    _held(wt / "sysop/runtime/pending-docs/feat-x.md", "feat/x", "OLD", old)
+    _tipped(wt / "sysop/runtime/pending-docs/feat-x--2.md", "feat/x", "NEW", head)
+
+    r = _run(collect, main, wt)
+
+    assert r.returncode == 0 and "PENDING-DOC COVERED: feat-x.md" in r.stdout, r.stdout
+
+
+def test_the_staleness_subcommand_reports_no_open_claim(tmp_path):
+    """The subcommand is the exit-6 test only; Step 3b's prose applies the claim tests, and a
+    second report of one would double Step 8's `Open claims:` row."""
+    main = tmp_path / "main"
+    tip = _repo(main)
+    _tipped(_live(main) / "feat-x.md", "feat/x", "CURRENT", tip)
+    locks = main / "sysop" / "runtime" / "locks"
+    locks.mkdir(parents=True)
+    (locks / "FEAT-1.lock").write_text("task_id: FEAT-1\nbranch: feat/x\n", encoding="utf-8")
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 0 and "OPEN CLAIM" not in r.stdout, r.stdout
+
+
+def test_a_signed_commit_runs_no_signature_check(tmp_path):
+    """`log.showSignature` runs `gpg.program` for every signed commit `git log` prints."""
+    main = tmp_path / "main"
+    tip = _repo(main)
+    marker = tmp_path / "ran"
+    gpg = tmp_path / "gpg.sh"
+    gpg.write_text(
+        "#!/bin/sh\n"
+        f"echo \"$*\" >> '{marker}'\n"
+        'case "$*" in *-bsau*|*--detach-sign*) cat >/dev/null\n'
+        '  printf "\\n[GNUPG:] SIG_CREATED D 1 8 00 0 X\\n" >&2\n'
+        '  printf -- "-----BEGIN PGP SIGNATURE-----\\n\\nx\\n-----END PGP SIGNATURE-----\\n";;\n'
+        "esac\nexit 0\n", encoding="utf-8")
+    gpg.chmod(0o755)
+    _g(main, "config", "gpg.program", str(gpg))
+    _g(main, "config", "user.signingkey", "X")
+    _rebase_onto_new_main(main)
+    # Signed AFTER the rebase: a rebase drops a commit's signature, and the battery's first
+    # cut of this test signed before it, so no signed commit was left to verify.
+    _g(main, "checkout", "-q", "feat/x")
+    (main / "s").write_text("s\n", encoding="utf-8")
+    _g(main, "add", "s")
+    _g(main, "commit", "-qS", "-m", "signed, after the doc")
+    _g(main, "checkout", "-q", "main")
+    assert "gpgsig" in _g(main, "cat-file", "-p", "feat/x").stdout, "the fixture signs"
+    marker.unlink()
+    _g(main, "config", "log.showSignature", "true")
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+
+    r = _staleness(main, "feat/x")
+
+    assert not marker.exists(), f"a signature check ran: {marker.read_text()}"
+    assert r.returncode == 6 and "1 commit(s)" in r.stdout, r.stdout
+
+
+def test_an_empty_commit_on_the_docs_side_is_not_paired(tmp_path):
+    """An empty commit has no patch, so nothing proves which commit is its copy; the measure
+    counts by ancestry instead of matching it against any patch-less commit."""
+    main = tmp_path / "main"
+    _repo(main)
+    _g(main, "checkout", "-q", "feat/x")
+    _g(main, "commit", "-q", "--allow-empty", "-m", "an empty marker")
+    tip = _g(main, "rev-parse", "HEAD").stdout.strip()
+    _g(main, "checkout", "-q", "main")
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+    _rebase_onto_new_main(main)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6, r.stdout
+    assert "has no patch (an empty commit)" in r.stdout, r.stdout
+
+
+def test_the_staleness_subcommand_runs_from_a_separate_git_dir_checkout(tmp_path):
+    """Round 2: the guard first required the git dir to be named `.git`, which refused a
+    `--separate-git-dir` primary checkout from its own top level."""
+    main = tmp_path / "main"
+    main.mkdir()
+    _g(main, "init", "-q", "-b", "main", "--separate-git-dir", str(tmp_path / "gd"), ".")
+    _g(main, "config", "user.email", "t@example.invalid")
+    _g(main, "config", "user.name", "t")
+    (main / "f").write_text("a\n", encoding="utf-8")
+    _g(main, "add", "f")
+    _g(main, "commit", "-qm", "c1")
+    _g(main, "branch", "feat/x")
+    tip = _g(main, "rev-parse", "feat/x").stdout.strip()
+    _tipped(_live(main) / "feat-x.md", "feat/x", "CURRENT", tip)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 0 and "MEASURED: 1 doc(s)" in r.stdout, r.stdout + r.stderr
+
+
+def _inserted_on(main: Path, onto: str) -> tuple[str, str]:
+    """`feat/x`'s doc commit, rebased by hand onto `onto` with an undocumented commit U between:
+    returns (the doc's original tip, U)."""
+    tip = _g(main, "rev-parse", "feat/x").stdout.strip()
+    _g(main, "checkout", "-q", "-b", "rebuilt", onto)
+    (main / "u").write_text("u\n", encoding="utf-8")
+    _g(main, "add", "u")
+    _g(main, "commit", "-qm", "U, never on the merge target")
+    u = _g(main, "rev-parse", "HEAD").stdout.strip()
+    _g(main, "cherry-pick", tip)
+    _g(main, "branch", "-f", "feat/x", "HEAD")
+    _g(main, "checkout", "-q", "main")
+    _g(main, "branch", "-D", "rebuilt")
+    return tip, u
+
+
+@pytest.mark.parametrize("holder", ["another-remote", "remote-wip-main", "sysop-not-a-head"])
+def test_only_the_resolvers_remote_and_recorded_heads_count(tmp_path, holder):
+    """Round 3: `heroku/main` or a teammate's `alice/main` can hold work that never reached the
+    merge target; so can a branch on `origin` whose name ends in `/main`, or a `refs/sysop/` ref
+    that is not a recorded PR head."""
+    main = tmp_path / "main"
+    _repo(main)
+    _g(main, "remote", "add", "origin", str(tmp_path / "nowhere"))
+    _g(main, "remote", "add", "heroku", str(tmp_path / "nowhere2"))
+    _g(main, "update-ref", "refs/remotes/origin/main", "main")
+    tip, u = _inserted_on(main, "main")
+    ref = {"another-remote": "refs/remotes/heroku/main",
+           "remote-wip-main": "refs/remotes/origin/wip/main",
+           "sysop-not-a-head": "refs/sysop/other/1"}[holder]
+    _g(main, "update-ref", ref, u)
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6 and "are not the merge target's" in r.stdout, r.stdout
+
+
+def test_a_default_that_is_the_measured_branch_names_no_merge_target(tmp_path):
+    """Round 3: `origin/HEAD` naming the feature branch made `refs/heads/feat/x` the target."""
+    main = tmp_path / "main"
+    _repo(main)
+    _g(main, "remote", "add", "origin", str(tmp_path / "nowhere"))
+    tip, u = _inserted_on(main, "main")
+    _g(main, "update-ref", "refs/remotes/origin/feat/x", "feat/x")
+    _g(main, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/feat/x")
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6 and "resolves to 'feat/x' itself" in r.stdout, r.stdout
+
+
+def test_an_unresolvable_default_refuses_and_says_so(tmp_path):
+    """Round 3: with both `main` and `master` and no remote, `default_branch.sh` names nothing.
+    The measure fails closed, and the line names that cause, not an inserted commit."""
+    main = tmp_path / "main"
+    tip = _repo(main)
+    _g(main, "branch", "master", "main")
+    _commit_on(main, "unused")          # gives feat/x a second commit to rebase
+    _g(main, "checkout", "-q", "main")
+    (main / "t").write_text("t\n", encoding="utf-8")
+    _g(main, "add", "t")
+    _g(main, "commit", "-qm", "target work")
+    _g(main, "checkout", "-q", "feat/x")
+    _g(main, "rebase", "-q", "main")
+    _g(main, "checkout", "-q", "main")
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6, r.stdout
+    assert "the merge target could not be named: default_branch.sh named no default" in r.stdout
+
+
+def test_the_commit_checked_is_the_one_directly_under_the_run(tmp_path):
+    """Round 3's P3: U sits above shared T and under the run; checking any lower commit (T) would
+    read U as shared."""
+    main = tmp_path / "main"
+    _repo(main)
+    (main / "t").write_text("t\n", encoding="utf-8")
+    _g(main, "add", "t")
+    _g(main, "commit", "-qm", "T, the merge target's")
+    tip, _ = _inserted_on(main, "main")
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+
+    r = _staleness(main, "feat/x")
+
+    assert r.returncode == 6 and "U, never on the merge target" in r.stdout, r.stdout
+
+
+def test_the_resolver_reads_the_measured_repository_not_an_inherited_git_dir(tmp_path):
+    """Round 3: the resolver's environment is stripped, so an inherited `GIT_DIR` naming another
+    repository cannot answer for this one."""
+    main = tmp_path / "main"
+    tip = _rebased(main)
+    _held(_live(main) / "feat-x.md", "feat/x", "THE WORK", tip)
+    other = tmp_path / "other"
+    other.mkdir()
+    _g(other, "init", "-q", "-b", "trunk", ".")
+    _g(other, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x")
+    r = subprocess.run([sys.executable, str(shipped_script(COLLECT_SCRIPT)), "staleness", "feat/x"],
+                       cwd=main, capture_output=True, text=True,
+                       env={**os.environ, "GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other)})
+    assert r.returncode == 0, r.stdout + r.stderr

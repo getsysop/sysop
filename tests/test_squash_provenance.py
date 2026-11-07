@@ -711,9 +711,16 @@ def test_step_1a_and_step_2a_listings_leave_out_the_stale_flips(closing):
                              + " --not --glob='refs/sysop/merged-pr-heads/*'").stdout.splitlines())
     assert count("B3") == 0, "Step 1a still reads an unstarted claim as AHEAD"
     assert count("B2") == 1
-    listing = _inline(text, "python3 sysop/scripts/git_ro.py . log refs/heads/<default branch>..refs/heads/<branch> --not")
+    # Phase 472 (`Q-734`): the listing starts at the base step 1's `feature_branch.py base`
+    # prints, so the test runs that command too rather than substituting `main` for it.
+    base_cmd = _inline(text, 'python3 sysop/scripts/feature_branch.py base "<branch>" "<default branch>"')
+    base_cmd = base_cmd.replace("python3 sysop/scripts/", f'"{sys.executable}" "{scripts}/')
+    base_cmd = base_cmd.replace('.py base', '.py" base')
+    printed = sh(w, base_cmd.replace("<default branch>", "main").replace("<branch>", "B2")).stdout
+    assert printed.startswith("BASE: "), printed
+    listing = _inline(text, "python3 sysop/scripts/git_ro.py . log <base>..refs/heads/<branch> --not")
     listing = listing.replace("python3 sysop/scripts/git_ro.py", f'"{sys.executable}" "{scripts}/git_ro.py"')
-    out = sh(w, listing.replace("<default branch>", "main").replace("<branch>", "B2")).stdout
+    out = sh(w, listing.replace("<base>", printed.split()[1]).replace("<branch>", "B2")).stdout
     assert [l.split(" ", 1)[1] for l in out.splitlines()] == ["feat: w2.txt"], out
 
 
@@ -771,7 +778,7 @@ from test_fix_in_branch_tier import (_anchor_count, _pin_hash, _pin_liveness, _p
 
 SPANS: dict[str, tuple[Path, str, str, bool]] = {
     "2a landed check": (CLOSE, "**Landed check.** Ask whether a previous close",
-                        "1. `python3 sysop/scripts/git_ro.py . log refs/heads/<default branch>..refs/heads/<branch> --not", False),
+                        "1. `python3 sysop/scripts/feature_branch.py base", False),  # Phase 472: step 1 opens with the base
     "2b landed not a target": (CLOSE, "Nor is a branch Step 2a approved as landed (step 0b",
                                "\n\n", False),
     "4a recorded head": (CLOSE, "**Then ask whether a recorded PR head contains any of its commits**",
@@ -805,7 +812,7 @@ PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_squash_provenance as T; T._print_pins()"
     "2a landed check": "e055069a3203431f",  # Phase 387: the span plus feature_branch.py landed, the heredoc moved verbatim, appended fenced so its indentation counts (round 1) (Phase 380: dict(...) env-strip)
     "2b landed not a target": "b451c64d35fc19a9",
-    "4a recorded head": "5c47ea57573f226c",  # Phase 461 (`Q-730` (1), Wade 2026-10-31; its round: a live copy the branch itself wrote since the base is not named): a body the branch adds that the target has since moved to the other live directory takes the `RE-ADDED:` line (`deferred it at`, `undeferred it at`); the span is unchanged, the two scripts moved. Phase 452 (`Q-547`, Wade 2026-10-31; its round: `--full-name`, and a reopen is not a re-add): `_closed_tasks.py` reads a body's close by its file name before rename pairing, and names a re-added closed body; the bullet routes `RE-ADDED:` with `deleted it`. Phase 446 (`Q-547`): the closed-task check moved into `_closed_tasks.py`, which the pin now reads too, and its round made it read every merge base; Phase 387: the span plus pr_head_check.py, the heredoc moved verbatim, appended fenced so its indentation counts (round 1). Phase 445 (`Q-547`): the check runs under either policy and prints `CLOSED TASK EDITED:`, routed by a new bullet in the span
+    "4a recorded head": "f6ed79d70fff053f",  # Phase 469 (`Q-766`'s continuation): the bullet names a body the target moved between `open/` and `deferred/`; the scripts and the routing are unchanged. Phase 461 (`Q-730` (1), Wade 2026-10-31; its round: a live copy the branch itself wrote since the base is not named): a body the branch adds that the target has since moved to the other live directory takes the `RE-ADDED:` line (`deferred it at`, `undeferred it at`); the span is unchanged, the two scripts moved. Phase 452 (`Q-547`, Wade 2026-10-31; its round: `--full-name`, and a reopen is not a re-add): `_closed_tasks.py` reads a body's close by its file name before rename pairing, and names a re-added closed body; the bullet routes `RE-ADDED:` with `deleted it`. Phase 446 (`Q-547`): the closed-task check moved into `_closed_tasks.py`, which the pin now reads too, and its round made it read every merge base; Phase 387: the span plus pr_head_check.py, the heredoc moved verbatim, appended fenced so its indentation counts (round 1). Phase 445 (`Q-547`): the check runs under either policy and prints `CLOSED TASK EDITED:`, routed by a new bullet in the span
     "4a local-only onto": "e28d544a201e5344",
     "4a published stale status": "4683e760d0b82465",  # Phase 425 (`Q-629`): `tasks/index.yml`'s resolution is the arm's `index --since`
     "shared append status": "3f3a06552dbf9c66",  # Phase 390's round: the bullet sits in `steps/4a-append.md`, and its "item 2" names Step 4a

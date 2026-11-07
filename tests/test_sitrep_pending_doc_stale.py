@@ -187,13 +187,50 @@ def test_a_doc_the_close_cannot_read_is_unknown_not_stale(repo, tmp_path, raw):
     assert _sitrep_verdict(doc) == "unknown"
 
 
-def test_a_rebased_branch_whose_tip_is_no_longer_an_ancestor_is_stale_in_both(repo, tmp_path):
-    """Step 4a rebases; a doc stamped before an amend points at an orphan, and
-    `rev-list tip..branch` counts the whole rewritten branch."""
+def test_a_reworded_commit_is_current_in_both(repo, tmp_path):
+    """`Q-738`: a doc stamped before a rewrite points at an orphan. A message-only amend
+    leaves every patch as it was, so the pairing proves the doc describes the branch."""
     doc = _write_doc(repo["wt"], f"branch_tip: {repo['head']}")
     _git(repo["wt"], "commit", "-q", "--amend", "-m", "amended")
+    assert _close_verdict(repo["main"], repo["wt"], tmp_path) == "current"
+    assert _sitrep_verdict(doc) == "current"
+
+
+def test_an_amend_that_changes_the_work_is_stale_in_both(repo, tmp_path):
+    """A pairing that cannot be proven counts by ancestry, as before the pairing existed."""
+    doc = _write_doc(repo["wt"], f"branch_tip: {repo['head']}")
+    (repo["wt"] / "b.txt").write_text("changed after the doc", encoding="utf-8")
+    _git(repo["wt"], "commit", "-qa", "--amend", "-m", "amended")
     assert _close_verdict(repo["main"], repo["wt"], tmp_path) == "stale"
     assert _sitrep_verdict(doc) == "stale"
+
+
+def test_a_branch_rebased_onto_new_work_is_current_in_both_until_it_moves(repo, tmp_path):
+    """Step 4a item 2's rebase: the merge target's commits and the copies are not drift; a
+    commit after the rebase is, in both readers."""
+    doc = _write_doc(repo["wt"], f"branch_tip: {repo['head']}")
+    _commit(repo["main"], "target.txt")
+    _git(repo["wt"], "rebase", "-q", "main")
+    assert _close_verdict(repo["main"], repo["wt"], tmp_path) == "current"
+    assert _sitrep_verdict(doc) == "current"
+    _commit(repo["wt"], "after.txt")
+    assert _close_verdict(repo["main"], repo["wt"], tmp_path) == "stale"
+    assert _sitrep_verdict(doc) == "stale"
+
+
+@pytest.mark.parametrize("held", [True, False], ids=["held", "not-held"])
+def test_an_older_held_doc_beside_a_current_sibling_agrees_in_both(repo, tmp_path, held):
+    """`Q-738` (b): the close reads a branch's docs as a set; the survey must too, or it
+    would send the operator to `/document-work` over a doc the close collects."""
+    raw = (f"---\n{'held_since: 2026-11-01' + chr(10) if held else ''}branch: {BRANCH}\n"
+           f"branch_tip: {repo['doc_tip']}\ntype: feature\nsummary: \"s\"\n---\n")
+    doc = _write_doc(repo["wt"], None, raw=raw)
+    (doc.parent / "feat-x--2.md").write_text(
+        f"---\nbranch: {BRANCH}\nbranch_tip: {repo['head']}\ntype: feature\n"
+        f"summary: \"s2\"\n---\n", encoding="utf-8")
+    want = "current" if held else "stale"
+    assert _close_verdict(repo["main"], repo["wt"], tmp_path) == want
+    assert _sitrep_verdict(doc) == want
 
 
 # ── where the count runs ──────────────────────────────────────────────────
@@ -319,18 +356,25 @@ def test_unknown_staleness_keeps_todays_routing_and_says_why(repo, tip_line, why
     assert len(unknown) == 1 and why in unknown[0], ts.notes
 
 
-def test_one_rev_list_per_task_and_none_for_an_unusable_tip(repo, monkeypatch):
+def test_the_close_s_measure_runs_and_none_for_an_unusable_tip(repo, monkeypatch):
+    """The survey measures through `_doc_drift`, the close's own reader, in the workspace
+    the doc was found in; an unusable tip reaches no git at all."""
+    import _doc_drift
     calls = []
-    real = ss._git
+    real = _doc_drift._git
 
-    def counting(args, *a, **k):
-        calls.append(list(args))
-        return real(args, *a, **k)
+    def counting(where, *args, **k):
+        calls.append((Path(where), list(args)))
+        return real(where, *args, **k)
 
-    monkeypatch.setattr(ss, "_git", counting)
+    monkeypatch.setattr(_doc_drift, "_git", counting)
     doc = _write_doc(repo["wt"], f"branch_tip: {repo['doc_tip']}")
     ss._pending_doc_drift(doc, BRANCH)
-    assert calls == [["rev-list", "--count", f"{repo['doc_tip']}..refs/heads/{BRANCH}"]], calls
+    ref = f"refs/heads/{BRANCH}"
+    assert calls[:2] == [
+        (repo["wt"], ["merge-base", "--is-ancestor", repo["doc_tip"], ref]),
+        (repo["wt"], ["rev-list", "--count", f"{repo['doc_tip']}..{ref}"]),
+    ], calls
     calls.clear()
     ss._pending_doc_drift(_write_doc(repo["wt"], "branch_tip: <sha>"), BRANCH)
     assert calls == [], calls
@@ -608,3 +652,99 @@ def test_a_branch_claims_unresolved_workspace_is_still_the_main_checkout(repo):
         index_entry={"status": "in_progress"}, commits=[commit], unpushed=0,
         dirty=False, stale_days=7, phase40_cutoff=CUTOFF, pending_doc=doc, main_root=repo["main"])
     assert any("not measured" in n for n in ts.notes), (ts.state, ts.notes)
+
+
+def test_a_sibling_claiming_another_branch_covers_nothing_in_the_survey(repo):
+    """The close's population is the docs claiming the branch; a `--2` file whose `branch:` is
+    another branch's is a collision there, never a cover, so the survey must not count it."""
+    raw = (f"---\nheld_since: 2026-11-01\nbranch: {BRANCH}\nbranch_tip: {repo['doc_tip']}\n"
+           f'type: feature\nsummary: "s"\n---\n')
+    doc = _write_doc(repo["wt"], None, raw=raw)
+    (doc.parent / "feat-x--2.md").write_text(
+        f"---\nbranch: feat/other\nbranch_tip: {repo['head']}\ntype: feature\n"
+        f'summary: "s2"\n---\n', encoding="utf-8")
+    assert _sitrep_verdict(doc) == "stale"
+
+
+def test_a_fifo_beside_the_doc_does_not_hang_the_survey(repo):
+    """Lens A's M1: the survey reads the docs beside the one it found, and `read_text` on a
+    FIFO blocks forever. Only a regular file is a doc."""
+    doc = _write_doc(repo["wt"], f"branch_tip: {repo['doc_tip']}")
+    os.mkfifo(doc.parent / "other--2.md")
+    r = subprocess.run(
+        [sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import sitrep_survey as s;"
+         "from pathlib import Path; print(s._pending_doc_drift(Path(sys.argv[2]), sys.argv[3]).commits)",
+         str(SCRIPTS), str(doc), BRANCH], capture_output=True, text=True, timeout=30, env=_env())
+    assert r.returncode == 0 and r.stdout.strip() == "1", r.stdout + r.stderr
+
+
+def test_a_stale_middle_doc_refuses_in_both_though_the_base_is_covered(repo, tmp_path):
+    """Lens A's M3: the close refuses when ANY doc for the branch is stale and not covered.
+    Reading the base doc alone, the survey called this current."""
+    _commit(repo["wt"], "c.txt")
+    c = _git(repo["wt"], "rev-parse", "HEAD")
+    raw = (f"---\nheld_since: 2026-11-01\nbranch: {BRANCH}\nbranch_tip: {repo['doc_tip']}\n"
+           f'type: feature\nsummary: "s"\n---\n')
+    doc = _write_doc(repo["wt"], None, raw=raw)
+    for name, tip in (("feat-x--2.md", repo["head"]), ("feat-x--3.md", c)):
+        (doc.parent / name).write_text(f"---\nbranch: {BRANCH}\nbranch_tip: {tip}\n"
+                                       f'type: feature\nsummary: "s"\n---\n', encoding="utf-8")
+    assert _close_verdict(repo["main"], repo["wt"], tmp_path) == "stale"
+    assert _sitrep_verdict(doc) == "stale"
+
+
+def test_a_sibling_in_another_pending_docs_directory_covers_in_the_survey(repo):
+    """The close's set spans the workspace and main; the survey reads the directories it is
+    given in `also`, so a held doc on main is covered by the workspace's newer doc."""
+    main_docs = repo["main"] / "sysop" / "runtime" / "pending-docs"
+    main_docs.mkdir(parents=True)
+    held = main_docs / "feat-x.md"
+    held.write_text(f"---\nheld_since: 2026-11-01\nbranch: {BRANCH}\nbranch_tip: "
+                    f'{repo["doc_tip"]}\ntype: feature\nsummary: "s"\n---\n', encoding="utf-8")
+    ws_docs = repo["wt"] / "sysop" / "runtime" / "pending-docs"
+    ws_docs.mkdir(parents=True)
+    (ws_docs / "feat-x--2.md").write_text(f"---\nbranch: {BRANCH}\nbranch_tip: {repo['head']}\n"
+                                         f'type: feature\nsummary: "s"\n---\n', encoding="utf-8")
+    assert ss._pending_doc_drift(held, BRANCH).commits == 1, "control: alone it is stale"
+    assert ss._pending_doc_drift(held, BRANCH, (ws_docs,)).commits == 0
+
+
+def test_work_inserted_under_the_docs_commits_is_stale_in_both(repo, tmp_path):
+    """Lens A's H1 through both readers: a commit placed under the doc's work is drift."""
+    doc = _write_doc(repo["wt"], f"branch_tip: {repo['head']}")
+    base = _git(repo["wt"], "rev-parse", f"{repo['doc_tip']}~1")
+    _git(repo["wt"], "reset", "-q", "--hard", base)
+    _commit(repo["wt"], "inserted.txt")
+    _git(repo["wt"], "cherry-pick", repo["doc_tip"], repo["head"])
+    assert _close_verdict(repo["main"], repo["wt"], tmp_path) == "stale"
+    assert _sitrep_verdict(doc) == "stale"
+
+
+def test_the_workspace_doc_wins_its_name_wherever_the_found_doc_lives(repo, tmp_path):
+    """Round 2: the collect replaces main's same-named doc with the workspace's. The survey
+    read the found doc's directory first, so when that was main's, main's twin won."""
+    _commit(repo["wt"], "c.txt")
+    c = _git(repo["wt"], "rev-parse", "HEAD")
+    main_docs = repo["main"] / "sysop" / "runtime" / "pending-docs"
+    main_docs.mkdir(parents=True)
+    held = main_docs / "feat-x.md"
+    held.write_text(f"---\nheld_since: 2026-11-01\nbranch: {BRANCH}\nbranch_tip: "
+                    f'{repo["doc_tip"]}\ntype: feature\nsummary: "s"\n---\n', encoding="utf-8")
+    (main_docs / "feat-x--1.md").write_text(f"---\nbranch: {BRANCH}\nbranch_tip: {c}\n"
+                                            f'type: feature\nsummary: "s"\n---\n', encoding="utf-8")
+    ws_docs = repo["wt"] / "sysop" / "runtime" / "pending-docs"
+    ws_docs.mkdir(parents=True)
+    (ws_docs / "feat-x--1.md").write_text(f"---\nbranch: {BRANCH}\nbranch_tip: {repo['head']}\n"
+                                          f'type: feature\nsummary: "s"\n---\n', encoding="utf-8")
+    assert _close_verdict(repo["main"], repo["wt"], tmp_path) == "stale"
+    assert ss._pending_doc_drift(held, BRANCH, (ws_docs, main_docs)).commits, "the survey agrees"
+
+
+def test_a_current_doc_beside_a_stale_sibling_is_stale_in_the_survey(repo, tmp_path):
+    """The set verdict: the found doc being current says nothing about its siblings."""
+    doc = _write_doc(repo["wt"], f"branch_tip: {repo['head']}")
+    (doc.parent / "feat-x--2.md").write_text(f"---\nbranch: {BRANCH}\nbranch_tip: "
+                                             f"{repo['doc_tip']}\ntype: feature\nsummary: \"s\"\n---\n",
+                                             encoding="utf-8")
+    assert _close_verdict(repo["main"], repo["wt"], tmp_path) == "stale"
+    assert _sitrep_verdict(doc) == "stale"

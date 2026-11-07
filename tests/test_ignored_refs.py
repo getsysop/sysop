@@ -1269,12 +1269,20 @@ def _fixture_shape(tmp_path: Path) -> tuple[Path, Path]:
     return root, wt
 
 
+def _base(root: Path) -> str:
+    """Step 2a step 1's `feature_branch.py base`, which step 3a's `<base>` is (Phase 472)."""
+    r = subprocess.run([sys.executable, str(SCRIPT.parent / "feature_branch.py"), "base", "feat", "main"],
+                       cwd=root, capture_output=True, text=True, env=_ENV)
+    assert r.returncode == 0 and r.stdout.startswith("BASE: "), r.stdout + r.stderr
+    return r.stdout.split()[1]
+
+
 def test_step_2a_command_runs_from_the_repo_root_and_names_both_files(tmp_path):
     root, wt = _fixture_shape(tmp_path)
     cmd = _fenced_command(_section(CLOSE, *STEP_2A))
-    assert cmd == ('python3 sysop/scripts/ignored_refs.py "<workspace>" "<default branch>" '
+    assert cmd == ('python3 sysop/scripts/ignored_refs.py "<workspace>" "<base>" '
                    '--branch "<branch>"'), cmd
-    r = _shell(cmd.replace("<workspace>", str(wt)).replace("<default branch>", "main")
+    r = _shell(cmd.replace("<workspace>", str(wt)).replace("<base>", _base(root))
                .replace("<branch>", "feat"), root)
     assert r.returncode == 1 and _refs(r.stdout) == ["app/fixtures/a.json", "app/fixtures/b.json"], \
         r.stdout + r.stderr
@@ -1309,7 +1317,7 @@ def test_step_2a_commit_answer_makes_the_file_tracked_and_the_check_clean(tmp_pa
     assert "unrelated.txt" not in _g(wt, "ls-tree", "-r", "--name-only", "HEAD"), \
         "the answer committed something else the worktree had staged"
     assert _shell(_fenced_command(_section(CLOSE, *STEP_2A)).replace("<workspace>", str(wt))
-                  .replace("<default branch>", "main").replace("<branch>", "feat"), root).returncode == 0
+                  .replace("<base>", _base(root)).replace("<branch>", "feat"), root).returncode == 0
 
 
 def test_step_2a_commit_answer_refuses_the_main_checkout(tmp_path):
@@ -1510,7 +1518,7 @@ SPANS = {
 
 PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_ignored_refs as T; T._print_pins()"
-    "2a step 3a": "d8da2d56481da7fa",  # Phase 430's round (lens A): `keep-ignored commit` refuses (exit 5) outside a linked worktree. Phase 430 (P5): the answers moved to `steps/2a-ignored-refs.md`, read spliced, behind a stub on the check's non-zero exit. Phase 387: the span plus feature_branch.py keep-ignored, the heredoc moved verbatim (`Q-409` P3). The program is appended fenced, so its indentation counts (Phase 387's round). Phase 380: the commit-or-copy heredoc's env-strip is `dict(...)`, which dontAsk admits (`Q-664`). Phase 362: the --dry-run arm (no commit or copy). Before it, Phase 355: the --clone remedy and workspace lookup name Step 1-pre; round 2 added the branch_tip: re-run
+    "2a step 3a": "6044845d803990b5",  # Phase 472's round (lens A, `Q-734`): the check's BASE is the branch's `<base>`, not `<default branch>`. Phase 430's round (lens A): `keep-ignored commit` refuses (exit 5) outside a linked worktree. Phase 430 (P5): the answers moved to `steps/2a-ignored-refs.md`, read spliced, behind a stub on the check's non-zero exit. Phase 387: the span plus feature_branch.py keep-ignored, the heredoc moved verbatim (`Q-409` P3). The program is appended fenced, so its indentation counts (Phase 387's round). Phase 380: the commit-or-copy heredoc's env-strip is `dict(...)`, which dontAsk admits (`Q-664`). Phase 362: the --dry-run arm (no commit or copy). Before it, Phase 355: the --clone remedy and workspace lookup name Step 1-pre; round 2 added the branch_tip: re-run
     "3b step 0b": "f8fecdec2f9d349d",  # Phase 456 (`Q-731`, Wade 2026-10-31): the print line names `HELD:` lines, the hold an ignored directory only the worktree holds now prints before its non-zero exit.
     "step 8 ignored references": "b9c9f896152b1f9c",  # Phase 456 (`Q-731`, its round, lens B): the row names step 0b's HELD: lines beside its error, since a hold is a SKIP that is not an error.
     "claim-task 7e item 5b": "e38f488e999fbf2d",

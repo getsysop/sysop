@@ -27,11 +27,12 @@ here is `review_index.py` — the field's only actual parser — and the point o
 executing it is to prove a NEGATIVE the contract asserts: it validates nothing
 and normalises nothing, so no reader may treat the shadow index as a check.
 
-Deliberately NOT closed by this phase, and stated so the next author does not
-read a green suite as coverage: a tag that is **present and wrong** is never
-recomputed (`/auto-fix` and `/auto-judge` compute overlap only when the tag is
-*absent*, hold it in memory, and never write it back). Only computing rather
-than trusting fixes that half.
+The other half — a tag that is **present and wrong** — was left open by Phase
+192 and closed by bundle B-6 (`Q-042`): both routers now recompute overlap on
+every run (their Step 1e) over every open batch, route a batch to the parallel
+lane only when the tag is exactly `none` AND the recompute is `none`, show any
+disagreement in the run's tables, and never write the recompute back. §4 pins
+that text; like §3 it can prove the rule is stated, not that an agent obeys it.
 """
 from __future__ import annotations
 
@@ -112,8 +113,8 @@ def test_the_index_stores_every_shape_verbatim_and_validates_nothing():
     """The contract says the shadow index is not a check. This proves it.
 
     A future author who adds validation *here* must also update
-    `WORKFLOW.md` § Batch metadata fields, which currently tells readers the
-    opposite — that the value is trusted, not verified.
+    `WORKFLOW.md` § Batch metadata fields, which tells readers this parse is
+    not validation — the routers' own recompute is the only check.
     """
     for value, _ in _SHAPES:
         assert _parse_overlap(value) == value, (
@@ -365,25 +366,32 @@ def test_both_fallbacks_name_the_declared_grammar():
     for name, path in ROUTERS.items():
         text = path.read_text(encoding="utf-8")
         assert "a `batch-<N>` list in the declared grammar" in text, (
-            f"{name}: the Step 4a fallback does not name the declared grammar"
+            f"{name}: the Step 1e recompute does not name the declared grammar"
         )
 
 
-def test_the_contract_records_what_it_does_not_fix():
-    """A contract that reads as complete is worse than one that names its hole.
-    The present-and-wrong tag is not recomputed by anything, and the doc has to
-    say so or the next reader will assume the lane assignment is verified."""
+def test_the_contract_states_the_recompute_and_its_limit():
+    """The contract used to name its hole — a present-and-wrong tag was never
+    recomputed. The routers now recompute every run, so the doc must say that,
+    say the recompute is never written back, and name what it still cannot see
+    (overlap no task anchor names). The old admission must be gone: a doc that
+    still says "not implemented" next to a router that does it is the
+    shipped-prose-asserts-the-wrong-mechanism class in reverse."""
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "trusted, not verified" in text
-    assert "only when the tag is **absent**" in text
+    assert "recomputed, not trusted" in text
+    assert "never written back" in text
+    assert "the task anchors do not name" in text
     assert "no consumer reads" in text
-    # The round rewrote "and it is not implemented" into "and both routers now
-    # do it at Step 4a" — the contract claiming its open half is CLOSED, past
-    # a test whose whole purpose is to pin that admission.
-    assert "and it is not implemented" in text, (
-        "WORKFLOW.md no longer admits that recomputation is unimplemented — "
-        "the contract now reads as complete, which is the failure this test "
-        "exists to prevent"
+    for stale in ("trusted, not verified", "only when the tag is **absent**",
+                  "and it is not implemented", "fallbacks compute"):
+        assert stale not in text, (
+            f"WORKFLOW.md still carries the pre-recompute claim {stale!r}"
+        )
+    # The second lane condition, on the line that states the recompute.
+    lane = _line_with(WORKFLOW, "recomputed, not trusted")
+    assert "exactly `none` **and** the recompute finds no overlap" in lane, (
+        f"WORKFLOW's recompute paragraph no longer binds the parallel lane to "
+        f"both conditions: {lane!r}"
     )
     # The normative reader rule itself, which nothing read before this round.
     rule = _line_with(WORKFLOW, "routes to the sequential lane.**")
@@ -407,4 +415,111 @@ def test_the_contract_records_what_it_does_not_fix():
         assert licence not in low, (
             f"the grammar's own sentence licenses shapes outside it "
             f"({licence!r}): {exclusive!r}"
+        )
+
+
+# ── §4 the routers recompute a present tag (`Q-042`) ────────────────────────
+#
+# Presence checks, line- or section-scoped, with the same limit as §3: they
+# prove the rule is STATED where the routing happens, never that an agent
+# follows it. Before this section the routers computed overlap only when the
+# tag was absent, so a present `none` that was wrong ran in the parallel lane.
+
+PLAN_STEP = {"auto-fix": "## Step 2: Report Plan", "auto-judge": "## Step 3: Report Plan"}
+
+
+def _section(text: str, start: str, end: str) -> str:
+    assert text.count(start) == 1, f"expected one {start!r}, got {text.count(start)}"
+    body = text.split(start, 1)[1]
+    assert end in body, f"no {end!r} after {start!r}"
+    return body.split(end, 1)[0]
+
+
+def test_neither_router_trusts_a_present_tag():
+    """The recompute runs every time, and it runs before the plan table — a
+    recompute at Step 4 would let the user confirm lane counts that Step 4b
+    then contradicts, and `/auto-judge --dry-run` stops before Step 4."""
+    for name, path in ROUTERS.items():
+        text = path.read_text(encoding="utf-8")
+        for stale in ("(if missing)", "lacks the tag", "If any lack the tag"):
+            assert stale not in text, (
+                f"{name}: the overlap computation is still conditional on a "
+                f"missing tag ({stale!r})"
+            )
+        head = "### 1e. Recompute overlap (every run)"
+        assert text.count(head) == 1, f"{name}: no single Step 1e recompute heading"
+        assert text.index(head) < text.index(PLAN_STEP[name]), (
+            f"{name}: the recompute runs after the plan table it feeds"
+        )
+        step = _section(text, head, "\n## Step ")
+        assert "even when its `Overlap:` tag is present" in step, name
+
+
+def test_the_parallel_lane_needs_both_the_tag_and_the_recompute():
+    """The ruling: parallel only when the tag is exactly `none` AND the
+    recompute is `none`. Line-scoped, like §3 — the conjunction has to sit on
+    the line that owns the non-merge lane, or one half can be dropped
+    elsewhere with every phrase still in the file."""
+    for name, path in ROUTERS.items():
+        exact = _line_with(path, "is **exactly** `none`")
+        assert "**and** whose Step 1e recompute is `none`" in exact, (
+            f"{name}: the parallel lane no longer requires the recompute to "
+            f"agree: {exact!r}"
+        )
+        other = _line_with(path, "every other batch")
+        for case in ("a missing tag", "a recompute that is not `none`"):
+            assert case in other, (
+                f"{name}: the sequential lane does not name {case!r}: {other!r}"
+            )
+        step = _section(path.read_text(encoding="utf-8"),
+                        "### 1e. Recompute overlap (every run)", "\n## Step ")
+        assert "a missing tag counts as one that does not say `none`" in step, (
+            f"{name}: a missing tag can read as agreeing with a `none` recompute"
+        )
+
+
+def test_the_recompute_covers_every_open_batch():
+    """The generators compare the batches of ONE Round, so a `none` is wrong by
+    construction whenever another Round's open batch shares a file. A recompute
+    over this run's pool alone would reproduce that miss, and a `--batches`
+    narrowing would shrink it further."""
+    for name, path in ROUTERS.items():
+        step = _section(path.read_text(encoding="utf-8"),
+                        "### 1e. Recompute overlap (every run)", "\n## Step ")
+        pop = [ln for ln in step.splitlines() if ln.startswith("1. **Population.**")]
+        assert len(pop) == 1, f"{name}: no single population rule in Step 1e"
+        for needle in ("not `Merged`, `Complete` or `Ready for Review`",
+                       "not only this run's pool",
+                       "`In Progress` and `Review Ready` batches",
+                       "batches `--batches` left out"):
+            assert needle in pop[0], f"{name}: population rule lost {needle!r}: {pop[0]!r}"
+
+
+def test_a_disagreement_is_shown_and_never_written_back():
+    """A disagreement is named in the run's tables so a human sees the tag is
+    wrong, and the recompute stays in memory: the generators are the tag's
+    only writers."""
+    for name, path in ROUTERS.items():
+        text = path.read_text(encoding="utf-8")
+        step = _section(text, "### 1e. Recompute overlap (every run)", "\n## Step ")
+        assert "**Never write it to `review_tasks.md`**" in step, name
+        plan = _section(text, PLAN_STEP[name], "\n## Step ")
+        deferred = _section(text, "### Deferred (overlapping — use --merge)", "\n### ")
+        for where, block in (("plan table", plan), ("Deferred table", deferred)):
+            rows = [ln for ln in block.splitlines()
+                    if ln.startswith("| ") and "(tag) / " in ln and "(computed)" in ln]
+            assert rows, f"{name}: the {where} shows no tag/recompute disagreement"
+
+
+def test_the_generators_no_longer_say_no_reader_recomputes():
+    """The writers were told nothing downstream recomputes a present tag. That
+    stopped being true; the sentence must say the routers recompute it, or a
+    generator author reads the recompute as absent."""
+    for name, path in GENERATORS.items():
+        text = path.read_text(encoding="utf-8")
+        assert "no reader ever recomputes" not in text, name
+        contract = _line_with(path, "one of this field's only two writers")
+        assert "recompute it on every run" in contract, (
+            f"{name}: the writers' contract does not mention the routers' "
+            f"recompute: {contract!r}"
         )

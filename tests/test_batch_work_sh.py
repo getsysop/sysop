@@ -291,7 +291,7 @@ class TestWorktreeCreation:
         assert "`Pending`" in (repo / "review_tasks.md").read_text()
 
     def test_a_remote_whose_name_merely_contains_origin_is_not_origin(self, tmp_path):
-        """`grep -qx origin`, anchored — not `grep -q origin`. A repo whose only remote is
+        """`grep -x origin`, anchored — not `grep origin`. A repo whose only remote is
         `upstream-origin` has no `origin` to pull from, so it takes the local-only path and
         claims. With the unanchored grep it would take the pull path, fail, and refuse —
         re-introducing the over-reach that reddened 33 tests. The mutation survived this

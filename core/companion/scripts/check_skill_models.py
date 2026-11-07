@@ -295,7 +295,7 @@ def _print_defaults(config_path: Path, local_path: Path | None, root: Path) -> i
     print("To change a role, add one key to .claude/served_models.local.yml, e.g.")
     print("    roles:")
     print(f"      {eg.role}: {alt}")
-    print("then commit it and run `bash sysop/scripts/sysop-update.sh`: the skills' model pins")
+    print("then commit it and run `bash sysop/scripts/sysop-update.sh` (with --yes in a non-interactive shell): the skills' model pins")
     print("are rewritten by the update, so an edit to the file changes nothing until then, and")
     print("an uncommitted one makes that update list the skills it moves as local edits.")
     return 1 if failing else 0

@@ -156,7 +156,7 @@ _SYSOP_GIT_LIB="$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh"
 # `||` arm runs, so the remedy below printed only on bash 4+.
 { [[ -f "$_SYSOP_GIT_LIB" && -r "$_SYSOP_GIT_LIB" ]] && source "$_SYSOP_GIT_LIB"; } || {
   echo "❌ _git_lib.sh is missing or unreadable beside batch_work.sh — it ships with every install." >&2
-  echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
+  echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh (with --yes in a non-interactive shell)" >&2
   exit 1
 }
 DEFAULT_BRANCH="$(resolve_default_branch "$MAIN_ROOT" 2>/dev/null)" || DEFAULT_BRANCH=""
@@ -893,8 +893,11 @@ report_unclaimed_residue() {
 # The batch's status and branch as review_tasks.md reads now, tab-separated.
 # Called under the tracker mutex: the values read at the top are from before
 # this run waited, and a rival claim, release or close may have changed them.
+# awk reads to the end rather than `exit`ing at the match: both callers read the
+# status through `|| …=""`, and an early exit lets `--list` take a broken pipe on
+# a long tracker, which `pipefail` reports as the batch not being found.
 live_batch_record() {
-  parse_batches 2>/dev/null | awk -F'\t' -v n="$1" '$1 == n { print $3 "\t" $4; exit }'
+  parse_batches 2>/dev/null | awk -F'\t' -v n="$1" '$1 == n && !seen { seen = 1; print $3 "\t" $4 }'
 }
 
 # ── Helper: claim a Pending batch on main ─────────────────────
@@ -1109,7 +1112,8 @@ _claim_batch_locked() {
   # only one that refuses: either the remote is unreachable, or the default
   # branch has diverged, and both mean the flip would commit onto a base the
   # batch was never reviewed against.
-  if ! git -C "$MAIN_ROOT" remote 2>/dev/null | grep -qx origin; then
+  # `grep -x origin >/dev/null`, not `grep -qx`: see `_git_lib.sh`'s resolver.
+  if ! git -C "$MAIN_ROOT" remote 2>/dev/null | grep -x origin >/dev/null; then
     echo "ℹ️  No 'origin' remote — skipping the pre-claim pull."
     echo "   The claim itself is unaffected: the status flip commits locally and"
     echo "   the lock, branch and worktree are written as usual. Only the"

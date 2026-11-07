@@ -14,6 +14,11 @@ PRs, classifies each, and either prints a plan (default) or executes it
 (`--execute`) — merging safe updates with a normal authenticated `gh pr merge`
 (no `--auto`), which works fine on Free.
 
+The skill checks that premise rather than assuming it: the planner reads the
+repo's auto-merge setting and prints the reading as one line of the plan —
+`allowed`, `not allowed`, or `unknown` with a reason. Step 2 and § *Replacing
+a server-side auto-merge workflow* route on it.
+
 **This is the first Sysop skill that talks to GitHub.** Every other skill is
 local git only. It shells out to `gh` (the GitHub CLI) and therefore requires
 `gh` installed + authenticated. It is **GitHub/Dependabot-specific by design** —
@@ -42,8 +47,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present — a
 
 If any are unsatisfied, stop with the `_shared/permission-guard.md` § Algorithm
 step 5 message (one-line reason: "client-side Dependabot PR sweep; shells `gh`
-to merge/close bot PRs because native auto-merge is unavailable on Free-plan
-private repos"). Do not proceed — unless the guard's step 3 mode check applies.
+to read the repo's auto-merge setting and merge/close bot PRs"). Do not proceed — unless the guard's step 3 mode check applies.
 
 If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 continue.
@@ -55,7 +59,10 @@ Parse `$ARGUMENTS`:
 - **`--execute`** — actually merge/close per the plan. **Without it, the skill
   is read-only** (lists + classifies + prints, changes nothing).
 - **`--json`** — emit the structured plan as JSON (for orchestrator consumption,
-  consistent with `/sitrep --json`). Implies dry-run.
+  consistent with `/sitrep --json`): an object whose `native_auto_merge` holds
+  the reading (`state`, `reason`) and whose `plans` holds one entry per PR.
+  An older installed `pr_dependabot.py` prints the list of plans alone: read
+  that as `plans` with the reading `unknown`. Implies dry-run.
 - **`--repo owner/name`** — override the repo (default: autodetected from the
   current directory's git remote by `gh`).
 
@@ -74,16 +81,29 @@ Run the planner read-only, regardless of whether the human asked for
 python3 sysop/scripts/pr_dependabot.py [--repo owner/name]
 ```
 
-Print the plan verbatim. It lists each open Dependabot PR with its classified
-action (`merge` / `hold` / `surface` / `close-pip` / `close-superseded`), the
-CI + mergeable gate for merge candidates, and a one-line reason. If the output
-is "No open Dependabot PRs. Nothing to sweep.", stop here — nothing to do.
+Print the plan verbatim. Its `native auto-merge:` line is the reading —
+`allowed`, `not allowed`, or `unknown (<reason>)`; keep it for Step 2. If the
+plan has no such line, the installed `pr_dependabot.py` predates the probe:
+treat the reading as `unknown`. The plan then lists each open Dependabot PR
+with its classified action (`merge` / `hold` / `surface` / `close-pip` /
+`close-superseded`), the CI + mergeable gate for merge candidates, and a
+one-line reason. If the output ends "No open Dependabot PRs. Nothing to
+sweep.", stop here — nothing to do.
 
 ## Step 2: Gate on human confirmation before executing
 
 If the human invoked `--execute`, **still pause after the dry-run** and confirm
-the plan looks right before running it — merges are hard to walk back. Only
-after confirmation:
+the plan looks right before running it — merges are hard to walk back.
+
+- **The reading is `allowed`:** the pause is an explicit question, not a
+  confirmation. Ask it in these terms: *"Native auto-merge is allowed on this
+  repo, so GitHub can merge these PRs itself. Running `--execute` makes this
+  skill a second merge actor. Merge with this skill anyway?"* Run `--execute`
+  only on a yes; on anything else, stop and change nothing.
+- **The reading is `not allowed` or `unknown`:** confirm the plan looks right,
+  as a normal pause.
+
+Only after that answer:
 
 ```bash
 python3 sysop/scripts/pr_dependabot.py --execute [--repo owner/name]
@@ -94,7 +114,8 @@ until `mergeable` resolves out of `UNKNOWN` (GitHub computes it lazily), and
 **skips any PR whose CI is not green or whose `mergeable` is not `MERGEABLE`** —
 a red or conflicted PR is left open, never force-merged. pip and superseded PRs
 are closed with an explanatory comment. Print the executor's result lines
-verbatim.
+verbatim, including the repeated second-merge-actor line when the reading is
+`allowed`.
 
 ## Step 3: Report what's left for the human
 
@@ -136,16 +157,22 @@ rest. It is **never** computed over history — the same package is bumped
 repeatedly over weeks, each PR merging before the next opens, and a
 history-scoped check would false-flag every earlier bump. Dependabot also
 auto-closes its own superseded PRs ("Looks like X is up-to-date now"), so this
-handler is a safety net for the race window, not a primary job.
+handler is a safety net for the race window, not a primary job. A PR whose title
+gives no target version (unparseable or grouped) is never part of a duplicate
+set: it stays `surface`.
 
 ## Replacing a server-side auto-merge workflow
 
-If the consumer repo has a broken `.github/workflows/dependabot-automerge.yml`
-(the common case that motivates this skill — it fails on Free-plan private repos
-with `GraphQL: Auto merge is not allowed for this repository`), this skill
-*replaces* it. Retiring that workflow is the consumer's call, not this skill's:
-note it in the report so the human can delete the dead workflow, but do not edit
-`.github/` yourself.
+**When the reading is `allowed`, give no advice about retiring any auto-merge
+workflow** — native auto-merge works on this repo, so such a workflow is a live
+merge actor, and a failing one is failing for some other reason.
+
+Otherwise (`not allowed` or `unknown`): if the consumer repo has a broken
+`.github/workflows/dependabot-automerge.yml` (the common case that motivates
+this skill — it fails on Free-plan private repos with `GraphQL: Auto merge is
+not allowed for this repository`), this skill *replaces* it. Retiring that
+workflow is the consumer's call, not this skill's: note it in the report so the
+human can delete the dead workflow, but do not edit `.github/` yourself.
 
 ## Deferred features
 

@@ -9,11 +9,13 @@ disallowed-tools: Edit, Write, NotebookEdit
 
 Run the deterministic resolver and print its output verbatim.
 
+**Show the human the script's output.** The script's stdout is shown to you, not reliably to the human, so they see it only if your reply carries it: make it, verbatim and complete, the first thing in your reply, inside one fenced code block. Nothing of your own goes before it or into it — no summary, paraphrase or reordering, and no recommendation restated ahead of it; any line of your own comes after it.
+
 > **Structural read-only guard:** the `disallowed-tools` frontmatter (Claude Code 2.1.152+) removes the file-write tools while this skill is active. Partial by design — `Bash` stays allowed for the resolver invocation, so the guard covers the dedicated write tools, not shell redirects. Non-Claude-Code harnesses ignore the key.
 
 Your arguments: `$ARGUMENTS`
 
-Substitute `<flags>` below with the **recognized flags** present in those arguments — `--review` and/or `--avoid-inflight`, in any order — and nothing else; with no recognized flags, run the script bare. If the arguments carry anything unrecognized, drop it and print one line naming what was dropped. Never forward the raw argument string: it is substituted into this file as text *before* bash parses anything, so a stray `;`, quote or glob in it rewrites the command instead of erroring (the unquoted form additionally word-splits, which is exactly why a blanket quote is not the fix: the flags must reach `argv` as separate entries).
+Substitute `<flags>` below with the **recognized flags** present in those arguments — `--review` and/or `--avoid-inflight`, in any order — and nothing else; with no recognized flags, run the script bare. If the arguments carry anything unrecognized, drop it, and after the report print one line naming what was dropped. Never forward the raw argument string: it is substituted into this file as text *before* bash parses anything, so a stray `;`, quote or glob in it rewrites the command instead of erroring (the unquoted form additionally word-splits, which is exactly why a blanket quote is not the fix: the flags must reach `argv` as separate entries).
 
 ```bash
 python3 sysop/scripts/next_task.py <flags>
@@ -27,7 +29,7 @@ implementation moved (2026-05-27, gdp commit `e9b53c4e` backport).
 ## Exit codes
 
 - **0** — success, including the "no tasks found" / "no pending review batches" paths.
-- **1** — schema invariant violation (e.g., `current_focus` count != 1, `schema_version` below the supported minimum, body path escapes `tasks/`), or a locks directory that exists and cannot be listed, since no claimed task could then be told from a free one. Print stderr verbatim — do not reinterpret.
+- **1** — schema invariant violation (e.g., `current_focus` count != 1, `schema_version` below the supported minimum, body path escapes `tasks/`), or a locks directory that exists and cannot be listed, since no claimed task could then be told from a free one. Print stderr verbatim, first in your reply and in one fenced code block, as the rule above says of stdout — do not reinterpret.
 - **2** — unexpected crash. The script wraps `main()` in a top-level safety net that prints `ERROR: next_task.py crashed: <sanitized>` to stderr.
 
 ## Why `model: haiku` is still in the frontmatter

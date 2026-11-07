@@ -10,6 +10,7 @@
 ## `scripts/*.sh`, `scripts/hooks/*`, `sysop/scripts/*.sh`, `sysop/scripts/hooks/*` — Shell Scripts & Git Hooks
 
 - **`set -euo pipefail`**: All shell scripts must start with `set -euo pipefail` to fail fast on errors, undefined variables, and pipe failures
+- **No early-exit reader where the status is read**: under `pipefail`, `| grep -q`, `| head`, an `awk … exit` or `sed q` can kill the producer with SIGPIPE and turn a match into a failure; in an `if`/`!`/`||`/`set -e` context write `grep … >/dev/null`, `sed -n 1p`, or capture the output and cut it with `${v%%$'\n'*}`.
 - **Argument validation**: Validate required arguments early with clear usage messages; never silently default missing args
 - **`source .env`**: Scripts that invoke Python with project secrets or run `psql` must `source .env` before the command
 - **No hardcoded secrets**: Never hardcode database passwords, API keys, or project IDs — read from environment variables

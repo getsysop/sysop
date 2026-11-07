@@ -145,8 +145,11 @@ resolve_default_branch() {
   # `symbolic-ref`, not `show-ref --verify`: a dangling origin/HEAD (its target
   # deleted) still names the remote, and the stale-declaration message below
   # should say so rather than "no remote HEAD".
+  # `grep -x origin >/dev/null`, not `grep -qx`: under the sourcer's `pipefail`, a
+  # `-q` that exits at the match lets `git remote` take SIGPIPE on a long list, and
+  # the `if` reads that as no origin.
   if git -C "$dir" symbolic-ref --quiet refs/remotes/origin/HEAD >/dev/null 2>&1 \
-     || git -C "$dir" remote 2>/dev/null | grep -qx origin; then
+     || git -C "$dir" remote 2>/dev/null | grep -x origin >/dev/null; then
     remote="origin"
   else
     n_remotes="$(git -C "$dir" remote 2>/dev/null | grep -c . || true)"

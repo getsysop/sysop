@@ -134,7 +134,7 @@ def test_the_threshold_command_is_runnable_as_written():
     Found by executing it, and this is the assertion that would have caught it."""
     body = _body()
     # Phase 421 (`Q-665`): read off stdout, not captured, since `VAR=$(…)` binds no rule.
-    assert "git diff <default branch>...refs/heads/<branch> | wc -l" in body
+    assert "git diff <base> refs/heads/<branch> | wc -l" in body  # Phase 472 (`Q-734`)
     assert "git diff origin/<default branch>...HEAD | wc -l" in body
     assert "DIFF_LINES=" not in body
     assert "git diff <diff-basis>" not in body, (

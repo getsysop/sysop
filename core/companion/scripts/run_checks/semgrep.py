@@ -6,6 +6,7 @@ matching, ``--update-baseline``, and ``--fail-on-blocking`` work uniformly.
 """
 import json
 import os
+import stat
 import subprocess
 import sys
 
@@ -37,14 +38,33 @@ _SYSTEM_CA_BUNDLES = (
 #     test/  tests/  testsuite/  *_test.go
 #
 # It applies only when the project has no ``.semgrepignore``, it matches at ANY
-# depth, and — the reason this module carries a recovery step at all —
-# discovery-excluded files are absent from ``paths.skipped``, so nothing records
-# the omission while the accounting line reads ``executed with 0 findings``.
+# depth, and — the reason this module carries a recovery step at all — semgrep
+# records no skipped file anywhere (1.157.0's JSON ``paths`` holds ``scanned``
+# only; there is no ``paths.skipped``), so nothing records the omission while
+# the accounting line reads ``executed with 0 findings``.
 #
 # Internal tracker #361 (Q-011) named only ``test/`` and ``tests/``; the other two entries
 # were found by reading the binary. ``*_test.go`` is Go's entire test convention.
 _IGNORED_TEST_DIRS = frozenset({"test", "tests", "testsuite"})
 _IGNORED_TEST_SUFFIX = "_test.go"
+
+# The rest of the same list, read from the same binary. Nothing recovers these —
+# most of them genuinely should not be scanned — but a file they drop is not
+# read, so `_default_ignored_targets` records it in the stage's skip set and the
+# run says so. Directory-only entries (trailing slash) match a path component;
+# the version-control names and ``*.min.js`` carry no slash, so they match a
+# file or a directory of that name at any depth.
+_IGNORED_OTHER_DIRS = frozenset({
+    "build", "vendor", "dist", ".env", ".tox", "node_modules", ".npm", ".yarn",
+    ".venv", "_opam", "_build", "_cargo"})
+_IGNORED_OTHER_NAMES = frozenset({".git", ".svn", ".hg", "_darcs", "CVS"})
+_IGNORED_OTHER_SUFFIX = ".min.js"
+
+# semgrep's ``--max-target-bytes`` default (1,000,000 bytes, not 1 MiB), which
+# this module never overrides. A file over it is dropped from a directory scan
+# with no trace, whether or not a ``.semgrepignore`` exists; a file named as an
+# operand is scanned anyway, so the recovered test files are never dropped.
+_MAX_TARGET_BYTES = 1000000
 
 # The recovered population rides on the command line: semgrep 1.157.0 has no
 # --targets-file and reads no targets from stdin (both probed). So the ceiling is
@@ -137,11 +157,52 @@ def _is_ignored_test_path(rel):
     return parts[-1].endswith(_IGNORED_TEST_SUFFIX)
 
 
-def _default_ignored_targets(repo_root, exclude_rel):
+def _is_other_ignored_path(rel):
+    """True when the default ignore list drops ``rel`` for a reason other than
+    the test-path block (`_IGNORED_OTHER_DIRS` and its siblings)."""
+    parts = rel.split("/")
+    if any(seg in _IGNORED_OTHER_DIRS for seg in parts[:-1]):
+        return True
+    return any(seg in _IGNORED_OTHER_NAMES or seg.endswith(_IGNORED_OTHER_SUFFIX)
+               for seg in parts)
+
+
+def _record_skip(skipped, repo_root, rel, named, check_ignore_list):
+    """Add ``rel`` to ``skipped`` when semgrep's directory scan will not read it.
+
+    ``named`` is the set of files passed as operands; semgrep reads those
+    whatever the ignore list or the size limit says.
+    """
+    if rel in named:
+        return
+    # A regular file only: a symlink, a submodule gitlink or a tracked file
+    # missing from the worktree is not a file semgrep would have read.
+    try:
+        st = os.lstat(os.path.join(repo_root, rel))
+    except OSError:
+        return
+    if not stat.S_ISREG(st.st_mode):
+        return
+    if check_ignore_list and _is_other_ignored_path(rel):
+        skipped[rel] = "ignore-list"
+    elif st.st_size > _MAX_TARGET_BYTES:
+        skipped[rel] = "size"
+
+
+def _default_ignored_targets(repo_root, exclude_rel, skipped=None):
     """Explicit operands for the files semgrep's default ignore list would drop.
 
     Returns ``(targets, dropped)`` — absolute paths to add alongside the directory
     operand, and the count omitted because the operand budget was reached.
+
+    ``skipped``, when a dict is passed, is filled from the same enumeration with
+    ``{rel: "ignore-list" | "size"}`` for every file the scan will not read: one
+    the rest of the default ignore list drops (only when no ``.semgrepignore``
+    exists — a consumer's own file replaces that list, and what it ignores is
+    their choice), and one over `_MAX_TARGET_BYTES` (always — ``.semgrepignore``
+    does not change the size limit). Named operands, the fixtures and symlinks
+    are never in it; over-budget test files are not either, because the stage
+    already reports them as ``degraded``.
 
     **The directory operand is KEPT.** That is the whole design: an explicitly named
     *file* bypasses the default ignore list, but a directory operand does not — naming
@@ -191,6 +252,15 @@ def _default_ignored_targets(repo_root, exclude_rel):
         # the git-failure one below, but it is a correct, intentional disable —
         # warning would fire on every run for a consumer who configured it on
         # purpose, which is the same noise class this recovery exists to avoid.
+        # The size limit still applies, so the skip set still gets those files;
+        # a git failure here only leaves it empty, as it leaves the recovery.
+        if skipped is not None:
+            listed = _git_lines(repo_root, ["ls-files", "-z"])
+            others = _git_lines(
+                repo_root, ["ls-files", "-z", "--others", "--exclude-standard"])
+            for rel in sorted(set(listed or []) | set(others or [])):
+                if not (rel == exclude_rel or rel.startswith(exclude_rel + "/")):
+                    _record_skip(skipped, repo_root, rel, (), False)
         return [], 0, False
 
     tracked = _git_lines(repo_root, ["ls-files", "-z"])
@@ -214,11 +284,13 @@ def _default_ignored_targets(repo_root, exclude_rel):
 
     budget = _operand_budget()
     targets, dropped, used = [], 0, 0
+    named, unnamed = set(), set()
     for rel in sorted(set(tracked) | set(untracked)):
-        if not _is_ignored_test_path(rel):
-            continue
         # The shipped --exclude does not survive an explicit file operand.
         if rel == exclude_rel or rel.startswith(exclude_rel + "/"):
+            continue
+        if not _is_ignored_test_path(rel):
+            unnamed.add(rel)
             continue
         abs_path = os.path.join(repo_root, rel)
         # A symlink or a missing path is not merely unscannable — as a named
@@ -234,6 +306,12 @@ def _default_ignored_targets(repo_root, exclude_rel):
             continue
         used += cost
         targets.append(abs_path)
+        named.add(rel)
+    if skipped is not None:
+        # Test files over the operand budget are left out: the stage records
+        # them as `degraded` already, and that holds every entry of the check.
+        for rel in sorted(unnamed):
+            _record_skip(skipped, repo_root, rel, named, True)
     return targets, dropped, False
 
 
@@ -257,6 +335,39 @@ def _partial_parse_paths(errors):
             for loc in e.get("spans") or []:
                 if isinstance(loc, dict) and loc.get("file"):
                     out.add(loc["file"])
+    return out
+
+
+def _file_error_paths(errors, repo_root, semgrep_dir):
+    """``{path: error type}`` for every other error that names a scanned file.
+
+    A per-file error — a rule ``Timeout`` above all, also ``OutOfMemory``,
+    ``StackOverflow``, a whole-file parse failure — carries the target in a
+    top-level ``path``: that file was not fully scanned. A rule or config error
+    (``Rule parse error``, ``SemgrepError`` for invalid YAML) carries no
+    ``path`` at 1.157.0, and one whose path is inside the rules directory is
+    skipped anyway, so neither reads as a skipped target. ``PartialParsing`` is
+    `_partial_parse_paths`' and is left to it.
+    """
+    rules_dir = os.path.realpath(semgrep_dir) + os.sep
+    out = {}
+    for e in errors:
+        if not isinstance(e, dict):
+            continue
+        etype = e.get("type")
+        name = etype[0] if isinstance(etype, list) and etype else etype
+        if not isinstance(name, str) or "PartialParsing" in name:
+            continue
+        path = e.get("path")
+        if not isinstance(path, str) or not path:
+            continue
+        if os.path.realpath(os.path.join(repo_root, path)).startswith(rules_dir):
+            continue
+        # Repo-relative, as a finding's path is: a named operand is reported
+        # absolute when ``repo_root`` is.
+        if os.path.isabs(path):
+            path = os.path.relpath(path, repo_root)
+        out.setdefault(path, name)
     return out
 
 
@@ -355,16 +466,17 @@ def _run_semgrep(repo_root, included_ids, report=None):
             ca_hint = " — set SSL_CERT_FILE to a trusted CA bundle"
     # The operand is the DIRECTORY, and it stays the directory (internal tracker #361 / Q-011).
     # semgrep's built-in default ignore list eats test/, tests/, testsuite/ and
-    # *_test.go before discovery and leaves them out of `paths.skipped`, so those
-    # files are invisibly unscanned. An explicitly named FILE bypasses that list;
+    # *_test.go before discovery and records them nowhere, so those files are
+    # invisibly unscanned. An explicitly named FILE bypasses that list;
     # a named directory does NOT (measured — naming <root>/tests recovers nothing).
     # So the directory operand keeps doing everything it does today and
     # `_default_ignored_targets` names only what it cannot see. Phase 189's
     # withdrawn fix replaced the directory instead of supplementing it, which is
     # what made it worse than the defect; that function's docstring answers each
     # condition its round raised.
+    skipped = {}
     ignored_targets, over_budget, recovery_failed = _default_ignored_targets(
-        repo_root, fixtures_exclude)
+        repo_root, fixtures_exclude, skipped)
     try:
         r = subprocess.run(
             ["semgrep", "scan", "--config", semgrep_dir,
@@ -426,6 +538,14 @@ def _run_semgrep(repo_root, included_ids, report=None):
     # The paths are already in the JSON; name them, and record the stage as DEGRADED
     # so "0 findings" for those files is not reported as evidence of absence.
     partial = sorted(_partial_parse_paths(errors))
+    # The same class from other error types: a rule that timed out on a file (or
+    # ran out of memory or stack there) left that file not fully scanned.
+    file_errors = _file_error_paths(errors, repo_root, semgrep_dir)
+    # semgrep reports a partial parse's path as given (absolute under the absolute
+    # operand); `_file_error_paths` makes its own relative, so compare like with like.
+    partial_rel = {os.path.relpath(p, repo_root) if os.path.isabs(p) else p
+                   for p in partial}
+    file_errors = {p: t for p, t in file_errors.items() if p not in partial_rel}
     if errors:
         print(f"warn: semgrep reported {len(errors)} internal error(s) — "
               "findings may be incomplete", file=sys.stderr)
@@ -433,6 +553,14 @@ def _run_semgrep(repo_root, included_ids, report=None):
         shown = ", ".join(partial[:5]) + ("…" if len(partial) > 5 else "")
         print(f"warn: semgrep could not fully parse {len(partial)} file(s) — the "
               f"unparsed regions were NOT scanned: {shown}", file=sys.stderr)
+    if file_errors:
+        names = sorted(file_errors)
+        kinds = ", ".join(sorted(set(file_errors.values())))
+        err_shown = ", ".join(names[:5]) + ("…" if len(names) > 5 else "")
+        err_detail = (f"{len(names)} file(s) not fully scanned ({kinds}): "
+                      f"{err_shown}")
+        print(f"warn: semgrep did not fully scan {len(names)} file(s) ({kinds}) — "
+              f"findings there may be missing: {err_shown}", file=sys.stderr)
 
     # NO SHORTFALL COUNTER, deliberately. Phase 189 built one and its round measured
     # it firing 100% false-positive: `paths.scanned` counts files semgrep ANALYSED, not
@@ -459,13 +587,43 @@ def _run_semgrep(repo_root, included_ids, report=None):
               "(the whole-tree scan itself is unaffected). A corrupted index, a "
               "permission problem, a git timeout or a non-UTF-8 path will do this.",
               file=sys.stderr)
+    # Files the directory scan never read although the stage ran. The stage stays
+    # `executed` — every other file's silence is still evidence — and the set
+    # holds a baseline entry anchored in one of these files instead of calling
+    # it stale. Worded as files NOT GIVEN TO semgrep, a known list, never as a
+    # shortfall against `paths.scanned` (see NO SHORTFALL COUNTER above).
+    if skipped:
+        if report is not None:
+            report.record_skipped_paths(semgrep_ids, skipped)
+        ignored = sorted(p for p, why in skipped.items() if why == "ignore-list")
+        big = sorted(p for p, why in skipped.items() if why == "size")
+        parts = []
+        if ignored:
+            parts.append(f"{len(ignored)} under its default ignore list (vendor/, "
+                         f"build/, dist/, node_modules/ and the like)")
+        if big:
+            parts.append(f"{len(big)} over its {_MAX_TARGET_BYTES:,}-byte size limit")
+        names = ignored + big
+        listed = ", ".join(names[:5]) + (f" (+{len(names) - 5} more)"
+                                         if len(names) > 5 else "")
+        print(f"warn: {len(skipped)} file(s) were not given to semgrep — "
+              f"{'; '.join(parts)}. Baseline entries in them are held, not "
+              f"judged: {listed}", file=sys.stderr)
     if partial:
         detail = (f"{len(partial)} file(s) partially parsed, unparsed regions not "
                   f"scanned: {shown}")
+        if file_errors:
+            detail += f"; {err_detail}"
         if over_budget:
             detail += (f"; {over_budget} test file(s) omitted over the operand "
                        f"budget")
         _record(DEGRADED, "partial-parse", detail)
+    elif file_errors:
+        detail = err_detail
+        if over_budget:
+            detail += (f"; {over_budget} test file(s) omitted over the operand "
+                       f"budget")
+        _record(DEGRADED, "file-errors", detail)
     elif over_budget:
         _record(DEGRADED, "targets-over-budget",
                 f"{over_budget} test file(s) omitted over the operand budget — "

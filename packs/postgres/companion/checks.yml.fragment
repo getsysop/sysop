@@ -145,7 +145,17 @@ checks:
     severity: critical
     paths: ["<api module>/", "<scripts dir>/"]
     include: ["*.py"]
-    exclude: ["*test*"]
+    # Test files are skipped by name and by directory, never by substring.
+    # `*test*` also skipped production modules (`latest_rates.py`,
+    # `stress_test.py`), and macOS grep matches an `exclude:` glob against the
+    # whole path as well as the name, so a checkout under any directory with
+    # "test" in its name scanned nothing. `*_test.py` is left out on purpose: it
+    # would still skip `stress_test.py`. Every check in this fragment that skips
+    # test files by name carries this same pair; an override in
+    # `.claude/checks.project.yml` replaces the entry wholesale, so copy both
+    # keys across.
+    exclude: ["test_*.py", "conftest.py"]
+    exclude_dir: ["tests", "test"]
     pattern: '([fF][rR]?|[rR][fF])["'']{1,3}(SELECT|INSERT|UPDATE|DELETE|ALTER|DROP)\b'
     description: "f-string SQL detected — use parameterized queries"
     convention: "SQL safety"
@@ -171,7 +181,8 @@ checks:
     severity: critical
     paths: ["<api module>/"]
     include: ["*.py"]
-    exclude: ["*test*"]
+    exclude: ["test_*.py", "conftest.py"]
+    exclude_dir: ["tests", "test"]
     pattern: 'writer_engine\.(begin|connect)\(\)'
     description: "writer_engine.begin()/connect() call — verify the enclosing function null-guards the same reference before it"
     convention: "Engine null guards"
@@ -186,7 +197,8 @@ checks:
     severity: medium
     paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
     include: ["*.py"]
-    exclude: ["*test*"]
+    exclude: ["test_*.py", "conftest.py"]
+    exclude_dir: ["tests", "test"]
     pattern: 'nosemgrep:.*(sqlalchemy-execute-raw-query|avoid-sqlalchemy-text)'
     negative_pattern: 'sqlalchemy-execute-raw-query.*avoid-sqlalchemy-text|avoid-sqlalchemy-text.*sqlalchemy-execute-raw-query'
     description: "nosemgrep suppression for sqlalchemy.text(variable) names only one of the two sibling rules. Both fire on the same pattern; suppressing one lets the other block every future edit. Name BOTH on the same line: # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query,python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text"

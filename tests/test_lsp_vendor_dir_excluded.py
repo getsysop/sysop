@@ -81,7 +81,7 @@ def test_a_localized_check_keeps_the_exclusion():
 
 def test_the_stale_baseline_hint_names_a_narrowed_scope(capsys):
     """After an update ships this key, a baselined vendor finding reads as a stale entry; the
-    hint names that cause beside grep's binary skip and semgrep's size limit (round 1, lens A)."""
+    hint names that cause (round 1, lens A)."""
     from run_checks.cli import _print_unmatched
     _print_unmatched([("pyright-missing-imports|sysop/scripts/x.py:1|abc", True)])
     err = " ".join(capsys.readouterr().err.split())

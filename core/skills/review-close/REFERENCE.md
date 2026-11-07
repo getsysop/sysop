@@ -416,8 +416,9 @@ this phase's:
   against the recorded one, so nothing recorded would mean what it says.
 
 The default branch moving keeps a branch's Step 2b verdicts because 2b reviews `git diff
-<default>...<branch>`, anchored on the merge-base, which the default branch moving does not
-change. **The unpushed-main group is the exception** (round 2, execution lens): its diff is
+<base> <branch>`, anchored on the branch's newest common ancestor with either default branch,
+which moves only when the default branch gains a commit the branch already holds (a fetch of the
+upstream a branch was cut from); a moved base misses the key, so that branch is reviewed again. **The unpushed-main group is the exception** (round 2, execution lens): its diff is
 `origin/<default>...HEAD`, so a commit on local `<default branch>` since the prepare (a claim flip
 during an overnight build, or the resume's own Step 1b save) is unreviewed, and `RERUN 3` naming
 local `<default branch>` re-runs 2b for the group. Steps 3 and 3c read the default branch directly.
@@ -749,7 +750,7 @@ records the human's answer but applies none: the next prepare asks the same ques
 with no human it holds again. An attended close asks it and acts on the answer, so that is the
 path for an answer; `unhold` is for a cause fixed outside the branch.
 
-### Why Step 3b's empty-workspace arm applies exit 6 by hand
+### Why Step 3b's empty-workspace arm runs the exit-6 test
 
 The unverified sequence § 13.3 named was run through the shipped heredocs
 (`tests/test_review_close_early_park_recollect.py`): a branch collected and its worktree removed,
@@ -759,6 +760,11 @@ only reader of `branch_tip:`, and with no workspace it does not run, so a head t
 the two runs merged under a stale doc. `/sitrep`'s drift reader followed the old blind spot on
 purpose and now measures that case too. A `--branch` claim's `main-checkout` shape is unchanged,
 a lockless one included: the survey reads the main checkout's branch as Step 0 does.
+
+The test was first applied by hand, as one `git rev-list --count` per doc. It became the
+collect's own `staleness` subcommand when the measurement learned to pair a rewritten branch's
+commits and to read a branch's docs as a set: neither is a step a runner can do by hand, and a
+second copy of the rule is the drift this section was written about.
 
 ## Step 6 and 4d-1 — provenance
 
@@ -897,6 +903,31 @@ the default branch on every run, with a remedy (re-run the close) that could not
 ## Step 2a — provenance
 
 Editor-addressed history for `### 2a. Feature Branches`. Nothing here binds the runner.
+
+### Why a branch's diff starts at its newest common ancestor with either default branch
+
+Step 2's diffs ran three-dot from local `<default branch>`, which anchors on the merge-base with
+local `<default branch>` alone. A consumer whose local `<default branch>` was behind `origin` had a
+branch cut from `origin/<default branch>` reviewed with the upstream commits between the two as
+the branch's own: phantom additions, a docs-only skip defeated by someone else's code, and more
+spawns. The same shape hid real work: a branch that removes a line an upstream commit added nets
+to nothing against the older merge-base, so a removed `require_auth()` was invisible to every
+Step 2 gate and the branch read as docs-only (reproduced by the round that built this).
+`origin/<default branch>` alone is wrong the other way: a branch cut from a local-only
+`<default branch>` commit would carry that commit, which the unpushed-main group already reviews.
+`git merge-base <branch> <default branch> origin/<default branch>` takes the newest common
+ancestor with either side, which is right in both shapes, and with no `origin/<default branch>`
+`feature_branch.py base` falls back to local `<default branch>` alone. **Two newest ancestors** (a
+branch holding a local-only commit that later merged `origin/<default branch>` in) take the
+merge-base with `origin/<default branch>`, on the maintainer's ruling: then only a local-only
+commit can show in the branch's diff, never upstream work, and git's own pick between the two
+went by commit date. The verdict key (`gate_verdict.py`'s `ends`) computes the same base, so the
+key and the reviewed diff cannot disagree. Step 2a step 3a's ignored-file check takes the same
+base as its BASE, or upstream code raises its question. Step 1 never fetches, so
+`origin/<default branch>` is as of the last fetch. The unpushed-main group keeps
+`origin/<default branch>...HEAD`; its target is local `<default branch>` itself. The first close
+after an update misses every recorded Step 2b verdict once, the group's included, because the key
+covers Step 2b's text, which this change rewrote.
 
 ### Why step 3a asks about gitignored files the branch reads
 
@@ -1233,13 +1264,14 @@ reaches that, because the collision is over the worktree rather than over the br
 
 ### Why the worktree assertion is a delta and not a cleanliness test
 
-Nothing in this skill establishes that the primary worktree is clean before the agents run. Step 1a
+Nothing in this skill establishes that the primary worktree is clean when the agents run. Step 1a
 excludes it by construction — it skips the **primary checkout**, matched by path identity — and the
-only earlier primary-tree reads are both in Step 1b, one path-scoped to `review_tasks.md` and one
-whole-tree but grepped down to `review_tasks_archive.md`, while Step 1c reads no working tree at
+only earlier primary-tree reads are all in Step 1b: one path-scoped to `review_tasks.md`, one
+whole-tree but grepped down to `review_tasks_archive.md`, and `git_check.py tracked-clean`, which
+reads tracked files only, and only once, before the agents start. Step 1c reads no working tree at
 all (`for-each-ref`, `merge-base`, `diff --name-only`). So nothing before the agents run
-establishes anything about the rest of the tree, and an absolute test would fire on any ordinary
-uncommitted work.
+establishes anything about untracked files, which are the dominant leak shape, or about a tracked
+file a person edits while the reviews run, and an absolute test would fire on that ordinary work.
 
 **The baseline's position in the step is load-bearing too.** It is captured after Steps 1b and 1c
 because both deliberately create commits, so a Step-1 reading would be stale by design.
@@ -1269,9 +1301,9 @@ four times in one afternoon when a close was relaunched, at 60 to 84 cents a gat
 94% of gate passes finding nothing. Nothing keyed a verdict to its inputs, so nothing could reuse
 one. `gate_verdict.py` keys each gate's `APPROVED` to every input the review depended on:
 
-- **The target's commit and its merge-base.** The diff basis is three-dot, so those two ends fix
-  the diff. The merge-base is in the key because an unmoved tip over a moved base would review a
-  different diff.
+- **The target's commit and its base.** The diff runs from the base to the commit, so those
+  two ends fix the diff. The base is in the key because an unmoved tip over a moved base would
+  review a different diff.
 - **What the agent can be handed.** The convention gate hashes the whole of `CLAUDE.md`, the
   section names, and the convention map and its overlay (the `TOTAL` 0 arm hands the map); the
   security gate hashes the security map and its overlay, and `security_map_filter.py`, which cuts
@@ -1532,6 +1564,52 @@ agent running the skill; it is why a rule in that step is shaped the way it is, 
 changing one knows what the shape was bought with. Authored, not copied — the runner keeps the
 rule, this keeps the argument.
 
+### Why the main checkout's tracked files are checked at Step 1b and again before Step 3b
+
+Steps 4a, `4a-fix` and 6 run git commands in the main checkout that refuse an edited tracked
+file there: Step 4a's local-only rebase (after its `checkout` half has already moved the checkout
+onto the branch), `4a-fix`'s `rebase --onto` drop, and Step 6's `pr` re-sync, whose own gate stops
+on a dirty tree. Before this check, the first refusal came after Step 3b had removed the approved
+branches' worktrees. A dirty main checkout is not rare: Step 7 appends to `sysop/SYSOP_ISSUES.md`
+and never commits it, and `/report-issues` leaves its status flips uncommitted by contract, so the
+close after any friction capture starts dirty.
+
+**Why the close stops, rather than running around the edit.** Four more readers treat a dirty
+tree as this close's own write: 4a-post's verification check, Step 4b's and Step 4c's landing
+checks, and `4a-post-failure`'s probe. Making the three refusing commands tolerate the edit
+(`--autostash`, `reset --keep`) would move the refusal to those four, and Step 4c's fallback
+("stage the missing file and commit it") would then put a person's unrelated edit into the
+consolidation commit. One check before anything moves keeps all seven correct as written.
+
+**Why the commit is offered at Step 1b and nowhere later.** Step 2 reviews the unpushed main
+commits as a group, and Steps 2b and 2c read them at run time, so a commit made at Step 1b is
+reviewed like any other. A commit made at Step 3b would reach `<default branch>` unreviewed, so
+Step 3b's re-check only stops: it catches an edit made while the reviews ran. A `--resume` runs
+Step 1 in full before its first `check`, so an attended resume meets Step 1b's offer too, and a
+commit made there moves local `<default branch>`, which `check` reports as `RERUN 3` and which
+re-runs Steps 2b and 2c for the unpushed-main group (Step 2c because a person's leftover edit is
+what its "no half-finished work, no debug code" reading is for). A headless, unattended or prepare
+run never commits a person's edits; it stops and reports them.
+
+**What the check reads.** `git status --porcelain` with untracked files off: staged, unstaged and
+deleted tracked paths, and a staged rename as its delete and its add, so the list matches what
+`git add -u` then commits. Untracked files never fail the check, because neither the rebases nor
+the resets refuse one that they would not overwrite. One they would overwrite, at a path an
+approved branch adds, does make Step 4a's checkout refuse; the check reads no branch, so that
+case still stops at Step 4a, after Step 3b. So do edits hidden by `--assume-unchanged` or
+`--skip-worktree`, which `git status` does not report. They are listed beside an edit all the same,
+because the commit leaves them out: `/add-task` leaves an edited `tasks/index.yml` and an
+untracked body, and committing the index alone would ship an entry whose body no fresh checkout
+holds. So the arm offers only the stop in that shape, and when the checkout is not on the default
+branch, where Rule A's `head-is` would refuse the commit anyway. An unmerged path, or a merge, rebase,
+cherry-pick or revert in progress, exits 4 and offers no commit, because a commit would conclude
+someone else's operation. The commit is `git add -u` and a `docs: ` message so the seeded rules
+`Bash(git add:*)` and `Bash(git commit -m "docs: *)` admit it, behind Rule A's `head-is`.
+
+**What it does not replace.** Step 6's `pr` re-sync keeps its own clean-tree gate and its
+commits-after-push check. Step 5's staging wait comes after both of these checks, and a person is
+likely to have edits open by then.
+
 ### Why `src_dir` is not in the loudness disjunction
 
 Step 3b refuses a wrong or unsubstituted worktree path outright, and for a measured reason: the
@@ -1576,6 +1654,67 @@ the routing that writes the durable record actually happens, therefore cannot as
 all; the ancestry property that makes that true is the one Step 1b's own blockquote already
 documents. So it is asked at collect time and answered by refusing to collect, rather than held
 open to a step that could not settle it.
+
+### Why a rewritten branch is measured by patch, and only toward a pass
+
+A doc a close holds outlives the close that rebased its branch. Step 4a item 2 rebases each branch
+it merges, and Step 4c 1c holds the doc, so the next close measures a `branch_tip:` that is no
+longer an ancestor of the branch. `rev-list --count <tip>..<branch>` then counts every commit since
+the old base: the merge target's commits and the rebased copies of the doc's own work. A consumer
+measured 13 and 7 on two docs whose branches were identical copies, and each SKIP'd a branch whose
+work had fully landed.
+
+When the tip is not an ancestor, the collect pairs the doc's own commits (`<branch>..<tip>`) with
+their copies on the branch by `git patch-id --stable`. The copies must sit on the branch's
+first-parent chain as one contiguous run of the same patches in the same order, exactly once,
+which is what a rebase writes, and the drift is every commit after the run. Real work after a
+rebase still refuses. Matching one patch at a time was the first cut, and it failed: a commit
+after the doc that makes a reverted change again stood in for its copy and read as no drift.
+None of the doc's commits may be a merge or empty, since neither has a patch to pair. And every
+commit below the run must be the merge target's: held by the default branch (as
+`default_branch.sh` resolves it), by its copy on the one remote that resolver reads (`origin`, or
+the only remote), or by a `pr` close's recorded head under `refs/sysop/merged-pr-heads/`, which is
+what holds an integration branch that was squash-merged and deleted. Another remote's `main`, a
+deploy target's or a teammate's, can hold work that never reached the target, and a default that
+resolves to the measured branch names no target at all. In a fork workflow where `origin` is your
+fork, `origin`'s default branch is trusted as the target; Sysop pushes there. When no target can be
+named, the line says so rather than blaming an inserted commit. Without that, work placed under the doc's commits, as `rebase -i` or
+`pull --rebase` leaves it, read as history and passed. It is an allowlist because the first fix
+was a denylist of the branch's own refs, and the next round walked past it five ways: a backup
+branch, a tag, a `git maintenance` prefetch ref, a push under another name, and a remote whose
+name holds a `/`. A branch stacked on another unmerged branch therefore refuses, as it did before
+the pairing. When the pairing is not proven, the count falls back to the ancestry count
+above and refuses as it did, with the reason on the line. So the measure can only
+turn a refusal into a pass, never a pass into a guess. Reading an unpaired history as unknown was
+the other candidate, and it would have routed an amended commit's doc, which the ancestry count
+catches today. The `log -p` passes `--no-ext-diff`, `--no-textconv` and `--no-show-signature`,
+because each would otherwise run a program the repository's config names.
+
+The measurement and the covered rule below live in `_doc_drift.py`, which the collect and
+`/sitrep`'s survey both import. The survey tells the operator whether the close will refuse a
+doc, so a second copy of the rule would send them to `/document-work` over a doc the close
+collects. For the same reason the survey reads a branch's docs as a set, as the collect does: it
+calls the branch stale when any doc claiming it is stale and not covered, not only the one doc
+it found first.
+
+### Why an older held doc is covered by a newer one beside it
+
+`pending_doc_hold.py guard` never replaces a doc a close holds (`held_since:`). A later
+`/document-work` on the same branch writes `<stem>--<n>.md` beside it, stamped at the new head, so
+the branch carries an older doc for its first half and a newer one for the rest. Measured one doc
+at a time, the older one is stale forever, and the exit-6 remedy, re-running `/document-work`,
+writes yet another sibling and cannot clear it. A consumer cleared one by setting the old doc's
+`branch_tip:` by hand.
+
+So a branch's docs are measured as a set. A stale doc is covered, not stale, when it carries
+`held_since:`, a later doc in its own `<stem>--<n>.md` family is current, and the branch is an
+ancestor of that doc's tip in the stale doc's own repository. Every commit after the older tip is
+then one the newer doc describes. A close that holds the pair again rebases both, and then the
+newer doc is current only by its paired run: it covers when each commit after the older doc's work
+is in that run or in the newer doc's own history, which it was stamped on. The bar is narrow on purpose. Any other pair of docs for one
+branch would route a stale doc's summary as written, which is what this gate exists to stop. A
+`--clone` workspace's newer tip need not exist in the main checkout, and a tip that does not
+resolve covers nothing, so there the older doc stays stale.
 
 ### Why the recorded tip is validated before it reaches git
 
@@ -2368,7 +2507,7 @@ with the new one, and the check read no close. A body the branch *adds* that the
 since the fork is the same race from the other side: a branch replayed after a squash of it
 landed and a close archived the task puts the stale open copy back beside the closed one, again
 with no conflict. That line has no merge-anyway arm, because the merge would only put the stale
-copy back; a body whose archive copy predates the fork is a reopen and is not named. On the
+copy back; a body whose archive copy predates the fork is a reopen and is not named. A body the branch adds that the target has since moved between `open/` and `deferred/` takes the same line, as `deferred it at` or `undeferred it at`. On the
 published arm with a usable head the merge works from the fork point rather than the range the
 check reads, so a re-add there is not caught; that is the arm's behaviour on any file.
 
