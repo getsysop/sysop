@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" 4b-batches 9441b791c3901eb4 "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" 4b-batches b3dd8907edaff3a2 "<skill directory>"
 ```
 
 It prints `LOADED: 4b-batches`. **Exit 2**: stop and show its stderr.
@@ -15,6 +15,8 @@ With a non-empty set:
 # is empty here (`WORKFLOW.md` § 8.2a *Persistence boundary*).
 bash sysop/scripts/close_batch.sh --merge-target "<merge target>" <N1> <N2> <N3>
 ```
+
+Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock.
 
 This script updates `review_tasks.md` on the checked-out branch (the merge target — it resolves the repo via `git rev-parse --show-toplevel`, so it commits to whatever branch is current): sets batch headers to `Merged`, marks task checkboxes `[x]`, updates the Statistics table, and adjusts the Grand Total counts. **One exception:** a task annotated `> Failed:` anywhere in its own block keeps its checkbox and is left out of both the flip and the counts. **The block is the task line plus the indented lines under it**, because `/codebase-review` and `/security-audit` emit a two-line task (checkbox + indented `file:line` + provenance) and the annotation lands below that — the one-line reading this sentence used to state was why the protection could not fire at all — a FAIL verdict means the work was attempted and not finished, so the batch closes as "shipped, minus these". Expect the per-batch line to read `(3 tasks closed, 1 failed — still open)` when that happens. One commit is created for all closed batches.
 
@@ -35,6 +37,8 @@ If any branches were cherry-picked instead of rebased+merged (e.g., because work
 bash sysop/scripts/close_batch.sh --force --merge-target "<merge target>" <N1> <N2> <N3>
 ```
 
+Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock.
+
 **Verify the close-batch commit landed before proceeding — non-empty batch set only.** The script wraps its `git commit` in explicit failure handling (BeanRider ISSUE-0015), but trust-but-verify: confirm a `docs: close Batch …` commit is the new tip and the working tree is clean before continuing to Step 4c. **If the batch set was empty this gate does not apply and was already skipped above** — it asserts the result of a command this cycle correctly did not run, so reaching it with no batches is a reading error, not a failed close.
 
 ```bash
@@ -49,6 +53,8 @@ If the check fails **on a non-empty batch set** (no `docs: close Batch …` tip,
    ```bash
    bash sysop/scripts/close_batch.sh --merge-target "<merge target>" <N1> <N2> <N3> 2>&1
    ```
+
+   Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock.
    Read the full output in the tool result — a missing terminal line is then unambiguously visible. **Do not pipe it through `tee`** (this step used to, into a bare `/tmp` path): `|` is a documented separator, so the tail becomes its own invocation, `tee` is not in the harness's read-only set and binds no shipped rule, and the prompt lands *after* the close has already run.
 
 2. **If re-run still doesn't commit**, commit by hand with the canonical subject — same form the script would have used — and proceed. **Two reachable causes, and the second is by design:** the script aborts after the `git add` (the original cause, review_tasks.md staged and uncommitted); or it could not read the batch from `HEAD` at all, in which case it says so — `Could not read this batch from HEAD, so an interrupted-close resume cannot be offered` — and skips rather than guessing. That refusal is deliberate: it would otherwise land `docs: close Batch <N>` for a batch nobody closed. **A resume commits the INDEX and does not re-stage** — the failed run's own `git add` already put the flip there, so an unrelated working-tree edit made *between* the two runs stays uncommitted; if nothing is staged, the resume refuses rather than take the worktree copy. **That guarantee covers the resume path only.** An ordinary close still runs `git add -- review_tasks.md` and takes the whole file, so an unrelated edit already sitting in `review_tasks.md` when you run the script is committed with the close. That is long-standing behaviour, not changed here, and it is the reason to look at `git status` before closing on a dirty tracker.

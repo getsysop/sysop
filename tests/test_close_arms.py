@@ -148,7 +148,25 @@ MARKER = re.compile(r"^<!-- sysop:arm=(\S+) -->[ \t]*$")
 #: worktree holds) raised it to 287_254 (+12): step 0b's print line names `HELD:` lines, which the
 #: copy prints before the exit that SKIPs the branch, so it cannot sit in an arm. Its round (lens B)
 #: raised it to 287_269 (+15): Step 8's `Ignored references:` row names the `HELD:` lines too.
-CORE_BUDGET_BYTES = 287_269
+#: Phase 469 (`Q-738` + `Q-766` + `Q-768`) raised it to 287_295 (+26): the shape=<none> hand test
+#: became one `pending_doc_collect.py staleness` call (smaller), and three additions outgrew that:
+#: Step 4c item 4's Bash `timeout` line (`Q-768`), Step 4a item 1's bullet naming a live move
+#: (`Q-766`), and Step 8's `COVERED` line. Each sits beside the step it governs. Its round (lens B)
+#: raised it to 287_307 (+12): that line says a covered doc is not counted in the row's <N>.
+#: Phase 470 (`Q-747`, Wade's two rulings of 2026-11-06: check the main checkout's tracked files,
+#: offering the commit at Step 1 so Step 2 reviews it) raised it to 288_747 (+1440): Step 1b's
+#: `tracked-clean` stub and its arm's trigger, which run before the reviews they protect,
+#: Step 3b's stop-only re-check before the first worktree is removed, Step 2b's delta note,
+#: which said nothing established the main checkout clean before the agents, and the
+#: `git_check.py` allow-rule's clause naming both checks (its round, lens B). Each sits at the
+#: step it gates.
+#: Phase 472 (`Q-734`, Wade's ruling of 2026-11-06 on the base, and `Q-774`) raised it to
+#: 289_193 (+446): Step 2a step 1's `feature_branch.py base` command and its exit, the note's
+#: sentences refusing three dots from local `<default branch>` and naming the routes that reach
+#: a `<base>` site without step 1 (a landed branch, a resume's `RERUN 2b` or `RERUN 3`), and the
+#: `--yes` clause on the update line. Its round dropped Step 3's stale "(the same per-branch read
+#: Step 3c makes)". Each sits at the site that runs it.
+CORE_BUDGET_BYTES = 289_193
 
 GIT_ENV = {k: v for k, v in os.environ.items()
            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
@@ -940,13 +958,13 @@ REQUIRABLE = ({a for arms in close_arms.ARM_FOR.values() for a in arms} | {close
 
 def test_review_close_has_its_arms():
     assert [p.name for p in _arm_files()] == [
-        "2a-ignored-refs.md", "2b-large-diff.md", "2b-leak.md", "2b-no-conventions.md",
+        "1b-dirty-primary.md", "2a-ignored-refs.md", "2b-large-diff.md", "2b-leak.md", "2b-no-conventions.md",
         "2b-twin-spawn.md", "3b-collect-exit.md", "3b-rollback.md", "3c-signals.md", "4-pre-pr.md",
         "4a-append.md", "4a-fix.md", "4a-post-failure.md", "4a-post-prescan.md",
         "4a-published.md", "4b-batches.md",
         "4c-check-exit.md", "4c-unmerged.md", "4d-direct.md", "4d-pr.md", "6-direct.md",
         "6-pr-cleanup.md", "6-pr-gate.md", "prepare-resume.md", "request-review-land.md"]
-    assert set(close_arms.ARMS) == {"2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions", "2b-twin-spawn",
+    assert set(close_arms.ARMS) == {"1b-dirty-primary", "2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions", "2b-twin-spawn",
                                     "3b-collect-exit", "3b-rollback", "3c-signals", "4-pre-pr",
                                     "4a-append",
                                     "4a-fix", "4a-post-failure", "4a-post-prescan",
@@ -1054,7 +1072,7 @@ def test_every_step_file_names_its_own_loaded_line_and_its_stop():
 
 def test_the_close_runs_each_receipt_command():
     text = text_of(CLOSE_CORE)
-    for cmd in ('python3 sysop/scripts/close_arms.py begin "<flags>" 2a-ignored-refs 2b-large-diff '
+    for cmd in ('python3 sysop/scripts/close_arms.py begin "<flags>" 1b-dirty-primary 2a-ignored-refs 2b-large-diff '
                 '2b-leak 2b-no-conventions 2b-twin-spawn 3b-collect-exit 3b-rollback 3c-signals '
                 '4-pre-pr 4a-append 4a-fix 4a-post-failure 4a-post-prescan 4a-published 4b-batches '
                 '4c-check-exit '
@@ -1620,7 +1638,10 @@ def test_exiteds_help_names_each_2b_trigger():
                    "resume, with a literal `1`, when a Step 2a step 3a question is recorded);",
                    "its pre-scan (`4a-post-prescan`, when `run_checks.sh` exited non-zero or is "
                    "absent), run with a literal `1`;",
-                   "Today eight steps' fourteen arms (`EXIT_ARMS`)"):
+                   # Phase 470 (`Q-747`): Step 1b's.
+                   "Step 1b's tracked-file check (`1b-dirty-primary`, on any non-zero exit of "
+                   "`git_check.py tracked-clean`);",
+                   "Today nine steps' fifteen arms (`EXIT_ARMS`)"):
         assert clause in doc, clause
 
 

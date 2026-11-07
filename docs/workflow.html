@@ -2779,7 +2779,7 @@
         <dl class="glossary">
           <div class="entry">
             <dt>/pr-dependabot<span class="model-tag opus">opus · github sweep</span></dt>
-            <dd>Sweeps open Dependabot PRs: classifies each by ecosystem + semver, merges patch/minor updates on green CI, holds majors (even from trusted publishers), closes pip and open-set-superseded PRs. Dry-run by default; <code>--execute</code> to act. A client-side replacement for native auto-merge, which Free-plan private repos don't get. Classifier validated against ~50 real PRs.</dd>
+            <dd>Sweeps open Dependabot PRs: classifies each by ecosystem + semver, merges patch/minor updates on green CI, holds majors (even from trusted publishers), closes pip and open-set-superseded PRs. Dry-run by default; <code>--execute</code> to act. A client-side replacement for native auto-merge, which Free-plan private repos don't get. It reads the repo's setting first, and asks before acting as a second merge actor. Classifier validated against ~50 real PRs.</dd>
           </div>
         </dl>
       </div>

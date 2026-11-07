@@ -9,8 +9,9 @@ cannot disagree about what matched:
 
 run from the repo root, after the target's `gate_verdict.py lookup security` missed. `<target>`
 is a branch, or `unpushed-main` for the unpushed-main group; the diff basis is the one
-`gate_verdict.py` keys on (the target's commit and its merge-base with `<default branch>`, or
-with `origin/<default branch>` for the group).
+`gate_verdict.py` keys on (the target's commit and its `ends` base: a branch's newest common
+ancestor with `<default branch>` or `origin/<default branch>`, or the group's merge-base with
+`origin/<default branch>`).
 
 The maps are `.claude/security_map.project.md` (the consumer overlay) and
 `.claude/security_map.md` beneath it, read from the top level of the checkout. `install.sh`

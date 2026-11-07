@@ -17,7 +17,7 @@ exactly what's included, switching modes, how updates behave — is
 
 ```bash
 git clone https://github.com/getsysop/sysop.git
-bash sysop/install.sh /path/to/your/project --packs auto --mode loop
+bash sysop/install.sh /path/to/your/project --packs auto --mode loop   # add --yes in a non-interactive shell
 cd /path/to/your/project
 git status                                   # review everything Sysop wrote
 git add .claude/ sysop/ CLAUDE.md .gitignore
@@ -140,8 +140,9 @@ chose on purpose.
 now "keep it or replace it, but don't just delete it."** Deleting it does get your test tree
 scanned — the fix handles that — but it also hands `build/`, `vendor/`, `dist/`,
 `node_modules/`, `.venv/`, `.tox/` and minified bundles back to semgrep's built-in list, and
-files dropped that way are **as invisible as the test tree used to be**: they never appear in
-the pre-scan's `paths.skipped`. If you carry committed dependency source (Go and PHP composer
+files dropped that way are **not scanned**. The pre-scan names them once per run (`N file(s)
+were not given to semgrep`) and holds any baseline entry anchored in one, but naming a file
+does not scan it. If you carry committed dependency source (Go and PHP composer
 both use `vendor/`), the better move is to keep a `.semgrepignore` listing everything on
 semgrep's default list *except* the test entries.
 
@@ -190,7 +191,8 @@ for you, and nothing is filed without your per-item consent. Full reference:
 ## Updating — and growing into the full workflow
 
 Updates work the same as any install: `bash sysop/scripts/sysop-update.sh` (after setting
-`$SYSOP_SRC` — see [install-and-update.md](./install-and-update.md#updating-an-existing-install)).
+`$SYSOP_SRC` — see [install-and-update.md](./install-and-update.md#updating-an-existing-install);
+add `--yes` in a non-interactive shell, such as an agent's tool call, or the run stops at its `Proceed?` prompt).
 The lock's `"mode": "loop"` means an update re-applies the loop shape — it won't quietly grow you a
 task queue.
 

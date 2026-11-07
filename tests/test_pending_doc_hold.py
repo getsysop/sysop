@@ -786,7 +786,7 @@ PINS = {
     "step 8 held rows anomaly": "71dd86cd4e9005ca",
     "step 6 held-doc rule": "32e0f50b65e7fc9e",
     "4a-post third filter": "c5fed5f2e373ffe4",
-    "WORKFLOW 6.6 hold fields": "7bd0013a7881d0cd",
+    "WORKFLOW 6.6 hold fields": "087dedabf73d7209",  # Phase 469 (`Q-738`): the `<name>--<n>.md` sentence adds that Step 3b reads the two as one set; the hold fields are unchanged.
 }
 
 

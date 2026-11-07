@@ -326,7 +326,7 @@ def test_every_shape_step_0_can_emit_is_dispositioned():
     emitted |= {"worktree", "clone", "recorded", "discovered", "main-checkout", "unresolvable"} & emitted
     assert {"worktree", "discovered", "main-checkout", "unresolvable"} <= emitted, emitted
     body = text_of(SKILL)
-    disposition = body[body.index("**Step 0 emits exactly five shapes**"):
+    disposition = body[body.index("**Step 0 emits six shapes, and `<none>`**"):
                        body.index("For **SKIP'd** branches")]
     for shape in sorted(emitted | {"clone", "recorded"}):
         assert f"`{shape}`" in disposition, (

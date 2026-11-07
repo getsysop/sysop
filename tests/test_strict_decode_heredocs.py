@@ -699,9 +699,12 @@ def test_review_close_git_helpers_never_raise_on_a_raw_commit_subject(raw_repo):
                                    "git", repo=raw_repo, _GIT_ENV=dict(os.environ))
     rc, out, err = git3c("log", "--format=%s", "main..feat-x")
     assert rc == 1 and "decode" in err, (rc, out, err)
-    git3b = _function_from_heredoc("review-close", "it FAILS OPEN", "_git", wt=raw_repo)
-    assert git3b("log", "--oneline", "main..feat-x") is None
-    assert git3b("rev-parse", "HEAD")  # control: an ASCII answer still reads
+    # Step 3b's staleness reader moved into `_doc_drift.py` (Phase 469), which reads git's
+    # bytes and decodes the drift log with `replace`: the raw subject reaches the report.
+    import _doc_drift
+    main = _gb(raw_repo, "rev-parse", "main").strip().decode()
+    count, log, _ = _doc_drift.measure(main, "feat-x", raw_repo)
+    assert count == 1 and "caf\ufffd raw message" in log, (count, log)
 
 
 def test_claim_task_stranded_probe_reads_a_non_utf8_task_path(tmp_path):

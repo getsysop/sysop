@@ -112,9 +112,27 @@ Requested but not in the pool: <number> — <reason: status is `<Status>`, not P
 
 If the intersection is empty, stop and print the requested numbers with the reason each was excluded — do **not** fall through to the "no batches" message below, which describes an empty queue rather than an empty selection, and would send the operator looking for work that is sitting right there.
 
+### 1e. Recompute overlap (every run)
+
+Compute overlap yourself for every pool batch, even when its `Overlap:` tag is present. The tag is a generator's result and can be wrong; this is where a wrong one is caught.
+
+1. **Population.** Compare against every batch in the 1a index whose status is not `Merged`, `Complete` or `Ready for Review` — not only this run's pool. That includes `/auto-judge`'s flagged batches, `In Progress` and `Review Ready` batches, and batches `--batches` left out: each can run beside this one, or has a branch still waiting to merge.
+2. **File sets.** For each population batch, collect the file paths from its task anchors (the `<file:line>` on each task's detail line) and strip the line numbers. A batch 1b already read needs nothing more. For any other, read only its anchors, over the same `<START>`/`<END>` range as 1b:
+
+   ```bash
+   sed -n '<START>,<END>p' review_tasks.md | grep -oE '^[[:space:]]+[^[:space:]]+:[0-9]+'
+   ```
+
+   Each hit is the first token of an indented task detail line, so a path a description
+   mentions is not read. Drop the indent, the surrounding backtick and the line number.
+3. **Computed overlap.** Two batches overlap if they share any file path. A pool batch's computed overlap is `none` when it shares no path with another population batch, otherwise a `batch-<N>` list in the declared grammar (`WORKFLOW.md` § Batch metadata fields).
+4. **Compare with the tag.** Tag and recompute **agree** when both say `none` (the tag tested whole, after trimming) or when neither does. Otherwise they **disagree**; a missing tag counts as one that does not say `none`. Only a batch where both say `none` runs in the parallel lane (Step 4b).
+
+Show the result in the `Overlap` column of Step 2's plan table and Step 5's Deferred table: the computed value when tag and recompute agree, and both values when they disagree or the tag is missing — `none (tag) / batch-202 (computed)`, `— (no tag) / none (computed)`. Hold all of it in memory. **Never write it to `review_tasks.md`**: `/codebase-review` and `/security-audit` are the tag's only writers.
+
 ## Step 2: Report Plan + Confirm
 
-Print a plan table covering the auto batches this skill will process. Note: the rationale and any flagged-batch decisions are surfaced by `/triage` — this skill's plan is auto-only.
+Print a plan table covering the auto batches this skill will process. Note: the rationale and any flagged-batch decisions are surfaced by `/triage` — this skill's plan is auto-only. The `Overlap` column and the lane counts come from Step 1e, so a tag that disagrees with the recompute shows here, before you confirm.
 
 ```
 ## Auto-Fix Plan
@@ -122,13 +140,15 @@ Print a plan table covering the auto batches this skill will process. Note: the 
 | Batch | Title | Tasks | Overlap |
 |-------|-------|-------|---------|
 | 198   | Scripts: shared_cli.py Migration | 5 | none |
+| 199   | Config Loader Cleanup | 2 | none (tag) / batch-202 (computed) |
 | 200   | Tests: Mock Cleanup | 6 | none |
 | 201   | Backend Error Handling | 4 | batch-202 |
-| 202   | Backend Logging | 3 | batch-201 |
+| 202   | Backend Logging | 3 | batch-199, batch-201 |
 
 <if no --merge>
 Processing: <N> parallel batches (concurrency: <cap>)
 Deferred:  <M> overlapping batches (run /auto-fix --merge concurrently or after)
+           of those, <D> have a tag that disagrees with the recompute
 Flagged:   <K> batches for /auto-judge (see review_tasks.md for Flag: reasons)
            of those, <J> are partially flagged — only <T_J> of their <T_ALL>
            tasks need judgment (from the Triaged: task lists)
@@ -137,6 +157,7 @@ Estimated: <N> agent runs
 
 <if --merge>
 Processing: <N> overlapping batches (sequential, push only)
+           of those, <D> have a tag that disagrees with the recompute
 Skipped:   <M> non-overlapping batches (already handled or run /auto-fix without --merge)
 Flagged:   <K> batches for /auto-judge (see review_tasks.md for Flag: reasons)
            of those, <J> are partially flagged — only <T_J> of their <T_ALL>
@@ -161,25 +182,16 @@ tree (`git status` shows nothing to commit). If not, stop and report. Resolve th
 `batch_work.sh` refuses the claim off that branch, so checking the wrong name here just
 moves the failure one step later.
 
-### 4a. Compute Overlap (if missing)
+### 4a. Route on the recomputed overlap
 
-For each auto batch, check if its `Overlap:` tag was extracted in Step 1.
-
-If **any** auto batch lacks the tag (older batches generated before overlap tagging was added), compute overlap dynamically:
-
-1. For each auto batch, extract all `file:line` locations from its task lines
-2. Strip line numbers to get file paths (e.g., `<file path>:<line>` → `<file path>`)
-3. Two batches overlap if they share **any** file path
-4. Assign computed overlap: `none` if no shared files, or a `batch-<N>` list in the declared grammar (`WORKFLOW.md` § Batch metadata fields)
-
-Store the overlap data in memory — do not write back to `review_tasks.md`.
+Step 1e recomputed every pool batch's overlap and compared it with the tag. Step 4b routes on both values. Never route on the tag alone, and never write either value to `review_tasks.md`.
 
 ### 4b. Claim and Execute
 
 Determine which auto batches are eligible based on mode. **Test the value whole, never as a substring** (`WORKFLOW.md` § Batch metadata fields):
 
-- **Without `--merge`**: only batches whose `Overlap:` value, trimmed of surrounding whitespace, is **exactly** `none`.
-- **With `--merge`**: every other batch — anything that is not exactly `none`.
+- **Without `--merge`**: only batches whose `Overlap:` value, trimmed of surrounding whitespace, is **exactly** `none` **and** whose Step 1e recompute is `none`.
+- **With `--merge`**: every other batch — a tag that is not exactly `none`, a missing tag, or a recompute that is not `none`.
 
 **Anything you cannot parse counts as overlapping.** A value in an undeclared shape, a trailing comment, `none (batch 5 shares tests/)` — all of them are *overlapping*, because a substring match on `none` there would route a genuinely conflicting batch into the parallel lane. The asymmetry is deliberate: serialising a batch that could have run in parallel costs wall-clock; parallelising one that really overlaps costs a merge conflict and the rework behind it.
 
@@ -188,6 +200,8 @@ To claim a batch, run:
 ```bash
 bash sysop/scripts/batch_work.sh <BATCH_NUMBER>
 ```
+
+Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock.
 
 Parse the output for:
 - **Worktree path**: extract from the line containing `Path:` (e.g., `│  Path:   /path/to/worktrees/task-batch-198`)
@@ -553,8 +567,9 @@ After all batches are processed, print:
 ### Deferred (overlapping — use --merge)        <if no --merge, omit if empty>
 | Batch | Title | Overlaps With |
 |-------|-------|---------------|
+| 199   | Config Loader Cleanup | none (tag) / batch-202 (computed) |
 | 201   | Backend Error Handling | batch-202 |
-| 202   | Backend Logging | batch-201 |
+| 202   | Backend Logging | batch-199, batch-201 |
 
 ### Flagged for Judgment (handled by /auto-judge)
 | Batch | Title | Flag Reason |

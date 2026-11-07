@@ -47,7 +47,7 @@ The script is idempotent and read-only. It exits 0 on a successful survey regard
 
 ## Step 2: Surface the Report
 
-Print the script's stdout verbatim. The report is already formatted for direct human consumption — do NOT re-summarize or paraphrase; the human is reading the same screen as you and re-summarization adds latency without adding signal.
+**Show the human the script's output.** The script's stdout is shown to you, not reliably to the human, so they see it only if your reply carries it: make it, verbatim and complete, the first thing in your reply, inside one fenced code block. Nothing of your own goes before it or into it — no summary, paraphrase or reordering, and no recommendation restated ahead of it; any line of your own comes after it.
 
 After the verbatim report, add one closing line:
 
@@ -132,7 +132,7 @@ The survey script classifies each discovered task into exactly one state. Listed
 | **Lock unreadable** | A lock file at `<git-common-dir>/sysop/runtime/locks/<ID>.lock` could not be read or parsed (permissions, a non-UTF-8 byte, bad YAML), or parsed to no fields (an empty file, a YAML list or scalar). Its fields are unknown, so no other state is inferred from them; the next action names the lock and the repair, never a release. Precedes every other state, on both paths |
 | **Claimed, no branch** | Lock present at `<git-common-dir>/sysop/runtime/locks/<TASK_ID>.lock`; the lock records no branch (task path) or the recorded branch does not exist (batch path). Park evidence, when present, is carried in `notes` |
 | **Planning** | Lock + branch present; branch has 0 commits ahead of the default branch |
-| **In progress** | Branch has ≥1 commits ahead of the default branch (reachable from neither the local branch, its remote-tracking ref, nor a recorded PR head `refs/sysop/merged-pr-heads/*` that `/review-close` Step 4d writes under `pr`); no commit on the branch carries a `Doc-Work:` trailer |
+| **In progress** | Branch has ≥1 commits ahead of the default branch (reachable from neither the local branch, its remote-tracking ref, nor a recorded PR head `refs/sysop/merged-pr-heads/*` that `/review-close` Step 4d writes under `pr`); a `--clone` claim's commits are read in its clone, against the clone's merge target, less what the main checkout's default branch or recorded PR heads hold; no commit on the branch carries a `Doc-Work:` trailer |
 | **Code committed, docs pending** | At least one commit carries `Doc-Work: <TASK_ID>` but **no pending-doc exists** for the branch — the normal terminal state of `/claim-task`'s build pipeline, whose executor emits the trailer without running `/document-work` |
 | **Pending doc stale** | A `Doc-Work: <TASK_ID>` commit and a pending-doc, and commits landed on the branch after the doc's `branch_tip:` — `/review-close` Step 3b refuses such a doc. Counted in the workspace the doc was found in. A `branch_tip:` that is absent, not a string, a `<…>` placeholder, not 7–64 hex characters, or unresolvable leaves the task in the two states below, with the reason in `notes`; so does a doc in the main checkout when the branch has no workspace of its own, which Step 3b never measures |
 | **Ready for `/review-close`** | At least one commit ahead of the default branch carries `Doc-Work: <TASK_ID>`, a pending-doc exists for the branch and is not stale (the row above), and the branch is pushed to origin |

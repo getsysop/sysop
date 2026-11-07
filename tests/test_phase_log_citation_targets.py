@@ -164,7 +164,9 @@ KNOWN_OUT_OF_RANGE = {
     # core ends before these three again (back in range from Phases 403 and 406 to Phase 420).
     # (3154 and 3182 left again in Phase 430: its two stubs and arm headers put the spliced core
     # at 3,189 lines, so both are in range by length, though each still names a pre-Phase-387 line.)
-    ("review-close/SKILL.md", 3233): "pre-Phase-387 line; back past the end since Phase 421",
+    # (3233 left in Phase 470: Step 1b's stub, its arm `1b-dirty-primary` and Step 3b's re-check
+    # put the spliced core past it, so it is in range by length again, though it still names a
+    # pre-Phase-387 line.)
     # Phase 423 moved CLAUDE.md's Phase log rows for Phases 1-379 to REVIEW_ARCHIVE.md.
     ("CLAUDE.md", 278): "a Phase 194-era table row; the row is in REVIEW_ARCHIVE.md since Phase 423",
 }

@@ -150,8 +150,14 @@ def _unqualified_claims(rel, text):
         body = re.sub(r"(?ms)^```.*?^```", "", text)
         units = []
         for section in re.split(r"(?m)^#{1,6} ", body):
-            if _FLAG.search(section):
-                units += re.split(r"(?<=[.!?])\s+", " ".join(section.split()))
+            # A changelog section is a release: its bullets are unrelated entries, so
+            # one naming the flag would charge every other entry's "refuses" to it.
+            # Each top-level bullet is the claim's unit there.
+            pieces = (re.split(r"(?m)^- ", section) if rel == "CHANGELOG.md"
+                      else [section])
+            for piece in pieces:
+                if _FLAG.search(piece):
+                    units += re.split(r"(?<=[.!?])\s+", " ".join(piece.split()))
     else:
         units = []
         for chunk in _source_prose(text):

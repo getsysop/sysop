@@ -41,6 +41,15 @@ from .config import _SKIP_DIRS
 # belongs: on `--null`, which has no ambiguity to resolve. Phase 212.
 _HIT_RE = re.compile(r"^(?P<path>.*?):(?P<line>\d+):(?P<content>.*)$", re.S)
 
+# grep's notice that a file holding a NUL byte matched, in its two homes. BSD
+# grep and GNU grep before 3.5 print it on stdout as a line with no NUL and no
+# line number; GNU grep 3.5 and later print it on stderr, prefixed with the
+# program name, and exit 0 — so on Linux the file never reaches the hit list at
+# all. Both shapes measured (BSD 2.6.0, GNU 3.8). A message translated by the
+# locale matches neither; that file stays unrecorded, as it was.
+_BINARY_STDOUT_RE = re.compile(r"^Binary file (?P<path>.+) matches$")
+_BINARY_STDERR_RE = re.compile(r"^(?:\S*grep): (?P<path>.+): binary file matches$")
+
 # Inline waiver marker: `no-check: <id>[, <id>…]`, the grep-stage counterpart to
 # semgrep's `# nosemgrep` / coverage's `# pragma: no cover`. Deliberately
 # comment-syntax agnostic (the token, not `#` vs `//`), because one registry
@@ -101,13 +110,32 @@ def _paths_unresolved_detail(paths):
     return "paths unresolved: no configured path resolved on disk"
 
 
+def _binary_matches(lines, stderr):
+    """Paths grep reported as a matching binary file, from stdout and stderr."""
+    out = []
+    for line in lines:
+        if "\0" in line:
+            continue
+        m = _BINARY_STDOUT_RE.match(line)
+        if m:
+            out.append(m.group("path"))
+    for line in (stderr or "").splitlines():
+        m = _BINARY_STDERR_RE.match(line)
+        if m:
+            out.append(m.group("path"))
+    return out
+
+
 def _run_grep_status(pattern, paths, includes, excludes, repo_root, exclude_dirs=()):
-    """Run grep -rn and return ``(Outcome, lines)``.
+    """Run grep -rn and return ``(Outcome, lines, binary_paths)``.
 
     The Outcome carries the terminal state (executed / skipped / failed) so the
     single per-check record point in ``run_check`` can account for the stage —
     grep itself has no check id at this call site (spec §5). ``run_grep`` (the
     original list-returning name) is a thin wrapper over this.
+
+    ``binary_paths`` are files grep read as binary and whose match it did not
+    quote (`_binary_matches`), as grep printed them.
     """
     # `--null` puts a NUL between the filename and the rest of the hit, and NUL
     # is the one byte a POSIX path cannot contain — so the path column becomes
@@ -125,7 +153,7 @@ def _run_grep_status(pattern, paths, includes, excludes, repo_root, exclude_dirs
     # Always exclude common non-source directories
     for d in _SKIP_DIRS:
         cmd.extend(["--exclude-dir", d])
-    # Per-check excludes (file globs like "*test*", "*helpers.py")
+    # Per-check file globs ("test_*.py", "*helpers.py"); anchor to the name: macOS grep also matches the whole path.
     for exc in excludes:
         cmd.extend(["--exclude", exc])
     # Per-check subtree excludes (Phase 133, leg-5 dogfood finding 4): the
@@ -147,7 +175,8 @@ def _run_grep_status(pattern, paths, includes, excludes, repo_root, exclude_dirs
         if os.path.exists(full):
             valid_paths.append(full)
     if not valid_paths:
-        return Outcome(SKIPPED, "paths-unresolved", _paths_unresolved_detail(paths)), []
+        return (Outcome(SKIPPED, "paths-unresolved", _paths_unresolved_detail(paths)),
+                [], [])
     cmd.extend(valid_paths)
 
     try:
@@ -156,11 +185,11 @@ def _run_grep_status(pattern, paths, includes, excludes, repo_root, exclude_dirs
         )
     except subprocess.TimeoutExpired:
         # A timeout is lost work, not a declined precondition — `failed`.
-        return Outcome(FAILED, "timeout", "grep timed out after 30s"), []
+        return Outcome(FAILED, "timeout", "grep timed out after 30s"), [], []
     except FileNotFoundError:
         # grep is a hard dependency, but a truly missing binary is a skip
         # (precondition absent), not a crash — consistent with §1's tool-missing.
-        return Outcome(SKIPPED, "tool-missing", "grep not on PATH"), []
+        return Outcome(SKIPPED, "tool-missing", "grep not on PATH"), [], []
 
     # grep exit codes: 0 = matches, 1 = no matches (expected), 2+ = a real
     # error (unreadable file, malformed regex). Treat 2+ as a noisy warn AND a
@@ -176,9 +205,10 @@ def _run_grep_status(pattern, paths, includes, excludes, repo_root, exclude_dirs
             Outcome(FAILED, "grep-error",
                     f"grep error (rc={result.returncode}): {stderr_excerpt(result.stderr)}"),
             [],
+            [],
         )
     lines = [l for l in result.stdout.strip().split("\n") if l]
-    return Outcome(EXECUTED, None, None), lines
+    return Outcome(EXECUTED, None, None), lines, _binary_matches(lines, result.stderr)
 
 
 def parse_hit(hit):
@@ -367,6 +397,22 @@ def _run_position_check(
     return findings
 
 
+def warn_binary_skips(skipped):
+    """Print one line for the files grep read as binary across the run's checks.
+
+    ``skipped`` maps a grep check id to the paths it did not quote. One line per
+    run, not per check: several checks over one binary file would repeat it.
+    """
+    paths = sorted({p for ps in skipped.values() for p in ps})
+    if not paths:
+        return
+    more = f" (+{len(paths) - 5} more)" if len(paths) > 5 else ""
+    print(f"warn: grep read {len(paths)} file(s) as binary and did not report "
+          f"their matches ({len(skipped)} check(s)); baseline entries in them "
+          f"are held, not judged: {_sanitize_log(', '.join(paths[:5]))}{more}",
+          file=sys.stderr)
+
+
 def run_check(check, repo_root, report=None):
     """Run a single check and return a list of (check_id, file_line, message, identity) tuples.
 
@@ -484,10 +530,21 @@ def run_check(check, repo_root, report=None):
         _record(SKIPPED, "paths-unresolved", _paths_unresolved_detail(paths))
         return []
 
-    outcome, hits = _run_grep_status(
+    outcome, hits, binary = _run_grep_status(
         pattern, paths, includes, excludes, repo_root, exclude_dirs
     )
     _record(outcome.status, outcome.reason, outcome.detail)
+    if outcome.status == EXECUTED and binary:
+        # Not a finding (see the note below `findings = []`), but not silence
+        # either: the check stays `executed`, the file goes in its skip set so a
+        # baseline entry anchored there is held rather than called stale, and
+        # the run says which files.
+        # The run names them once, after every grep check (`warn_binary_skips`).
+        rels = sorted({strip_repo_prefix(b, repo_root) for b in binary})
+        if report is not None:
+            report.record_skipped_paths([check_id], rels)
+        else:
+            warn_binary_skips({check_id: rels})
     if outcome.status != EXECUTED or not hits:
         return []
 
@@ -507,10 +564,9 @@ def run_check(check, repo_root, report=None):
     # own review round; restoring the drop is a return to shipped behaviour,
     # not a new policy.
     #
-    # Whether a binary-classified file in a check's declared scope should be
-    # SURFACED (as `degraded` — the scan demonstrably saw less than it claimed,
-    # which is what that state is for) is a real question and a separate one.
-    # Filed rather than decided here.
+    # Such a file is not surfaced as `degraded` either: that would hold every
+    # entry of the check. `run_check` records it in the check's skip set
+    # instead, above, which holds only the entries anchored in that file.
     findings = []
 
     if invert and neg_pattern:

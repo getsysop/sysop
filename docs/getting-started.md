@@ -59,7 +59,7 @@ Clone Sysop once, then install it into your project:
 
 ```bash
 git clone https://github.com/getsysop/sysop.git
-bash sysop/install.sh /path/to/your/project --packs auto
+bash sysop/install.sh /path/to/your/project --packs auto   # add --yes in a non-interactive shell
 cd /path/to/your/project
 bash sysop/scripts/self_check.sh                        # one-command prereq check: bash, PyYAML, hooks
 git status                                              # review everything Sysop wrote
@@ -74,7 +74,8 @@ git commit -m "chore: install Sysop"
   `--dry-run` first if you want to preview without writing anything.
 - **Started with `--mode loop`?** (The README quickstart's recommended first install for an
   existing codebase.) This guide is the graduation path: grow the install in place with
-  `bash sysop/install.sh /path/to/your/project --update --mode full` — purely additive,
+  `bash sysop/install.sh /path/to/your/project --update --mode full` (add `--yes` in a
+  non-interactive shell, such as an agent's tool call) — purely additive,
   nothing the loop has learned is touched — commit what it added
   (`git add .claude/ sysop/ tasks/ .gitignore; git add .agents/ 2>/dev/null`), then skip step 1
   and continue from step 2.

@@ -98,6 +98,8 @@ EXCLUDED_SCRIPTS = {
     "resolve_append_conflict.py",
     # Phase 446 (`Q-547`): the closed-task check that pr_head_check.py and git_check.py import.
     "_closed_tasks.py",
+    # Phase 469 (`Q-738`): the staleness measure pending_doc_collect.py and sitrep_survey.py import.
+    "_doc_drift.py",
     "backfill_completed_dates.py", "batch_work.sh", "claim_task.sh",
     # Phase 237: a `tasks/index.yml` writer, so it is lifecycle. Loop mode
     # installs no task queue at all, which is what makes this a classification

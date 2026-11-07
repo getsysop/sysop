@@ -81,13 +81,14 @@ ALLOWED_TWO_DOT: dict[str, set[str]] = {
     #     it, from the merge-base, so it is merge-base-relative and asks the inverse question
     #     (what did *main* gain since the cut); the step's prose line for a consumer's own
     #     archive path writes the same range with `<merge-base>` as its left operand.
-    #  2. Step 2a's rationale note, which quotes the anti-pattern in order to explain it.
+    #  2. Step 2a's rationale note, which quotes the anti-pattern in order to explain it
+    #     (Phase 472, `Q-734`: it now names the branch's `<base>`, not three dots).
     #     Pinned whole so it is also guarded against inversion — the round showed the note
     #     could be rewritten to recommend two dots while every other guard stayed green,
     #     and 2b/2d both defer to it ("three dots, per Step 2a's note").
     "core/skills/review-close/SKILL.md": {
         "It prints `--- Step 1c: archive-rotation pre-check`, one `checked: <branch>` line per local branch but `<default branch>` and the review sub-agents' `worktree-agent-*` checkouts (Step 2b), and three `WARN:` lines for each branch cut before `review_tasks_archive.md` changed on `<default branch>`. The archive is `review_tasks_archive.md` anywhere in the tree; if `<project>/CLAUDE.md` § Key Files names another path, check `git diff --name-only <merge-base>..<default branch> -- <that path>` for each branch yourself. **Exit 2: stop and show its output.**",
-        '> **Three dots on every `git diff` in Step 2 — 2a, 2b and 2d (internal tracker #241).** `git diff <default branch>..refs/heads/<branch>` compares the two *tips*, so everything `main` gained after the branch was cut renders as though the branch **deleted** it. That is not a rare condition: `/review-close` manufactures it, because Step 1b commits `review_tasks.md` to `main` before any branch is inspected. `git diff <default branch>...refs/heads/<branch>` diffs against the merge-base and shows exactly what the branch contributed. A false BLOCK costs a human round-trip; a **false APPROVE** — real hunks buried under phantom deletions — is the worse direction and gets likelier the staler the branch is. **`git log <default branch>..refs/heads/<branch>` keeps two dots**: for `log`, two-dot already means "commits on the branch and not on `main`," which is what step 1 wants. The rule is per-command, not a blanket search-and-replace.',
+        '> **Every `git diff` of a branch in Step 2 — 2a, 2b and 2d — starts at its `<base>` (internal tracker #241).** `git diff <default branch>..refs/heads/<branch>` compares the two *tips*, so everything `main` gained after the branch was cut renders as though the branch **deleted** it. That is not a rare condition: `/review-close` manufactures it, because Step 1b commits `review_tasks.md` to `main` before any branch is inspected. `git diff <base> refs/heads/<branch>` diffs against the merge-base and shows exactly what the branch contributed. Not `<default branch>...refs/heads/<branch>`: a local `<default branch>` behind `origin` makes that merge-base older, and upstream work reads as the branch\'s own. A false BLOCK costs a human round-trip; a **false APPROVE** — real hunks buried under phantom deletions — is the worse direction and gets likelier the staler the branch is. **`git log <base>..refs/heads/<branch>` keeps two dots**: for `log`, two-dot already means "commits on the branch since it left `main`," which is what step 1 wants. The rule is per-command, not a blanket search-and-replace. Where step 1 did not run for a branch this session (a landed branch, or a resume\'s `RERUN 2b` or `RERUN 3`), run its `base` command before the branch\'s first diff.',
     },
     "core/companion/docs/WORKFLOW.md": set(),
     "docs/install-and-update.md": set(),
@@ -318,9 +319,9 @@ def test_the_three_legal_two_dot_ranges_are_still_present_and_still_legal():
     assert "mb = git('merge-base', f'refs/heads/{default}', f'refs/heads/{branch}')" in script, (
         "Step 1c's `<base>..<default branch>` is only correct because `base` is a merge-base "
         "— if that assignment goes, the range compares tips")
-    assert "`python3 sysop/scripts/git_ro.py . log refs/heads/<default branch>..refs/heads/<branch> --not --glob='refs/sysop/merged-pr-heads/*' --oneline`" in rc, (
-        "Step 2a's commit listing must keep TWO dots — three-dot `git log` lists main's "
-        "commits as though they were the branch's"
+    assert "`python3 sysop/scripts/git_ro.py . log <base>..refs/heads/<branch> --not --glob='refs/sysop/merged-pr-heads/*' --oneline`" in rc, (
+        "Step 2a's commit listing must keep TWO dots from the base — three-dot `git log` lists "
+        "main's commits as though they were the branch's"
     )
 
 
@@ -329,11 +330,14 @@ def test_every_step_2_diff_site_uses_the_merge_base_form():
     that could be regressed together while the count still passed."""
     rc = text_of(REVIEW_CLOSE)
     for site in (
-        "`git diff <default branch>...refs/heads/<branch> --stat` — scope of changes",  # 2a
-        "| feature branch `<branch>` | `git diff <default branch>...refs/heads/<branch>` |",  # 2b/2d basis table
+        "`git diff <base> refs/heads/<branch> --stat` — scope of changes",  # 2a
+        "| feature branch `<branch>` | `git diff <base> refs/heads/<branch>` |",  # 2b/2d basis table
         "| unpushed-main group | `git diff origin/<default branch>...HEAD` |",          # the group target
         "<full unified diff from the target's diff basis>",                 # prompt placeholder
-        "`git diff <default branch>...refs/heads/<branch>` — three dots, per Step 2a's note",  # 2d predicate
+        "(`git diff <base> refs/heads/<branch>`, per Step 2a's note)",  # 2d predicate
+        "all against `git diff --name-only <base> refs/heads/<branch>` (per Step 2a's note)",  # 2d sections
+        "   git diff <base> refs/heads/<branch> | wc -l",  # 2b threshold
+        '`python3 sysop/scripts/feature_branch.py base "<branch>" "<default branch>"` prints `BASE: <sha>`',  # where it comes from
     ):
         assert carries(rc, site), f"missing merge-base diff site: {site!r}"
 
@@ -342,10 +346,15 @@ def test_the_rationale_note_still_recommends_three_dots():
     """The note is what 2b and 2d defer to ("per Step 2a's note"), so inverting it inverts
     them. The round showed it was permanently exempt from the scan and unguarded."""
     rc = text_of(REVIEW_CLOSE)
-    note = rc[rc.index("> **Three dots on every `git diff` in Step 2") :]
+    note = rc[rc.index("> **Every `git diff` of a branch in Step 2") :]
     note = note[: note.index("\n\n")]
     assert "compares the two *tips*" in note
     assert "diffs against the merge-base and shows exactly what the branch contributed" in note
+    assert "Not `<default branch>...refs/heads/<branch>`" in note, "Q-734's basis must stay refused"
+    assert ("Where step 1 did not run for a branch this session (a landed branch, or a resume's "
+            "`RERUN 2b` or `RERUN 3`), run its `base` command before the branch's first diff") in note, (
+        "a landed branch and a resume's re-runs reach a `<base>` site without step 1: the note must "
+        "say to compute it, for all three (the round's lens B, F3)")
     assert "keeps two dots" in note, "the per-command carve-out for `git log` must survive"
     assert not re.search(r"prefer\s+`git diff main\.\.<", note), "note inverted"
 
@@ -712,12 +721,15 @@ def test_workflow_spec_records_all_three_fixes():
 
 
 def test_workflow_guide_by_hand_variant_says_why_three_dots():
+    """Phase 472 (`Q-734`): the by-hand form diffs from the newest common ancestor with
+    `main` or `origin/main`, and says why neither the tips nor local `main` alone."""
     line = next(
         ln
         for ln in (DOCS_DIR / "WORKFLOW_GUIDE.md").read_text().splitlines()
         if ln.startswith("1. Review each feature branch:")
     )
-    assert "main...refs/heads/<branch>" in line and "three dots" in line
+    assert '`git diff "$(git merge-base refs/heads/<branch> main origin/main)" refs/heads/<branch>`' in line
+    assert "compares the tips" in line and "local `main` behind `origin`" in line
 
 
 def test_ui_verify_diffs_against_the_merge_base():

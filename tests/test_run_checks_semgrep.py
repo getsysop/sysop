@@ -38,10 +38,10 @@ def _semgrep_run_stub(semgrep_result, tracked=("src/a.py",)):
 
     The stage shells out **three times** since Phase 196 (#361): ``git ls-files -z``
     and ``git ls-files -z --others --exclude-standard`` to find the files semgrep's
-    default ignore list drops, then semgrep itself. (Zero git calls when the repo has
-    a root ``.semgrepignore`` — the recovery switches off.) A single ``return_value``
-    answers all of them, which
-    which is not merely untidy — it silently feeds semgrep's own JSON payload back
+    default ignore list drops, then semgrep itself. (A root ``.semgrepignore``
+    switches the recovery off; the same two calls still run, to find files over
+    semgrep's size limit.) A single ``return_value`` answers all of them, which
+    is not merely untidy — it silently feeds semgrep's own JSON payload back
     as the target list, so these tests were passing while scanning a nonsense
     operand, and the two that did fail failed for an unrelated-looking reason.
     """

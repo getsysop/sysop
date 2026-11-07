@@ -930,7 +930,7 @@ def _only_copies(root: Path, ws: Path, d: str, kept: list[Path]) -> tuple[int, i
 
 # The literal placeholders the skills print; a `<` in a real branch or file name is legal.
 _PLACEHOLDERS = ("<workspace>", "<worktree-path>", "<default branch>", "<branch>",
-                 "<sanitized branch>", "<path>", "<WORKSPACE>", "<BASE>", "<DEST>", "<NAME>")
+                 "<sanitized branch>", "<path>", "<WORKSPACE>", "<BASE>", "<DEST>", "<NAME>", "<base>")
 
 
 def main(argv: list[str] | None = None) -> int:

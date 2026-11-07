@@ -37,7 +37,17 @@ checks:
     severity: low
     paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
     include: ["*.py"]
-    exclude: ["*test*"]
+    # Test files are skipped by name and by directory, never by substring.
+    # `*test*` also skipped production modules (`latest_rates.py`,
+    # `stress_test.py`), and macOS grep matches an `exclude:` glob against the
+    # whole path as well as the name, so a checkout under any directory with
+    # "test" in its name scanned nothing. `*_test.py` is left out on purpose: it
+    # would still skip `stress_test.py`. Every check in this fragment that skips
+    # test files by name carries this same pair; an override in
+    # `.claude/checks.project.yml` replaces the entry wholesale, so copy both
+    # keys across.
+    exclude: ["test_*.py", "conftest.py"]
+    exclude_dir: ["tests", "test"]
     pattern: 'logger\.(debug|info|warning|error|critical)\(f[''"]'
     description: "logger.*(f\"...\") bypasses lazy formatting — use logger.*(\"msg %s\", val). Security impact: f-strings interpolate even when log level is disabled, which can leak sensitive values at filtered levels."
     convention: "Logger formatting"
@@ -63,7 +73,8 @@ checks:
     severity: medium
     paths: ["<api module>/", "<scripts dir>/", "<datajobs dir>/"]
     include: ["*.py"]
-    exclude: ["*test*"]
+    exclude: ["test_*.py", "conftest.py"]
+    exclude_dir: ["tests", "test"]
     pattern: 'APP_ENV.*(==|!=).*["'']prod["'']'
     negative_pattern: 'staging'
     description: 'APP_ENV equality on "prod" without "staging" — if the project runs a staging environment as APP_ENV=staging, security guards must use APP_ENV in ("prod", "staging"). See "Staging = production" convention.'

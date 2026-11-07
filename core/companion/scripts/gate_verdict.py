@@ -10,8 +10,9 @@ The key is a sha256 over, in order:
 
     gate       convention | security
     tip        the target's commit: the branch tip, or `HEAD` for `unpushed-main`
-    base       the merge-base of that commit with `<default branch>`, or with
-               `origin/<default branch>` for `unpushed-main`: the two ends of the diff basis
+    base       for a branch, its newest common ancestor with either `<default branch>` or
+               `origin/<default branch>` (`branch_base`); for `unpushed-main`, the merge-base
+               with `origin/<default branch>`: the two ends of the diff basis
     sources    sha256 of what the agent can be handed: for `convention`, the whole of
                `CLAUDE.md`, the section names given, and the convention map and its overlay
                (Step 2b's `TOTAL` 0 arm hands the map); for `security`, the security map and
@@ -139,7 +140,26 @@ def ends(target: str, default: str) -> tuple:
         upstream = git("rev-parse", "--verify", f"origin/{default}^{{commit}}")
         return tip, git("merge-base", upstream, tip)
     tip = git("rev-parse", "--verify", f"refs/heads/{target}^{{commit}}")
-    return tip, git("merge-base", git("rev-parse", "--verify", f"{default}^{{commit}}"), tip)
+    return tip, branch_base(tip, default)
+
+
+def branch_base(tip: str, default: str) -> str:
+    """A feature branch's diff base: its newest common ancestor with either the local
+    `<default>` or `origin/<default>`. Local `<default>` alone is wrong when it is behind
+    `origin`: upstream work the branch was cut over then reads as the branch's own. `origin`
+    alone is wrong for a branch cut from a local-only commit, which the unpushed-main group
+    already reviews. With no `origin/<default>` the local branch is the only side."""
+    local = git("rev-parse", "--verify", f"refs/heads/{default}^{{commit}}")
+    remote = f"refs/remotes/origin/{default}"
+    has_remote = subprocess.run(["git", "show-ref", "--verify", "--quiet", remote],
+                                capture_output=True, env=GIT_ENV).returncode == 0
+    if has_remote:
+        origin = git("rev-parse", "--verify", f"{remote}^{{commit}}")
+        bases = git("merge-base", "--all", tip, local, origin).split()
+        # More than one (a branch holding a local-only commit that merged `origin` in): take
+        # origin's, so only local-only commits, which the unpushed-main group reviews, can show.
+        return bases[0] if len(bases) == 1 else git("merge-base", tip, origin)
+    return git("merge-base", tip, local)
 
 
 def top_level() -> Path:

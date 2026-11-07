@@ -103,7 +103,7 @@ _SYSOP_GIT_LIB="$(dirname "${BASH_SOURCE[0]}")/_git_lib.sh"
 # `||` arm runs, so the remedy below printed only on bash 4+.
 { [[ -f "$_SYSOP_GIT_LIB" && -r "$_SYSOP_GIT_LIB" ]] && source "$_SYSOP_GIT_LIB"; } || {
   echo "❌ _git_lib.sh is missing or unreadable beside default_branch.sh — it ships with every install." >&2
-  echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh" >&2
+  echo "   Restore the scripts directory: bash sysop/scripts/sysop-update.sh (with --yes in a non-interactive shell)" >&2
   exit 1
 }
 

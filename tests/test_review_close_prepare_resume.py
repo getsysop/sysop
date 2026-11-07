@@ -208,7 +208,7 @@ def test_the_prepare_never_reaches_step_3b_and_the_resume_consumes_before_it() -
     assert "not set aside in item 3, except a gone or SKIP branch's" in ask
     assert "**Every answer given live, in this item or item 6, also goes in `answers.md`:**" in res
     again = res[res.index("**Check again**"):res.index("Immediately before Step 3b")]
-    assert "When the line names local `<default branch>`, also run Step 2b for the unpushed-main group." in again
+    assert "When the line names local `<default branch>`, also run Steps 2b and 2c for the unpushed-main group." in again
     assert "run Steps 2a to 2e for that branch, unless item 3 dropped it." in again
     assert "**On any non-zero exit from `close_run.py`, stop and show its stderr.**" in res
     assert "After applying an answer, append `applied` under it." in res

@@ -135,7 +135,7 @@ PY
         info "fix: git -C \"$MAIN_ROOT\" restore --source=HEAD --staged --worktree -- <each path marked 'in your last commit'>"
       fi
       if (( MP_UNTRACKED > 0 )); then
-        info "fix: bash sysop/scripts/sysop-update.sh   (an --update re-writes every shipped path)"
+        info "fix: bash sysop/scripts/sysop-update.sh   (an --update re-writes every shipped path; add --yes in a non-interactive shell)"
       fi
     fi
   fi
@@ -329,8 +329,11 @@ if [[ "$SCAN_4A" -eq 1 && -n "$VENDOR_ALT" && -d "$HOOKS_DIR" ]]; then
     armed_name="$(basename "$armed_hook")"
     # git's own shipped templates are executable and are not the consumer's.
     case "$armed_name" in *.sample|*.bak*) continue ;; esac
+    # `grep >/dev/null`, not `grep -q`: `-q` exits at the first match, `sed` then
+    # takes SIGPIPE on its next write, and `pipefail` makes that the `if`'s status,
+    # so a large hook naming the old path on line 1 read as clean.
     if sed -E 's#(sysop|companion)/scripts/#\1/@sysop-migrated@/#g' "$armed_hook" 2>/dev/null \
-       | grep -qE "(^|[^[:alnum:]_])scripts/($VENDOR_ALT)" 2>/dev/null; then
+       | grep -E "(^|[^[:alnum:]_])scripts/($VENDOR_ALT)" >/dev/null 2>&1; then
       bad "armed hook '$armed_name' still names a pre-migration scripts/ path"
       info "    Sysop's vendor dir moved to sysop/scripts/ (Phase 128); that line no longer resolves"
       info "    fix: $HOOKS_DIR/$armed_name — repoint it at sysop/scripts/<name>"

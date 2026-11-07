@@ -43,13 +43,14 @@ from .baseline import (
     legacy_entries,
     load_baseline,
     migrate_baseline,
+    skip_held_entries,
     unmatched_entries,
     unregistered_entries,
     write_baseline,
 )
 from .config import parse_checks_yml, severity_warnings
 from .coverage import _run_coverage
-from .grep import run_check
+from .grep import run_check, warn_binary_skips
 from .lint import _run_eslint
 from .lsp import run_lsp_diagnostics
 from .pip_audit import _run_pip_audit
@@ -280,6 +281,11 @@ def main():
             )
             sys.exit(1)
 
+    # The grep stage tests each `paths:` entry from the process cwd and then runs
+    # grep with `cwd=repo_root`, so a relative root is doubled and every grep
+    # check reads `executed` with 0 findings. Resolve it once, here.
+    repo_root = os.path.abspath(repo_root)
+
     checks_file = os.path.join(repo_root, ".claude", "checks.yml")
     if not os.path.exists(checks_file):
         print(f"Error: {checks_file} not found", file=sys.stderr)
@@ -424,10 +430,15 @@ def main():
     # entries, so an identity-bearing entry whose finding moved stopped
     # suppressing with nothing said: the finding re-fired as new every run until
     # someone read the file. Warning only — this changes no exit code.
+    # An entry anchored in a file its check did not read this run (the stage
+    # recorded it in `skipped_paths`) is held, not judged, and named apart.
+    skipped = report.skipped_paths()
     unmatched = unmatched_entries(baseline, all_findings, report.executed_ids(),
-                                  repo_root)
-    if unmatched:
-        _print_unmatched(unmatched, {(wid, wfl) for wid, wfl, _m in report.waived()})
+                                  repo_root, skipped)
+    held = skip_held_entries(baseline, all_findings, report.executed_ids(), skipped)
+    if unmatched or held:
+        _print_unmatched(unmatched, {(wid, wfl) for wid, wfl, _m in report.waived()},
+                         held)
     # And entries naming a check this checks.yml no longer defines: they can
     # never match, and the report above cannot see them (an undefined check
     # never executes). Read against every defined check, not this --mode's.
@@ -546,7 +557,7 @@ def main():
         sys.exit(1)
 
 
-def _print_unmatched(unmatched, waived_anchors=frozenset()):
+def _print_unmatched(unmatched, waived_anchors=frozenset(), held=()):
     """Print the stale-entry warning for `unmatched_entries`' result, to stderr.
 
     Its own text, not the legacy warning's: the remedy differs. A legacy entry
@@ -554,10 +565,22 @@ def _print_unmatched(unmatched, waived_anchors=frozenset()):
     it excused, if it still exists, is in this run's findings under a new key) or
     removed. Entries whose anchor file is absent are listed apart, because that
     is either a moved file or a checkout that does not hold it.
+
+    ``held`` (`skip_held_entries`) are entries whose check did not read their
+    anchor file this run. They are not stale, so they get one line of their own
+    and no remedy — and that line prints even when nothing is stale.
     """
     def _shown(entries):
         more = f" (+{len(entries) - 5} more)" if len(entries) > 5 else ""
         return ", ".join(entries[:5]) + more
+
+    held = list(held)
+    if held:
+        noun = "entry" if len(held) == 1 else "entries"
+        print(f"\n{len(held)} baseline {noun} not judged — the check did not read "
+              f"the anchor file this run: {_shown(held)}", file=sys.stderr)
+    if not unmatched:
+        return
 
     # A finding an inline `no-check:` marker now waives never reaches the findings or
     # `--print-keys`, so the re-anchor hint cannot apply to its entry: say so.
@@ -581,10 +604,10 @@ def _print_unmatched(unmatched, waived_anchors=frozenset()):
         "under a new key;\n  print every current key with:\n"
         "    bash sysop/scripts/run_checks.sh --print-keys\n"
         "  and replace the entry's line with the new key, keeping your comment. If "
-        "the code\n  is unchanged, the check may have skipped the file (grep drops a "
-        "binary file,\n  semgrep a file over its size limit), or a narrowed `paths:` or "
-        "`exclude_dir:`, yours\n  or one an update shipped, may have put it out of "
-        "the check's scope: check that before\n  removing the entry.")
+        "the code\n  is unchanged, a narrowed `paths:` or `exclude_dir:`, yours or "
+        "one an update shipped,\n  or a path in your `.semgrepignore` may have put it out of the "
+        "check's scope, or\n  semgrep may have judged the file minified: check that "
+        "before removing the entry.")
     print("\n".join(lines), file=sys.stderr)
 
 
@@ -629,6 +652,9 @@ def _run_all_stages(repo_root, classified, report):
             if check.get("id"):
                 report.record([check.get("id")], FAILED, "grep",
                               "exception", stderr_excerpt(str(e)))
+    grep_ids = {check.get("id") for check in grep_checks}
+    warn_binary_skips({cid: ps for cid, ps in report.skipped_paths().items()
+                       if cid in grep_ids})
 
     # LSP / typechecker diagnostics.
     if lsp_included:
@@ -722,8 +748,12 @@ def _run_update_baseline(repo_root, all_checks, baseline_file):
     # being empty. Found by this phase's own review round, after the first cut
     # shipped with the hole.
     non_executed = set(report.non_executed_ids()) | set(report.incomplete_ids())
+    # And, per FILE, the entries of a check that ran but did not read their
+    # anchor file (`RunReport.skipped_paths`) — the same hold the stale-entry
+    # warning applies.
     written = write_baseline(
-        baseline_file, all_findings, blocking_ids, non_executed
+        baseline_file, all_findings, blocking_ids, non_executed,
+        report.skipped_paths()
     )
     baseline_rel = baseline_file.replace(repo_root.rstrip("/") + "/", "")
     print(
@@ -789,7 +819,7 @@ def _run_migrate_baseline(repo_root, all_checks, baseline_file):
 
     rows, refusal = migrate_baseline(
         baseline_file, all_findings, repo_root, report.non_executed_ids(),
-        report.incomplete_ids()
+        report.incomplete_ids(), report.skipped_paths()
     )
     if refusal:
         print(f"\nerror: {refusal}", file=sys.stderr)

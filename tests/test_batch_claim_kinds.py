@@ -557,12 +557,8 @@ class TestReadersSeeTheLock:
         """sitrep_survey.py flagged every in-flight batch worktree as an
         `orphan worktree` on every run, because no lock ever matched its branch.
 
-        Driven as a subprocess rather than by calling `_find_discrepancies`
-        directly: `_read_worktrees(main_root)` runs `git worktree list` with no
-        `cwd`, so in-process it enumerates whatever repo the *test runner* sits
-        in and ignores the scratch repo entirely. Benign in production (cwd is
-        always inside the same repo, and `git worktree list` is repo-global),
-        but it means only a real invocation can isolate this. Filed separately.
+        Driven as a subprocess, which is the honest form: the survey's real
+        entry point resolves the main checkout from its own cwd.
         """
         repo = _repo(tmp_path / "repo")
         # Stranded, not merely claimed: the `pending (not claimed)` line this

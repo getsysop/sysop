@@ -79,7 +79,8 @@ Subcommands (each prints one line per fact):
         prints `ARM: none`. Exit 2: the count is not a whole number.
     exited <close-id> <arm-id> <code>
         Where an arm's trigger is a command's exit code, run after that command with the code
-        written out. Today eight steps' fourteen arms (`EXIT_ARMS`): Step 2a's ignored-file
+        written out. Today nine steps' fifteen arms (`EXIT_ARMS`): Step 1b's tracked-file
+        check (`1b-dirty-primary`, on any non-zero exit of `git_check.py tracked-clean`); Step 2a's ignored-file
         check (`2a-ignored-refs`, on any non-zero exit, and the resume, with a literal `1`,
         when a Step 2a step 3a question is recorded); Step 2b's conventions
         measure (`2b-no-conventions`, on a `TOTAL` of `0`), its diff measure
@@ -132,7 +133,7 @@ import time
 from pathlib import Path
 
 # The arms this script knows. `begin` refuses a skill that marks any other set.
-ARMS = frozenset({"2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions",
+ARMS = frozenset({"1b-dirty-primary", "2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions",
                   "2b-twin-spawn", "3b-collect-exit", "3b-rollback", "3c-signals", "4-pre-pr",
                   "4a-append", "4a-fix", "4a-post-failure", "4a-post-prescan", "4a-published",
                   "4b-batches", "4c-check-exit", "4c-unmerged", "4d-direct", "4d-pr", "6-direct",
@@ -174,7 +175,7 @@ CONFLICT_ARM = "4a-append"
 NOTES_ARM = "4a-fix"
 # The arms `exited` makes due: each one's trigger is a command's non-zero exit, or a value a
 # command printed that the core compares with a literal and passes on as `1`.
-EXIT_ARMS = frozenset({"2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions",
+EXIT_ARMS = frozenset({"1b-dirty-primary", "2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions",
                        "2b-twin-spawn", "3b-collect-exit", "3b-rollback", "3c-signals",
                        "4a-post-failure", "4a-post-prescan", "4a-published", "4b-batches",
                        "4c-check-exit", "4c-unmerged"})
@@ -361,12 +362,12 @@ def cmd_begin(args: list) -> int:
         raise Refuse("begin takes the flags first, as one argument (\"\" for none), then the "
                      "arm ids. If the skill's `begin` line has `\"<flags>\"`, write it out; if it "
                      "has none, the skill and sysop/scripts/ are from different versions: run "
-                     "sysop/scripts/sysop-update.sh, then the close")
+                     "sysop/scripts/sysop-update.sh (with --yes in a non-interactive shell), then the close")
     flags, arms = parse_flags(args[0]), args[1:]
     if set(arms) != ARMS or len(arms) != len(ARMS):
         raise Refuse(f"the skill marks arms {sorted(arms)} and this close_arms.py knows "
                      f"{sorted(ARMS)}: the skill and sysop/scripts/ are from different "
-                     "versions. Run sysop/scripts/sysop-update.sh, then the close")
+                     "versions. Run sysop/scripts/sysop-update.sh (with --yes in a non-interactive shell), then the close")
     policy, why = read_policy(top_level())
     if not policy:
         raise Refuse(why)
@@ -530,7 +531,7 @@ def cmd_loaded(args: list) -> int:
     if digest != digest_of(text):
         raise Refuse(f"DIGEST MISMATCH for {arm}: {digest!r} is not the digest of {step}. "
                      "Either the line was not copied from that file, or the file was edited "
-                     "after it shipped; `sysop/scripts/sysop-update.sh` restores it")
+                     "after it shipped; `sysop/scripts/sysop-update.sh` (with --yes in a non-interactive shell) restores it")
     append(p, "loaded", arm, digest, utc())
     print(f"LOADED: {arm}")
     return 0

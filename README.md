@@ -54,7 +54,7 @@ The smallest install — and the recommended first one for an existing codebase 
 
 ```bash
 git clone https://github.com/getsysop/sysop.git
-bash sysop/install.sh /path/to/your/project --packs auto --mode loop
+bash sysop/install.sh /path/to/your/project --packs auto --mode loop   # add --yes in a non-interactive shell
 cd /path/to/your/project && git add .claude/ sysop/ CLAUDE.md .gitignore; git add .agents/ 2>/dev/null; git commit -m "chore: install Sysop (loop mode)"
 ```
 
@@ -62,7 +62,7 @@ cd /path/to/your/project && git add .claude/ sysop/ CLAUDE.md .gitignore; git ad
 
 `--packs auto` detects your stack (`pyproject.toml` → python, `next.config.js` → nextjs-react, and so on) and installs the matching convention packs; omit `--packs` for an interactive picker, add `--dry-run` to preview without writing. A loop install needs no plugin — the plugin's extra commands are the lifecycle skills, whose supporting scripts a loop install deliberately doesn't have. [docs/loop-mode.md](./docs/loop-mode.md) walks day one: the first review round, the first promotion, the first mechanized check.
 
-**The full lifecycle** — planning, the task queue, worktree builds, the `/review-close` merge gate — is where the loop grows when it has earned its keep. Grow a loop install in place with `bash sysop/install.sh /path/to/your/project --update --mode full` (purely additive; nothing the loop has learned is touched), or start there directly by dropping `--mode loop` above — the commit line then gains `tasks/` (`git add .claude/ sysop/ tasks/ CLAUDE.md .gitignore; git add .agents/ 2>/dev/null`), and the commit matters: `/claim-task` builds in git worktrees, which only see committed files. Claude Code users on the full lifecycle can additionally install the slash commands as a plugin — `/plugin marketplace add getsysop/sysop`, then `/plugin install sysop@sysop`; the two paths are a pair, not alternatives (the plugin delivers only the slash commands — everything they operate on arrives via the bash installer). Updating, pinning to a release, plugin mechanics, permissions: [docs/install-and-update.md](./docs/install-and-update.md).
+**The full lifecycle** — planning, the task queue, worktree builds, the `/review-close` merge gate — is where the loop grows when it has earned its keep. Grow a loop install in place with `bash sysop/install.sh /path/to/your/project --update --mode full` (purely additive; nothing the loop has learned is touched; add `--yes` in a non-interactive shell, such as an agent's tool call), or start there directly by dropping `--mode loop` above — the commit line then gains `tasks/` (`git add .claude/ sysop/ tasks/ CLAUDE.md .gitignore; git add .agents/ 2>/dev/null`), and the commit matters: `/claim-task` builds in git worktrees, which only see committed files. Claude Code users on the full lifecycle can additionally install the slash commands as a plugin — `/plugin marketplace add getsysop/sysop`, then `/plugin install sysop@sysop`; the two paths are a pair, not alternatives (the plugin delivers only the slash commands — everything they operate on arrives via the bash installer). Updating, pinning to a release, plugin mechanics, permissions: [docs/install-and-update.md](./docs/install-and-update.md).
 
 ## Documentation
 

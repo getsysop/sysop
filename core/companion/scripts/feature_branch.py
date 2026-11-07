@@ -3,8 +3,13 @@
 
     python3 sysop/scripts/feature_branch.py landed       "<branch>" "<default branch>"
     python3 sysop/scripts/feature_branch.py keep-ignored "<workspace>" "<path>" "<commit or copy>"
+    python3 sysop/scripts/feature_branch.py base         "<branch>" "<default branch>"
 
 Run from the repo root. `landed` (step 0b) prints `LANDED: …` or `NOT LANDED — <reason>`.
+`base` (step 1) prints `BASE: <sha>`, the commit every Step 2 diff of the branch starts from:
+its newest common ancestor with `<default branch>` or `origin/<default branch>`, computed by
+`gate_verdict.py`'s `ends`, so the verdict key and the reviewed diff share one base. It exits 3
+on a placeholder and 2 when git cannot compute it.
 `keep-ignored` (step 3a) carries out one answer about a gitignored file the branch reads:
 `commit` adds it to the branch (refused, exit 5, outside a linked worktree), `copy` puts it in
 the main checkout. A missing or unknown
@@ -16,7 +21,7 @@ Phase 387 (`Q-409` P3), moved verbatim.
 """
 import sys
 
-_SUBCOMMANDS = ('landed', 'keep-ignored')
+_SUBCOMMANDS = ('landed', 'keep-ignored', 'base')
 if len(sys.argv) < 2 or sys.argv[1] not in _SUBCOMMANDS:
     sys.stderr.write('usage: ' + sys.argv[0] + ' {' + '|'.join(_SUBCOMMANDS) + '} <args>\n')
     sys.exit(2)
@@ -127,6 +132,19 @@ if _SUBCOMMAND == 'landed':
             print(f"NOT LANDED — {label} is at {tip[:12]}, {past}")
             sys.exit(0)
     print(f"LANDED: {via} — held doc {', '.join(held)}")
+
+elif _SUBCOMMAND == 'base':
+    import re
+    if len(sys.argv) != 3 or any(not a.strip() or re.search(r"<[^<>]*>", a) for a in sys.argv[1:]):
+        print("UNSUBSTITUTED or empty operand — write the branch and the default branch out. STOP.")
+        sys.exit(3)
+    from gate_verdict import Refuse, ends
+    try:
+        _tip, _base = ends(sys.argv[1], sys.argv[2])
+    except Refuse as e:
+        print(f"feature_branch.py base: {e}", file=sys.stderr)
+        sys.exit(2)
+    print(f"BASE: {_base}")
 
 elif _SUBCOMMAND == 'keep-ignored':
     import filecmp, os, re, shutil, subprocess, sys

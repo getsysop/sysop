@@ -5,10 +5,9 @@ counterpart; the classifier rules were validated against ~50 real Dependabot
 PRs in gdp-query-system before being frozen here.
 
 Scope. The pure classification core, which is the part that decides what gets
-merged vs. closed vs. held — i.e. the part where a bug has real-world cost. The
-`gh` shell-out (`_gh`, `_list_prs`, `_resolve_mergeable`, `execute`) is a thin
-subprocess wrapper deferred to manual/dry-run verification, consistent with how
-the suite treats other network/subprocess boundaries.
+merged vs. closed vs. held — i.e. the part where a bug has real-world cost —
+plus `execute`'s merge gate and the native auto-merge probe, driven through
+`main` with `_gh` mocked. No test runs a real `gh`.
 
 Surface covered:
 
@@ -20,17 +19,29 @@ Surface covered:
   pip close, trusted vs untrusted Action publisher, grouped/unparseable
   surface, docker auto-merge, unrecognized ecosystem.
 - ``mark_superseded`` — open-set duplicate collapse, single-PR no-op, the
-  highest-target-wins rule, and that closed-action PRs are excluded.
+  highest-target-wins rule, that closed-action PRs are excluded, and that PRs
+  with no target version (unparseable or grouped titles) never collapse.
+- ``probe_auto_merge`` / ``main`` — the three readings (allowed, not allowed,
+  unknown), the `--json` field, the `--execute` second-actor line, and that a
+  probe failure leaves the plan and the sweep as they were.
+- ``SKILL.md`` — Step 2's question and the conditioned replacement section.
 """
 
 from __future__ import annotations
 
 from unittest import mock
 
+import json
+import re
+from pathlib import Path
+
 import pytest
 
 # core/companion/scripts is on pythonpath (see pyproject.toml [tool.pytest]).
 import pr_dependabot as prd
+
+_SKILL = (Path(__file__).resolve().parents[1]
+          / "core" / "skills" / "pr-dependabot" / "SKILL.md")
 
 
 # ── semver_bump ──────────────────────────────────────────────────
@@ -318,3 +329,258 @@ def test_execute_hold_is_a_noop():
         results = prd.execute([p], None)
     assert mock_gh.call_count == 0
     assert results == []
+
+
+def test_mark_superseded_never_collapses_unparseable_titles():
+    # Dependabot's default title has no `chore(<scope>):` prefix, so every PR on
+    # a repo without a commit-message prefix keys as ('?', '?', None). Two
+    # unrelated PRs must both stay `surface`; collapsing them would close one.
+    plans = prd.build_plans([
+        _pr("Bump lodash from 4.17.20 to 4.17.21", number=2),
+        _pr("Bump axios from 1.0.0 to 1.0.1", number=1),
+    ])
+    assert [p.action for p in plans] == ["surface", "surface"]
+
+
+def test_mark_superseded_never_collapses_grouped_titles():
+    # Grouped titles key on their first package only and carry no target.
+    plans = prd.build_plans([
+        _pr("chore(npm): bump react and @types/react in /frontend", number=9),
+        _pr("chore(npm): bump react and react-dom in /frontend", number=8),
+    ])
+    assert [p.action for p in plans] == ["surface", "surface"]
+
+
+# ── native auto-merge probe ──────────────────────────────────────
+#
+# `_gh` is mocked with a side effect keyed on the command: the GraphQL probe,
+# the PR list, and (under --execute) the merge. The probe must never pass a
+# repo to `_gh`, because `_gh` appends it as `-R`, which `gh api` rejects.
+
+
+_OPEN_PRS = [
+    {"number": 1, "title": "chore(npm): bump x from 1.0.0 to 1.0.1 in /frontend",
+     "url": "u/1", "state": "OPEN", "statusCheckRollup": [],
+     "mergeable": "UNKNOWN"},
+]
+
+
+def _graphql(value):
+    return json.dumps({"data": {"repository": {"autoMergeAllowed": value}}})
+
+
+def _fake_gh(probe, prs=_OPEN_PRS):
+    """`probe` is the GraphQL stdout, or an exception to raise."""
+    calls = []
+
+    def fake(args, repo):
+        calls.append((list(args), repo))
+        if args[:2] == ["api", "graphql"]:
+            if isinstance(probe, BaseException):
+                raise probe
+            return probe
+        if args[:2] == ["pr", "list"]:
+            return json.dumps(prs)
+        return ""
+    return fake, calls
+
+
+def _run(argv, probe, capsys, prs=_OPEN_PRS):
+    fake, calls = _fake_gh(probe, prs)
+    with mock.patch("pr_dependabot._gh", side_effect=fake), \
+         mock.patch("pr_dependabot._resolve_mergeable",
+                    return_value=("MERGEABLE", "green")):
+        rc = prd.main(argv)
+    out = capsys.readouterr().out
+    return rc, out, calls
+
+
+def _probe_calls(calls):
+    return [c for c in calls if c[0][:2] == ["api", "graphql"]]
+
+
+@pytest.mark.parametrize("probe,state,reason_part", [
+    (_graphql(True), "allowed", ""),
+    (_graphql(False), "not allowed", ""),
+    (_graphql(None), "unknown", "null"),
+    ("not json", "unknown", "did not carry"),
+    (json.dumps({"data": {"repository": None}}), "unknown", "did not carry"),
+    (json.dumps({"data": {}}), "unknown", "did not carry"),
+    (RuntimeError("`gh api graphql` failed: HTTP 401"), "unknown", "HTTP 401"),
+    (FileNotFoundError("gh"), "unknown", "gh could not read it"),
+])
+def test_probe_auto_merge_readings(probe, state, reason_part):
+    fake, _ = _fake_gh(probe)
+    with mock.patch("pr_dependabot._gh", side_effect=fake):
+        reading = prd.probe_auto_merge("o/r")
+    assert reading.state == state
+    assert reason_part in reading.reason
+    if state != "unknown":
+        assert reading.reason == ""
+
+
+@pytest.mark.parametrize("repo,expected", [
+    (None, ["-F", "owner={owner}", "-F", "name={repo}"]),
+    ("cli/cli", ["-f", "owner=cli", "-f", "name=cli"]),
+    ("https://github.com/cli/cli", ["--hostname", "github.com", "-f", "owner=cli",
+                                    "-f", "name=cli"]),
+    ("https://ghe.example/o/r.git", ["--hostname", "ghe.example", "-f", "owner=o",
+                                     "-f", "name=r"]),
+    ("ghe.example/o/r", ["--hostname", "ghe.example", "-f", "owner=o",
+                         "-f", "name=r"]),
+])
+def test_probe_names_the_repo_in_the_request_not_with_dash_r(repo, expected):
+    fake, calls = _fake_gh(_graphql(True))
+    with mock.patch("pr_dependabot._gh", side_effect=fake):
+        prd.probe_auto_merge(repo)
+    (args, passed_repo), = _probe_calls(calls)
+    assert passed_repo is None, "gh api takes no -R; the repo must not reach _gh"
+    assert "-R" not in args
+    assert args[2:2 + len(expected)] == expected
+    assert any(a.startswith("query=") and "autoMergeAllowed" in a for a in args)
+
+
+@pytest.mark.parametrize("repo", ["justaname", "a/b/c/d", "o/"])
+def test_probe_malformed_repo_is_unknown_without_calling_gh(repo):
+    fake, calls = _fake_gh(_graphql(True))
+    with mock.patch("pr_dependabot._gh", side_effect=fake):
+        reading = prd.probe_auto_merge(repo)
+    assert reading.state == "unknown"
+    assert _probe_calls(calls) == []
+
+
+def test_plan_header_reads_allowed_with_second_actor_line(capsys):
+    rc, out, _ = _run(["--repo", "o/r"], _graphql(True), capsys)
+    assert rc == 0
+    lines = out.splitlines()
+    assert lines[0] == "PLANNED ACTIONS"
+    assert lines[1].startswith("native auto-merge: allowed")
+    assert "second merge actor" in lines[1]
+    assert "dry-run — nothing changed" in out
+
+
+def test_plan_header_reads_not_allowed(capsys):
+    rc, out, _ = _run([], _graphql(False), capsys)
+    assert rc == 0
+    assert out.splitlines()[1] == (
+        "native auto-merge: not allowed — this sweep is the merge actor.")
+    assert "second merge actor" not in out
+
+
+def test_probe_failure_is_unknown_and_the_plan_still_prints(capsys):
+    rc, out, _ = _run(["--repo", "o/r"],
+                      RuntimeError("`gh api graphql` failed: boom"), capsys)
+    assert rc == 0, "a probe failure must not stop the run"
+    assert out.splitlines()[1].startswith("native auto-merge: unknown (")
+    assert "boom" in out
+    assert "#1" in out and "merge" in out
+    assert "second merge actor" not in out
+
+
+def test_empty_plan_still_prints_the_reading(capsys):
+    rc, out, _ = _run([], _graphql(False), capsys, prs=[])
+    assert rc == 0
+    assert out.splitlines() == [
+        "native auto-merge: not allowed — this sweep is the merge actor.",
+        "No open Dependabot PRs. Nothing to sweep.",
+    ]
+
+
+@pytest.mark.parametrize("probe,state", [
+    (_graphql(True), "allowed"),
+    (_graphql(False), "not allowed"),
+    (RuntimeError("`gh api graphql` failed: boom"), "unknown"),
+])
+def test_json_carries_the_reading(probe, state, capsys):
+    rc, out, _ = _run(["--json"], probe, capsys)
+    assert rc == 0
+    data = json.loads(out)
+    assert data["native_auto_merge"]["state"] == state
+    assert [p["number"] for p in data["plans"]] == [1]
+
+
+def test_execute_repeats_the_second_actor_line_and_still_merges(capsys):
+    rc, out, calls = _run(["--execute", "--repo", "o/r"], _graphql(True),
+                          capsys)
+    assert rc == 0
+    assert out.count("this sweep would be a second merge actor") == 2
+    assert out.rstrip().splitlines()[-1].startswith("native auto-merge: allowed")
+    assert (["pr", "merge", "1", "--squash"], "o/r") in calls
+
+
+@pytest.mark.parametrize("probe", [
+    _graphql(False), RuntimeError("`gh api graphql` failed: boom"),
+])
+def test_execute_without_allowed_runs_as_before(probe, capsys):
+    rc, out, calls = _run(["--execute", "--repo", "o/r"], probe, capsys)
+    assert rc == 0
+    assert "second merge actor" not in out
+    assert (["pr", "merge", "1", "--squash"], "o/r") in calls
+    assert "✅ #1 merged" in out
+
+
+def test_validate_does_not_probe(capsys):
+    rc, _, calls = _run(["--validate"], _graphql(True), capsys)
+    assert rc == 0
+    assert _probe_calls(calls) == []
+
+
+# ── SKILL.md routes on the reading ───────────────────────────────
+
+
+def _section(text, heading):
+    m = re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", text,
+                  re.M | re.S)
+    assert m, f"SKILL.md lost its '## {heading}' section"
+    return " ".join(m.group(1).split())   # phrases may wrap across lines
+
+
+def test_skill_step2_asks_an_explicit_question_when_allowed():
+    step2 = _section(_SKILL.read_text(),
+                     "Step 2: Gate on human confirmation before executing")
+    assert "The reading is `allowed`" in step2
+    assert "explicit question" in step2
+    assert "second merge actor" in step2
+    assert "Merge with this skill anyway?" in step2
+
+
+def test_skill_replacement_section_is_conditioned_on_the_reading():
+    section = _section(_SKILL.read_text(),
+                       "Replacing a server-side auto-merge workflow")
+    allowed_at = section.find("When the reading is `allowed`, give no advice")
+    retire_at = section.find("Retiring that workflow")
+    otherwise_at = section.find("Otherwise (`not allowed` or `unknown`)")
+    assert allowed_at != -1, "no no-retire-advice arm for `allowed`"
+    assert otherwise_at != -1 and retire_at != -1
+    assert allowed_at < otherwise_at < retire_at, (
+        "the retire note must sit under the not-allowed/unknown arm")
+
+
+def test_skill_step1_keeps_the_reading():
+    step1 = _section(_SKILL.read_text(), "Step 1: Dry-run first — always")
+    assert "`native auto-merge:`" in step1
+    # An install whose skill updated before its scripts prints no line.
+    assert "If the plan has no such line" in step1
+    assert "treat the reading as `unknown`" in step1
+
+
+def test_with_no_repo_the_probe_names_the_listed_prs_repo_and_host(capsys):
+    """`gh api` fills `{owner}`/`{repo}` from the remote but asks its default host,
+    while `gh pr list` asks the remote's host. With PRs listed, the probe names the
+    repo and host they came from."""
+    prs = [dict(_OPEN_PRS[0], url="https://ghe.example/o/r/pull/7")]
+    _rc, _out, calls = _run([], _graphql(False), capsys, prs=prs)
+    (args, _), = _probe_calls(calls)
+    assert args[2:8] == ["--hostname", "ghe.example", "-f", "owner=o", "-f", "name=r"]
+
+
+def test_a_versioned_grouped_title_never_supersedes():
+    """`bump foo and bar from A to B` keys on `foo` alone; it is not a duplicate of
+    a PR that bumps only `foo`."""
+    plans = prd.build_plans([
+        {"number": 10, "title": "chore(npm): bump foo and bar from 1.0.0 to 1.1.0",
+         "state": "OPEN", "mergeable": "MERGEABLE", "statusCheckRollup": []},
+        {"number": 11, "title": "chore(npm): bump foo from 1.0.0 to 1.2.0",
+         "state": "OPEN", "mergeable": "MERGEABLE", "statusCheckRollup": []},
+    ])
+    assert "close-superseded" not in {p.action for p in plans}

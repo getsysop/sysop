@@ -99,7 +99,7 @@ LOOP_EXCLUDE_SHARED="decomposition-rubric guided-mode main-push-guard plan-revie
 # _git_lib.sh (Phase 368, `Q-376`: the pre-merge-commit hook, armed in both
 # modes, sources it to resolve the protected branch) and default_branch.sh (the
 # command that hook's fallback warning tells the operator to run).
-LOOP_EXCLUDE_SCRIPTS="backfill_completed_dates.py batch_work.sh claim_task.sh clear_user_action.py cleanup_worktrees.sh close_batch.sh close_gate.py close_run.py ignored_refs.py clone_sync.py smoke_detect.py pending_doc_collect.py close_index.py claim_record.py feature_branch.py convention_size.py gate_verdict.py security_map_filter.py claim_artifacts.py workspace_locate.py resolve_append_conflict.py smoke_record.py pr_head_check.py _closed_tasks.py close_check.py close_arms.py git_check.py git_ro.py review_pins.py close_state.py next_task.py parse_subagent_envelope.py pending_doc_hold.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
+LOOP_EXCLUDE_SCRIPTS="backfill_completed_dates.py batch_work.sh claim_task.sh clear_user_action.py cleanup_worktrees.sh close_batch.sh close_gate.py close_run.py ignored_refs.py clone_sync.py smoke_detect.py pending_doc_collect.py close_index.py claim_record.py feature_branch.py convention_size.py gate_verdict.py security_map_filter.py claim_artifacts.py workspace_locate.py resolve_append_conflict.py smoke_record.py pr_head_check.py _closed_tasks.py _doc_drift.py close_check.py close_arms.py git_check.py git_ro.py review_pins.py close_state.py next_task.py parse_subagent_envelope.py pending_doc_hold.py permission_denied_hook.py pr_dependabot.py scope_overlap.py sitrep_survey.py validate_tasks.py"
 # `Q-671`: set when `--update --mode loop` runs over a full install's lock. The
 # sweep then removes the lifecycle paths (they leave MANAGED_PATHS), and
 # install_permissions strips the full-only allow rules and Sysop's hooks, since
@@ -805,14 +805,18 @@ detect_packs() {
 # readability so a non-interactive caller (agent tool subprocess, CI)
 # gets an actionable error naming the flag that bypasses the prompt,
 # instead of bash's cryptic "Device not configured" + a silent abort.
-_require_tty_or_flag() {
-  # Args: <flag-suggestion-text>
+_tty_openable() {
   # `[[ -r /dev/tty ]]` is unreliable — on macOS the device file passes the
   # readability test even when no controlling terminal can actually open it.
   # Attempt an open in a subshell with stderr suppressed; non-zero exit means
   # the prompt's `read -r ... < /dev/tty` would fail with "Device not
   # configured" + a silent abort.
-  if ! ( : < /dev/tty ) 2>/dev/null; then
+  ( : < /dev/tty ) 2>/dev/null
+}
+
+_require_tty_or_flag() {
+  # Args: <flag-suggestion-text>
+  if ! _tty_openable; then
     err "Non-interactive environment (no controlling terminal)."
     err "  $1"
     exit 1
@@ -863,6 +867,24 @@ prompt_packs() {
     none|core|-) printf '%s' "" ;;
     *)           printf '%s' "$input" ;;
   esac
+}
+
+# Prints " --yes" when the apply this run advises would need it: --yes was
+# given (keep it), or no terminal can answer confirm's prompt. A dry run never
+# reaches confirm, so its advice must carry the flag the apply will need.
+_yes_flag_for_apply() {
+  if [[ "$ASSUME_YES" -eq 1 ]] || ! _tty_openable; then
+    printf ' --yes'
+  fi
+}
+
+# The closing line of a dry run (fresh install, --update, --adopt).
+_say_dry_run_complete() {
+  if [[ -n "$(_yes_flag_for_apply)" ]]; then
+    say "Dry-run complete. Re-run without --dry-run and with --yes to apply."
+  else
+    say "Dry-run complete. Re-run without --dry-run to apply."
+  fi
 }
 
 confirm() {
@@ -1330,17 +1352,31 @@ probe_source_tree_state() {
     #
     # --adopt is its own case: --ref is rejected for it at arg-validation, so
     # offering --ref there would prescribe a command that exits 2.
-    if [[ "$DRY_RUN" -eq 1 ]]; then
+    # With --yes no `Proceed?` follows, so "decline below" would name a prompt
+    # that never comes: the run applies the working tree as it stands.
+    # --adopt copies no files and rejects --ref, so it gets neither sentence.
+    if [[ "$ADOPT_MODE" -eq 1 ]]; then
+      say "  To adopt from a clean source instead:"
+    elif [[ "$DRY_RUN" -eq 1 ]]; then
       say "  To take the committed tree instead, re-run with --ref:"
+    elif [[ "$ASSUME_YES" -eq 1 ]]; then
+      say "  This run applies the working tree (--yes asks nothing). To take the committed tree instead, re-run with --ref:"
+    elif ! _tty_openable; then
+      say "  With no terminal this run stops at Proceed? without writing. To take the committed tree, re-run with --ref:"
     else
       say "  To take the committed tree instead, decline below and re-run:"
     fi
     if [[ "$ADOPT_MODE" -eq 1 ]]; then
       note "commit the source clone first — --ref is not valid with --adopt"
     elif [[ "$UPDATE_MODE" -eq 1 ]]; then
-      note "bash $src/install.sh \"$TARGET\" --update --ref HEAD   # or a release tag"
+      note "bash $src/install.sh \"$TARGET\" --update --ref HEAD$(_yes_flag_for_apply)   # HEAD or a release tag"
     else
-      note "bash $src/install.sh \"$TARGET\" --ref HEAD            # or a release tag"
+      # A fresh install also needs the run's packs and mode: without them the
+      # apply stops at the pack picker, or installs full over a chosen loop.
+      local _fresh_flags=""
+      [[ "$PACKS_PROVIDED" -eq 1 ]] && _fresh_flags+=" --packs '$PACKS_ARG'"
+      [[ "$MODE_PROVIDED" -eq 1 ]] && _fresh_flags+=" --mode $INSTALL_MODE"
+      note "bash $src/install.sh \"$TARGET\"$_fresh_flags --ref HEAD$(_yes_flag_for_apply)   # HEAD or a release tag"
     fi
   fi
   return 0
@@ -5066,7 +5102,7 @@ cmd_adopt() {
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     say ""
-    say "Dry-run complete. Re-run without --dry-run to apply."
+    _say_dry_run_complete
     return 0
   fi
 
@@ -5556,7 +5592,10 @@ _ns_scan_stale_refs() {
       .claude/settings.json|.claude/settings.local.json) _ep="$hit_pat" ;;
       *)                                                _ep="$extra_pat" ;;
     esac
-    if sed -E "$strip" "$extra" 2>/dev/null | grep -IEq "$_ep"; then
+    # `grep >/dev/null`, not `grep -q`: `-q` exits at the first match, `sed` then
+    # takes SIGPIPE on its next write, and `pipefail` makes that the `if`'s status.
+    # A match on line 1 of a ~60 KB hook was missed on every run that way.
+    if sed -E "$strip" "$extra" 2>/dev/null | grep -IE "$_ep" >/dev/null; then
       # Marked wide FIRST: a file that is both tracked and in this set must be
       # captured with the wider pattern, or a tracked workflow carrying only a
       # `^scripts/` trigger regex would be silently dropped by the narrow one.
@@ -6751,7 +6790,7 @@ main() {
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     say ""
-    say "Dry-run complete. Re-run without --dry-run to apply."
+    _say_dry_run_complete
     return 0
   fi
 

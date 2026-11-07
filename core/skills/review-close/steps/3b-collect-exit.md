@@ -1,7 +1,7 @@
    - **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
       ```bash
-      python3 sysop/scripts/close_arms.py loaded "<close-id>" 3b-collect-exit 641a0411b8448eac "<skill directory>"
+      python3 sysop/scripts/close_arms.py loaded "<close-id>" 3b-collect-exit bfd5f9a5019cc5d0 "<skill directory>"
       ```
 
       It prints `LOADED: 3b-collect-exit`. **Exit 2**: stop and show its stderr.
@@ -45,7 +45,7 @@
 
       > **Why staleness is decided here and not at Step 4c, where the damage would be done.** Step 4c routes a doc's `summary:` into `PROJECT_STATUS.md` §6 in the same commit that flips its task to `done`, and nothing between the two asks whether the doc still describes the branch — measured at filing time: `mtime`, *stale doc*, *refresh the pending* and *describes the branch* return **zero** hits across all three lifecycle skills. The reported instance is not an edge case: three prod-write repair docs still reading *"NO prod write has been performed"* while their task bodies read *"Prod write PERFORMED and verified"*. A prod-write task reaches Step 4c stale **by construction**, because it writes its doc when the code is ready and achieves its deliverable afterwards, on the same branch, in a later commit.
       >
-      > **Step 4c cannot ask it on the dominant shape, which is worse than not being able to ask it at all.** The test is `git rev-list --count <branch_tip>..refs/heads/<branch>`, an ancestry test over the branch's own history, and **Step 4a item 2 rebases each approved branch onto the merge target**. That rewrites the branch's SHAs, so on the default integration-branch shape the recorded `branch_tip` is an orphan by the time 4c runs and the count is meaningless — the same ancestry property step 1b's own blockquote documents at length, arriving there from the other direction.
+      > **Step 4c cannot ask it on the dominant shape, which is worse than not being able to ask it at all.** The test was `git rev-list --count <branch_tip>..refs/heads/<branch>`, an ancestry test over the branch's own history (the collect now pairs an orphaned tip's commits by patch instead, and still needs the workspace this step keeps for its remedy), and **Step 4a item 2 rebases each approved branch onto the merge target**. That rewrites the branch's SHAs, so on the default integration-branch shape the recorded `branch_tip` is an orphan by the time 4c runs and the count is meaningless — the same ancestry property step 1b's own blockquote documents at length, arriving there from the other direction.
       >
       > **Two shapes leave the branch intact, and that is the argument, not a caveat.** Under the Step 4-pre **PR-reuse** shape Step 4a is skipped outright, and a branch 4a classifies **published** is merged `--no-ff` rather than rebased — *"`--no-ff` leaves `<branch>` exactly where it was"*. On both, a 4c check would answer correctly. So a gate sited at 4c would be **live on the shapes that rarely fire and inert on the one that always does**, reporting nothing while the record goes wrong — this project's own shipped-inert class. A gate at 3b is correct on all of them, because 3b runs before Step 4 touches anything.
       >

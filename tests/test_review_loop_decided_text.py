@@ -109,7 +109,9 @@ PINS = {
     "WORKFLOW 3.5 gate item": "4ef1b30d1831e026",
     "WORKFLOW 3.5 write-target note": "3341084e0ac9a792",
     "WORKFLOW 3.5 cross-round note": "ff5775e2d5683bf2",
-    "WORKFLOW 6.5 accounting": "88411dcbe4c13a3f",
+    # Moved 2026-11-06: the `degraded` bullet now names a file a semgrep rule timed out on, a
+    # state the stage records since that date. The decided accounting is otherwise unchanged.
+    "WORKFLOW 6.5 accounting": "fc3472df7e57e2f3",
     "WORKFLOW 8.2b step 6": "37abadb0b9c2dd07",
     "WORKFLOW 8.2c fail-closed": "de81467ace59de53",
     "install-and-update update mode": "4cfe30206613f58e",

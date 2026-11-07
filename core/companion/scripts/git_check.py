@@ -12,6 +12,7 @@
     python3 sysop/scripts/git_check.py fork-has        "<default branch>" "<path>"
     python3 sysop/scripts/git_check.py published       "<branch>"
     python3 sysop/scripts/git_check.py closed-tasks    "<ours ref>" "<theirs ref>"
+    python3 sysop/scripts/git_check.py tracked-clean
 
 `_shared/main-push-guard.md` Rule A and the skills' fail-stops used to be
 `test "$(git …)" = "<branch>" || { echo …; exit 1; }`. Under `dontAsk` none of that binds a
@@ -45,6 +46,15 @@ base that `<theirs ref>` has since moved to `tasks/archive/` or deleted, it prin
 `CLOSED TASK RE-ADDED:` line for a body `<ours ref>` added that `<theirs ref>` holds closed, or
 holds since the merge base in the other live directory (`open/` ↔ `deferred/`); then exit 1
 `STOP: …`; exit 0 `OK: …` when there is none, and exit 2 when there is no merge base.
+`tracked-clean` (`/review-close` Step 1b, and Step 3b before any worktree is removed) runs in the
+primary checkout and asks whether a tracked file there is modified, staged or deleted, which the
+close's later rebases and resets refuse and its landing checks would read as its own write. It
+prints an `EDITED: <XY> <path>` line per `git status --porcelain` entry, renames shown as a delete
+and an add, then an `UNTRACKED: <path>` line per untracked file (at most 20, then a count), which
+a commit of the edits would leave out, then exit 1 `STOP: …`; exit 0 `OK: …` when no tracked file
+is edited, whatever is untracked. Exit 4 `STOP: …` when a path is
+unmerged or a merge, rebase, cherry-pick or revert is in progress, which a commit must not
+conclude; exit 2 in a linked worktree.
 """
 from __future__ import annotations
 
@@ -56,10 +66,11 @@ import sys
 from typing import NoReturn
 
 SUBCOMMANDS = ('head-is', 'head-is-not', 'head-matches', 'primary-checkout', 'ancestor',
-                'nothing-staged', 'file', 'lock', 'fork-has', 'published', 'closed-tasks')
+                'nothing-staged', 'file', 'lock', 'fork-has', 'published', 'closed-tasks',
+               'tracked-clean')
 _ARITY = {'head-is': 1, 'head-is-not': 1, 'head-matches': 1, 'primary-checkout': 0,
           'ancestor': 2, 'nothing-staged': 1, 'file': 1, 'lock': 1, 'fork-has': 2,
-          'published': 1, 'closed-tasks': 2}
+          'published': 1, 'closed-tasks': 2, 'tracked-clean': 0}
 
 
 def say(code: int, line: str) -> NoReturn:
@@ -127,6 +138,49 @@ def main(argv: list[str]) -> None:
         if os.path.realpath(gd) == os.path.realpath(cd):
             say(0, 'OK: this is the primary checkout')
         say(1, 'STOP: this is a linked worktree, not the primary checkout')
+
+    if sub == 'tracked-clean':
+        rc1, gd = git('rev-parse', '--absolute-git-dir')
+        rc2, cd = git('rev-parse', '--path-format=absolute', '--git-common-dir')
+        if rc1 or rc2 or not gd or not cd:
+            say(2, 'STOP: git rev-parse failed; not in a git checkout?')
+        if os.path.realpath(gd) != os.path.realpath(cd):
+            say(2, 'STOP: this is a linked worktree; run this from the main checkout')
+        for name, what in (('MERGE_HEAD', 'merge'), ('CHERRY_PICK_HEAD', 'cherry-pick'),
+                           ('REVERT_HEAD', 'revert'), ('rebase-merge', 'rebase'),
+                           ('rebase-apply', 'rebase or am')):
+            if os.path.lexists(os.path.join(gd, name)):
+                say(4, f'STOP: a {what} is in progress in this checkout; finish or abort it, '
+                       'then run the close again')
+        try:
+            r = subprocess.run(['git', 'status', '--porcelain=v1', '-z', '--untracked-files=all',
+                                '--no-renames'], capture_output=True)
+        except OSError as e:
+            say(2, f'STOP: git could not run: {e}')
+        if r.returncode != 0:
+            say(2, f'STOP: git status failed (exit {r.returncode}): '
+                   f'{os.fsdecode(r.stderr).strip()}')
+        found = [e for e in r.stdout.split(b'\0') if e]
+        entries = [e for e in found if not e.startswith(b'?? ')]
+        untracked = [e[3:] for e in found if e.startswith(b'?? ')]
+        if not entries:
+            say(0, 'OK: no tracked file is modified, staged or deleted in this checkout')
+        # Bytes, as git gave them: a path that is not UTF-8 must not stop the report.
+        for e in entries:
+            sys.stdout.buffer.write(b'EDITED: ' + e + b'\n')
+        # A commit of the edits leaves these out, and a person deciding on one needs to see them:
+        # an edited task index can name a body only an untracked file holds.
+        for u in untracked[:20]:
+            sys.stdout.buffer.write(b'UNTRACKED: ' + u + b'\n')
+        if len(untracked) > 20:
+            sys.stdout.buffer.write(f'UNTRACKED: … and {len(untracked) - 20} more\n'.encode())
+        sys.stdout.buffer.flush()
+        if any(e[:2] in (b'DD', b'AU', b'UD', b'UA', b'DU', b'AA', b'UU') for e in entries):
+            say(4, 'STOP: a path is unmerged in this checkout; resolve or abort it, '
+                   'then run the close again')
+        say(1, f'STOP: {len(entries)} tracked file(s) in this checkout are modified, staged or '
+               'deleted; the close rebases and resets here, and its later checks would read them '
+               'as its own writes')
 
     if sub == 'ancestor':
         commit, ref = ops

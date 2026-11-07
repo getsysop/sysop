@@ -320,7 +320,7 @@ python3 sysop/scripts/scope_overlap.py <TASK_ID>
 
 The same honest limit applies: on a colleague's live lock this takes their claim.
 
-To hand a stranded batch back, use `bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>` — it reverses both halves of the claim (the `review_tasks.md` status and the lock). `claim_task.sh --release` refuses a `BATCH-*` ID on purpose: it owns `tasks/index.yml`, so it would release the lock and leave the batch reading `In Progress` forever.
+To hand a stranded batch back, use `bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>` — it reverses both halves of the claim (the `review_tasks.md` status and the lock). Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock. `claim_task.sh --release` refuses a `BATCH-*` ID on purpose: it owns `tasks/index.yml`, so it would release the lock and leave the batch reading `In Progress` forever.
 
 ## Step 3: Generate Branch Name
 
@@ -499,6 +499,8 @@ This commit lands on the default branch in the shared **primary** worktree, and 
 bash sysop/scripts/claim_task.sh --commit-claim <TASK_ID>
 ```
 
+Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock.
+
 **Why a script, and not the four bash lines this step used to print.** Those lines did an unlocked `git add` + `git commit` over an index Step 4a had already rewritten in place. Between 4a and here, a concurrent claim's whole-file `safe_dump` can overwrite your flip — and the old block's `git diff --cached --quiet ||` then found nothing to commit and **exited 0**, reporting a successful claim over a task still `open` at `HEAD`. Measured over 100 concurrent trials with **two claims starting together and nothing between 4a and 4d**, it happened between 6 and 25 times depending on machine and load — silently, with the losing session going on to build against a task `/next-task` would hand to somebody else. **State the window with the number.** With 4b and 4c running in between — the shape an operator actually types — the same harness measured **0 of 100 before the fix**, because the longer gap lets one claim finish first. Two claims that start seconds apart are the real hazard, and the range is the honest figure for it: the *loss* reproduces, the *rate* does not. Post-fix the harness measures 0 of 100 in both windows on every run, and its serial control is clean in every state.
 
 **What the script does that the inline block could not.** It takes the **tracker write mutex** (`sysop/runtime/tracker.write.lock` — the same one `batch_work.sh` and `close_batch.sh` take), and inside it: applies `_shared/main-push-guard.md` **Rule A** by resolving the default branch and asserting the primary checkout's `HEAD` is still on it; **re-reads the index and re-flips if your task came back `open`**; then, with Rule A applied again at the commit, commits `tasks/index.yml` and only that path, and checks that the default branch's ref now holds the claim. The re-flip is the half that matters — a mutex taken here cannot retroactively protect the write Step 4a already made outside it, so the script repairs rather than merely serializes. It says so out loud when it re-flips, because a silent repair would look exactly like a clean run.
@@ -531,7 +533,7 @@ The check above closes the real defect instead: it tests the exact precondition 
 
 If 4b got as far as creating anything, undo **only this task's** artifacts. Do **not** reach for `cleanup_worktrees.sh --force`: it takes no path operand, so it removes *every* non-main worktree — ACTIVE ones included — and would destroy any concurrent claim's uncommitted work (WORKFLOW.md § 8.4). Which command applies depends on how far 4b got, because `claim_task.sh` writes the lock **last** (branch → worktree → lock):
 
-- **A lock exists at `sysop/runtime/locks/<TASK_ID>.lock`** — i.e. 4b completed and 4c's validator is what failed. Use the lock-aware inverse: `bash sysop/scripts/claim_task.sh --release <TASK_ID>`. It removes the recorded worktree, releases the lock, and treats the already-`open` status left by the `git checkout` above as an info line rather than an error. It leaves the branch — add `--delete-branch` to drop it, or `git branch -d <BRANCH_NAME>` afterwards. To discard uncommitted work in the worktree, add `--force` **before** the task ID (`--release --force <TASK_ID>`): the script consumes flags only ahead of the positional and rejects a trailing one. **Its index-flip step needs a PyYAML-capable `python3` on `PATH`** — if it reports PyYAML unavailable it exits having changed nothing and prints a manual recipe; activate the project venv and re-run rather than hand-editing.
+- **A lock exists at `sysop/runtime/locks/<TASK_ID>.lock`** — i.e. 4b completed and 4c's validator is what failed. Use the lock-aware inverse: `bash sysop/scripts/claim_task.sh --release <TASK_ID>`. Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock. It removes the recorded worktree, releases the lock, and treats the already-`open` status left by the `git checkout` above as an info line rather than an error. It leaves the branch — add `--delete-branch` to drop it, or `git branch -d <BRANCH_NAME>` afterwards. To discard uncommitted work in the worktree, add `--force` **before** the task ID (`--release --force <TASK_ID>`): the script consumes flags only ahead of the positional and rejects a trailing one. **Its index-flip step needs a PyYAML-capable `python3` on `PATH`** — if it reports PyYAML unavailable it exits having changed nothing and prints a manual recipe; activate the project venv and re-run rather than hand-editing.
 - **No lock exists** — i.e. 4b failed before writing the lock (it is written last). `--release` refuses here on purpose, the lock being the claim record it keys on, so undo by hand: `git worktree remove <worktree-path>` if a worktree exists (it refuses on uncommitted or untracked changes; `--force` to discard), then `git branch -d <BRANCH_NAME>`. A 4b failure *at* `git worktree add` leaves the branch and no worktree, so the branch delete is the whole cleanup there — harmless if skipped, since 4b tolerates a pre-existing branch on the retry.
 
 Then report the failing step's error output and stop.
@@ -540,6 +542,8 @@ Then report the failing step's error output and stop.
 ```bash
 bash sysop/scripts/batch_work.sh <BATCH_NUMBER>
 ```
+
+Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock.
 The script creates the branch and worktree, writes `sysop/runtime/locks/<CLAIM_ID>.lock`, and then handles the `Pending` → `In Progress` transition in `review_tasks.md` and commits it on main, last — the same lock file, in the same main-repo-anchored directory, that `claim_task.sh --lock` writes for a roadmap task. (Review-batch state still lives in `review_tasks.md` — only roadmap tasks live in `tasks/index.yml`. The *lock* is the one thing both kinds share, which is what makes `/next-task`, `/sitrep` and `scope_overlap.py` able to see a batch and a task the same way.)
 
 **The claim's STATUS DECISION is all-or-nothing** — and only that; the writes are not, and they now come before it: a failure before the flip leaves a branch and worktree (and the lock, when removing it fails), named in the refusal, which a re-run adopts. Off the default branch, or with a dirty `review_tasks.md`, the script now **refuses before writing anything** — no branch, no worktree, no lock — and exits non-zero, because there is no consistent claim to be made from either state: the status flip has to commit on the default branch in the primary. A repo with no `origin` is not one of those cases and claims normally; only a configured remote that will not fast-forward refuses. Before this change the flip was best-effort while the lock was not, so a skipped flip left a `Pending` batch holding a lock at exit 0 and five readers disagreeing about whether it was claimed.
@@ -1205,6 +1209,8 @@ Three outcomes:
   bash sysop/scripts/claim_task.sh --release <CLAIM_ID>
   ```
 
+  Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock.
+
   ```bash
   python3 sysop/scripts/git_check.py head-is "<default branch>" && git add tasks/index.yml && git commit -m "chore: release <CLAIM_ID>"
   ```
@@ -1215,7 +1221,7 @@ Three outcomes:
 
   **Review batches need no commit here:** `batch_work.sh --release` owns `review_tasks.md` and commits its own reversal, so its working tree comes back clean. The asymmetry is real, not an oversight — the two scripts divide the work differently.
 
-**Review batches:** the abandon outcome is `bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>`, **never** `claim_task.sh --release`. That script matches a `BATCH-*` id and a bare integer and **exits 1**, because it owns `tasks/index.yml` and releasing only the lock would leave the batch reading `In Progress` forever. Getting this wrong is a runtime hard error on the gate's own exit path.
+**Review batches:** the abandon outcome is `bash sysop/scripts/batch_work.sh --release <BATCH_NUMBER>`, **never** `claim_task.sh --release`. Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock. That script matches a `BATCH-*` id and a bare integer and **exits 1**, because it owns `tasks/index.yml` and releasing only the lock would leave the batch reading `In Progress` forever. Getting this wrong is a runtime hard error on the gate's own exit path.
 
 ### Step 7e: Spawn the executor
 
@@ -1416,6 +1422,8 @@ On `0`:
 ```bash
 bash sysop/scripts/claim_task.sh --release --delete-branch <CLAIM_ID>
 ```
+
+Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock.
 
 **Why the branch must go, stated because an earlier revision asserted it already had.** That
 revision claimed `--release` deletes the branch. **It does not** — `claim_task.sh` defaults

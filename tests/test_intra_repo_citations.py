@@ -199,7 +199,7 @@ CITATION_ANCHORS = {
     # `claim_record.py`, so its citation names the script and its sibling's line moved up.
     ("core/skills/review-close/SKILL.md", "claim_record.py:80"):
         'emits `fence + "markdown"` below',
-    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1665"):
+    ("core/skills/review-close/SKILL.md", "claim-task/SKILL.md:1673"):
         "and not line.strip().strip(mark[0])",
     ("core/skills/auto-fix/SKILL.md", "archive_review_tasks.py:175"):
         "Merged|Complete",
@@ -253,7 +253,7 @@ CITATION_ANCHORS = {
         "open/<TASK-ID>.md",
     ("core/skills/review-close/SKILL.md", "onboard/SKILL.md:103"):
         "Test decision",
-    ("docs/one-rule.md", "core/companion/scripts/run_checks/grep.py:308"):
+    ("docs/one-rule.md", "core/companion/scripts/run_checks/grep.py:338"):
         "nosemgrep: recompile-inside-def",
 }
 

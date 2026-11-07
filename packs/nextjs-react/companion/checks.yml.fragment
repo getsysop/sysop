@@ -195,7 +195,11 @@ checks:
     severity: medium
     paths: ["<app dir>/"]
     include: ["*.ts", "*.tsx"]
-    exclude: ["*__tests__*", "*.test.ts", "*.test.tsx"]
+    exclude: ["*.test.ts", "*.test.tsx"]
+    # A test directory goes in `exclude_dir:`, not as `*__tests__*` in `exclude:`: GNU grep
+    # matches an `--exclude` glob against the file name only, so that glob skipped no file
+    # inside `__tests__/` on Linux, while macOS grep matched it against the whole path.
+    exclude_dir: ["__tests__", "sysop"]
     pattern: 'URL\.createObjectURL\('
     negative_pattern: 'URL\.revokeObjectURL\('
     invert_file_check: true

@@ -195,6 +195,224 @@ def test_git_check_chains_into_the_write_it_guards(repo: Path) -> None:
     assert p.returncode == 1 and g(repo, "rev-parse", "HEAD") == before
 
 
+# --- git_check.py tracked-clean (`/review-close` Steps 1b and 3b) ---------------------------
+# Phase 470 (`Q-747`): an edited tracked file in the main checkout made Step 4a's rebase, 4a-fix's
+# drop and Step 6's re-sync refuse mid-close, after Step 3b had removed the worktrees. The check
+# runs before the reviews (Step 1b, which offers a commit attended) and again before the first
+# worktree is removed (Step 3b, stop-only).
+
+def _tc(cwd: Path) -> subprocess.CompletedProcess:
+    return run("git_check.py", cwd, "tracked-clean")
+
+
+def test_tracked_clean_passes_a_clean_tree_and_an_untracked_file(repo: Path) -> None:
+    p = _tc(repo)
+    assert (p.returncode, p.stdout) == (0, "OK: no tracked file is modified, staged or deleted "
+                                           "in this checkout\n")
+    (repo / "scratch.txt").write_text("not tracked\n")
+    assert _tc(repo).returncode == 0
+
+
+def test_tracked_clean_names_each_edited_shape(repo: Path) -> None:
+    (repo / "a.txt").write_text("a\n")
+    (repo / "b.txt").write_text("b\n")
+    (repo / "c.txt").write_text("c\n")
+    g(repo, "add", "a.txt", "b.txt", "c.txt")
+    g(repo, *ID, "commit", "-q", "-m", "three")
+    (repo / "a.txt").write_text("a edited\n")       # modified, unstaged
+    g(repo, "rm", "-q", "b.txt")                     # deleted, staged
+    g(repo, "mv", "c.txt", "d.txt")                  # renamed, staged: a delete and an add
+    (repo / "e.txt").write_text("e\n")
+    g(repo, "add", "e.txt")                          # added, staged
+    (repo / "new").mkdir()
+    (repo / "new" / "u.txt").write_text("u\n")       # untracked, listed by file, not counted
+    p = _tc(repo)
+    assert p.returncode == 1, p.stdout
+    lines = p.stdout.splitlines()
+    assert sorted(lines[:-1]) == ["EDITED:  M a.txt", "EDITED: A  d.txt", "EDITED: A  e.txt",
+                                  "EDITED: D  b.txt", "EDITED: D  c.txt",
+                                  "UNTRACKED: new/u.txt"], lines
+    assert lines[-1].startswith("STOP: 5 tracked file(s)"), lines
+
+
+def test_tracked_clean_lists_untracked_files_only_beside_an_edit_and_caps_them(repo: Path) -> None:
+    """Lens B's M1 (Phase 470's round): `/add-task` leaves an edited `tasks/index.yml` and an
+    untracked body, and a commit of the edits alone would carry an entry without its body, so
+    the person deciding on that commit sees the untracked files. They never fail the check."""
+    for i in range(23):
+        (repo / f"u{i:02}.txt").write_text("u\n")
+    assert _tc(repo).stdout.startswith("OK:")
+    (repo / ".gitignore").write_text("sysop/runtime/\nedited\n")
+    lines = _tc(repo).stdout.splitlines()
+    assert [ln for ln in lines if ln.startswith("UNTRACKED: u")] == [
+        f"UNTRACKED: u{i:02}.txt" for i in range(20)], lines
+    assert "UNTRACKED: … and 3 more" in lines, lines
+
+
+def test_the_arm_offers_only_the_stop_where_the_commit_would_be_wrong() -> None:
+    arm = " ".join((REPO / "core" / "skills" / "review-close" / "steps" /
+                    "1b-dirty-primary.md").read_text().split())
+    assert ("Offer only `Stop the close` when `git branch --show-current` does not print "
+            "`<default branch>`, or when `tasks/index.yml` is `EDITED:` and an `UNTRACKED:` line "
+            "is under `tasks/`") in arm
+    assert "**Exit 1, under `--prepare`, `--headless` or `--unattended`**: stop." in arm
+
+
+def test_the_defect_a_dirty_tree_stops_the_rebase_and_the_check_sees_it_first(repo: Path) -> None:
+    """The reported shape: one unrelated edit to a file both branches hold alike, a local-only
+    branch behind main, and Step 4a's command. The checkout half runs and the rebase refuses,
+    leaving the main checkout on the branch."""
+    (repo / "main.txt").write_text("main moved\n")
+    g(repo, "add", "main.txt")
+    g(repo, *ID, "commit", "-q", "-m", "main moved")
+    (repo / ".gitignore").write_text("sysop/runtime/\nedited\n")
+    assert _tc(repo).returncode == 1
+    p = subprocess.run(["bash", "-c", f"git checkout -q feat && git {' '.join(ID)} rebase main"],
+                       cwd=repo, env=GIT_ENV, capture_output=True, text=True)
+    assert p.returncode != 0 and "unstaged changes" in p.stderr, p.stderr
+    assert g(repo, "branch", "--show-current") == "feat"
+
+
+def test_the_arms_commit_clears_the_check_and_keeps_every_edit(repo: Path) -> None:
+    """Step 1b's arm, run as written: the commit holds the edits and the check then passes."""
+    (repo / "log.md").write_text("one\n")
+    g(repo, "add", "log.md")
+    g(repo, *ID, "commit", "-q", "-m", "log")
+    (repo / "log.md").write_text("one\ntwo\n")
+    g(repo, "mv", ".gitignore", ".gitignore2")
+    arm = (REPO / "core" / "skills" / "review-close" / "steps" / "1b-dirty-primary.md").read_text()
+    cmd = next(ln.strip() for ln in arm.splitlines() if "&& git add -u && git commit" in ln)
+    cmd = (cmd.replace('"<default branch>"', "main").replace("<N>", "2")
+              .replace("python3 sysop/scripts/git_check.py", f'"{sys.executable}" "{SCRIPTS / "git_check.py"}"')
+              .replace("git commit", f"git {' '.join(ID)} commit"))
+    p = subprocess.run(["bash", "-c", cmd], cwd=repo, env=GIT_ENV, capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+    assert _tc(repo).returncode == 0
+    assert g(repo, "show", "HEAD:log.md") == "one\ntwo"
+    assert g(repo, "log", "-1", "--format=%s") == ("docs: review-close commit 2 tracked edit(s) "
+                                                     "left in the main checkout")
+    assert set(g(repo, "show", "--no-renames", "--name-only", "--format=", "HEAD").split()) == {".gitignore",
+                                                                               ".gitignore2", "log.md"}
+
+
+def test_tracked_clean_refuses_work_in_progress_with_exit_4(repo: Path) -> None:
+    # A merge stopped before its commit, with nothing unmerged: a commit would conclude it.
+    g(repo, *ID, "merge", "-q", "--no-ff", "--no-commit", "feat")
+    p = _tc(repo)
+    assert p.returncode == 4 and "a merge is in progress" in p.stdout, p.stdout
+    g(repo, "merge", "--abort")
+    assert _tc(repo).returncode == 0
+    # A rebase stopped on a conflict.
+    (repo / "f.txt").write_text("main\n")
+    g(repo, "add", "f.txt")
+    g(repo, *ID, "commit", "-q", "-m", "main side")
+    g(repo, "checkout", "-q", "feat")
+    subprocess.run(["git", *ID, "rebase", "main"], cwd=repo, env=GIT_ENV, capture_output=True)
+    p = _tc(repo)
+    assert p.returncode == 4 and "a rebase is in progress" in p.stdout, p.stdout
+    g(repo, "rebase", "--abort")
+    g(repo, "checkout", "-q", "main")
+    # An unmerged path with no operation in progress: a stash that did not apply cleanly.
+    (repo / "f.txt").write_text("stashed\n")
+    g(repo, *ID, "stash", "-q")
+    (repo / "f.txt").write_text("committed\n")
+    g(repo, *ID, "commit", "-q", "-am", "moved on")
+    subprocess.run(["git", "stash", "pop"], cwd=repo, env=GIT_ENV, capture_output=True)
+    p = _tc(repo)
+    assert p.returncode == 4 and "EDITED: UU f.txt" in p.stdout and "unmerged" in p.stdout, p.stdout
+
+
+def _conflicted_pick(repo: Path) -> str:
+    """A commit on `feat` that conflicts with `main` at `f.txt`; returns its id."""
+    (repo / "f.txt").write_text("main\n")
+    g(repo, "add", "f.txt")
+    g(repo, *ID, "commit", "-q", "-m", "main side")
+    return g(repo, "rev-parse", "feat")
+
+
+@pytest.mark.parametrize("op", ["cherry-pick", "revert"])
+def test_a_resolved_pick_or_revert_is_still_in_progress(repo: Path, op: str) -> None:
+    """Lens A's surviving mutants (Phase 470's round): resolved and staged, a stopped cherry-pick
+    reads as one ordinary edit, and the arm's commit would conclude it under a `docs:` message."""
+    sha = _conflicted_pick(repo)
+    if op == "revert":
+        g(repo, *ID, "merge", "-q", "-X", "theirs", "feat")
+        (repo / "f.txt").write_text("edited after\n")
+        g(repo, *ID, "commit", "-q", "-am", "after")
+    subprocess.run(["git", *ID, op, sha], cwd=repo, env=GIT_ENV, capture_output=True)
+    (repo / "f.txt").write_text("resolved\n")
+    g(repo, "add", "f.txt")
+    p = _tc(repo)
+    assert p.returncode == 4 and f"a {op} is in progress" in p.stdout, p.stdout
+
+
+def test_an_am_in_progress_is_named(repo: Path, tmp_path: Path) -> None:
+    sha = _conflicted_pick(repo)
+    patch = tmp_path / "p.patch"
+    patch.write_text(g(repo, "format-patch", "-1", "--stdout", sha) + "\n")
+    subprocess.run(["git", *ID, "am", str(patch)], cwd=repo, env=GIT_ENV, capture_output=True)
+    p = _tc(repo)
+    assert p.returncode == 4 and "a rebase or am is in progress" in p.stdout, p.stdout
+
+
+def test_both_added_is_unmerged(repo: Path) -> None:
+    """`AA`, not only `UU`: both sides added the path."""
+    (repo / "n.txt").write_text("main\n")
+    g(repo, "add", "n.txt")
+    g(repo, *ID, "commit", "-q", "-m", "main adds")
+    g(repo, "checkout", "-q", "-b", "other", "HEAD~1")
+    (repo / "n.txt").write_text("other\n")
+    g(repo, "add", "n.txt")
+    g(repo, *ID, "commit", "-q", "-m", "other adds")
+    g(repo, "checkout", "-q", "main")
+    (repo / "keep.txt").write_text("k\n")
+    g(repo, "add", "keep.txt")
+    g(repo, *ID, "commit", "-q", "-m", "k")
+    g(repo, "checkout", "-q", "other")
+    subprocess.run(["git", *ID, "cherry-pick", "main~1"], cwd=repo, env=GIT_ENV, capture_output=True)
+    g(repo, "cherry-pick", "--quit")  # the conflict stays in the index; the operation is gone
+    p = _tc(repo)
+    assert p.returncode == 4 and "EDITED: AA n.txt" in p.stdout, p.stdout
+
+
+def test_a_path_is_printed_as_git_stores_it(repo: Path) -> None:
+    """`-z`: a space or a non-ASCII name is not quoted, so the line names the real path."""
+    name = "café menu.txt"
+    (repo / name).write_text("a\n")
+    g(repo, "add", name)
+    p = _tc(repo)
+    assert p.returncode == 1 and f"EDITED: A  {name}" in p.stdout.splitlines(), p.stdout
+
+
+def test_a_status_that_fails_could_not_be_measured(repo: Path) -> None:
+    (repo / ".git" / "index").write_bytes(b"not an index")
+    p = _tc(repo)
+    assert p.returncode == 2 and "git status failed" in p.stdout, p.stdout
+
+
+def test_a_dirty_submodule_stops_the_close(repo: Path, tmp_path: Path) -> None:
+    """Edited content inside a submodule: the later `git diff --quiet HEAD --` readers would take
+    it for the close's own write, so the check names it (lens A's survivor, both directions)."""
+    sub = tmp_path / "subsrc"
+    sub.mkdir()
+    g(sub, "init", "-q", "-b", "main")
+    (sub / "s.txt").write_text("s\n")
+    g(sub, "add", "s.txt")
+    g(sub, *ID, "commit", "-q", "-m", "s")
+    g(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(sub), "sub")
+    g(repo, *ID, "commit", "-q", "-m", "sub")
+    (repo / "sub" / "s.txt").write_text("edited\n")
+    p = _tc(repo)
+    assert p.returncode == 1 and "EDITED:  M sub" in p.stdout, p.stdout
+
+
+def test_tracked_clean_refuses_a_linked_worktree(repo: Path, tmp_path: Path) -> None:
+    wt = tmp_path / "wt"
+    g(repo, "worktree", "add", "-q", "--detach", str(wt), "feat")
+    p = _tc(wt)
+    assert p.returncode == 2 and "linked worktree" in p.stdout, p.stdout
+
+
 # --- git_ro.py ------------------------------------------------------------------------------
 
 @pytest.fixture
@@ -685,6 +903,11 @@ CHAINED_SITES = {
         '— <N> task(s)"',
         'python3 sysop/scripts/git_check.py head-is "<merge target>" && git commit -m "docs: '
         'consolidate documentation for <N> merged branches"',
+    ],
+    # Step 1b's dirty-primary arm (Phase 470, `Q-747`): a person's tracked edits, on their answer.
+    "review-close/steps/1b-dirty-primary.md": [
+        'python3 sysop/scripts/git_check.py head-is "<default branch>" && git add -u && git commit -m '
+        '"docs: review-close commit <N> tracked edit(s) left in the main checkout"',
     ],
     "review-close/steps/3c-signals.md": [
         'python3 sysop/scripts/git_check.py head-is "<default branch>" && git add -- tasks/index.yml '

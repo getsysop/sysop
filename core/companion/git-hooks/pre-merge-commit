@@ -96,7 +96,7 @@ FAILED=false
 # --show-toplevel lookup misses it and pytest runs on whatever python3 is on PATH.
 # The lookup runs only in a linked worktree (its git dir differs from the common
 # dir), because under --separate-git-dir the common dir's parent is not the checkout.
-# if echo "$CHANGED" | grep -q '\.py$'; then
+# if echo "$CHANGED" | grep '\.py$' >/dev/null; then
 #   echo "🐍 Python files changed — running pytest..."
 #   GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || true)
 #   GIT_DIR_NOW=$(git rev-parse --git-dir 2>/dev/null || true)
@@ -129,7 +129,7 @@ FAILED=false
 # fi
 
 # Frontend build — uncomment and adapt to your stack.
-# if echo "$CHANGED" | grep -q '^<frontend dir>/'; then
+# if echo "$CHANGED" | grep '^<frontend dir>/' >/dev/null; then
 #   echo "🏗️  Frontend files changed — running build check..."
 #   if (cd "$REPO_ROOT/<frontend dir>" && npm run build 2>&1); then
 #     echo "✅ Frontend build passed."
