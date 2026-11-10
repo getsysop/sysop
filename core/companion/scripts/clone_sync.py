@@ -132,6 +132,22 @@ def noise(where, entry):
     target = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
     return git("check-ignore", "-q", target)[0] == 0
 
+def entries(where):
+    """`git status --porcelain -z` in <where>: (exit, one `XY <path>` per entry, stderr). Read
+    unstripped and NUL-split: plain `--porcelain` C-quotes a name holding a space, a `"`, a
+    backslash, a control character or a non-ASCII byte (`?? "sp ace"`), which names no file,
+    and a rename's or copy's second field is its old path, consumed here, not an entry."""
+    r = subprocess.run(["git", "-C", str(where), "status", "--porcelain", "-z", "--untracked-files=normal"],
+                       capture_output=True, env=env)
+    fields, out = iter(os.fsdecode(r.stdout).split("\0")), []
+    for f in fields:
+        if not f:
+            continue
+        if "R" in f[:2] or "C" in f[:2]:
+            next(fields, None)
+        out.append(f)
+    return r.returncode, out, os.fsdecode(r.stderr).strip()
+
 def unsettled(ws, b, theirs):
     for w, detached in holders(ws, b, theirs):
         busy = [n for n in ("rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD",
@@ -139,10 +155,10 @@ def unsettled(ws, b, theirs):
                 if os.path.exists(os.path.join(w, git("rev-parse", "--git-path", n, where=w)[1]))]
         if busy:
             return "DIRTY", f"an operation is in progress in {w} ({busy[0]})"
-        rc, st, err = git("status", "--porcelain", where=w)
+        rc, st, err = entries(w)
         if rc:
             return "REFUSED", f"git status failed in {w}: {err}"
-        st = [ln for ln in st.splitlines() if not (ln.startswith("?? ") and noise(w, ln[3:]))]
+        st = [ln for ln in st if not (ln.startswith("?? ") and noise(w, ln[3:]))]
         if st:
             return "DIRTY", f"{len(st)} pending changes in {w}"
         if detached:

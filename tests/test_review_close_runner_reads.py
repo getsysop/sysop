@@ -139,7 +139,7 @@ def test_today_review_close_reads_as_its_core_plus_its_arms():
     core = (rc / "SKILL.md").read_text(encoding="utf-8")
     want = core
     arms = ("1b-dirty-primary", "2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions", "2b-twin-spawn", "3b-collect-exit",
-            "3b-rollback", "3c-signals", "4-pre-pr", "4a-append", "4a-fix", "4a-post-failure", "4a-post-prescan", "4a-published", "4b-batches", "4c-check-exit", "4c-unmerged", "4d-direct", "4d-pr", "6-direct", "6-pr-cleanup", "6-pr-gate", "prepare-resume", "request-review-land")
+            "3b-rollback", "3c-signals", "4-pre-pr", "4a-append", "4a-fix", "4a-moved", "4a-post-failure", "4a-post-prescan", "4a-published", "4b-batches", "4c-check-exit", "4c-unmerged", "4d-direct", "4d-pr", "6-direct", "6-pr-cleanup", "6-pr-gate", "prepare-resume", "request-review-land")
     for arm in arms:
         marker = f"<!-- sysop:arm={arm} -->\n"
         assert core.count(marker) == 1, arm

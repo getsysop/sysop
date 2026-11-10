@@ -401,7 +401,7 @@ def test_step3c_worktree_lookup_finds_the_right_worktree(tmp_path):
 def test_daily_summary_step1_computes_real_dates(tmp_path):
     """Step 1's three values, executed, after `<days>` is substituted as the skill says."""
     block = _fenced_block_containing(
-        REPO_ROOT / "core" / "skills" / "daily-summary" / "SKILL.md", "WEEK_DAYS="
+        REPO_ROOT / "core" / "skills" / "daily-summary" / "SKILL.md", "--- WEEK_START:"
     )
     for argument_string in ("", "--week-only", "--date 2026-08-10", "--days 7 --week-only"):
         out = _run(substitute(block, argument_string).replace("'<days>'", "7"), tmp_path)
@@ -428,7 +428,7 @@ def test_daily_summary_step1_refuses_to_run_unsubstituted(tmp_path):
     backslash continuation — replacing it stranded the `|| date …)` half.
     """
     block = _fenced_block_containing(
-        REPO_ROOT / "core" / "skills" / "daily-summary" / "SKILL.md", "WEEK_DAYS="
+        REPO_ROOT / "core" / "skills" / "daily-summary" / "SKILL.md", "--- WEEK_START:"
     )
     p = subprocess.run(["bash", "-c", block], cwd=str(tmp_path), capture_output=True, text=True)
     assert p.returncode == 3, f"expected the placeholder guard's exit 3, got {p.returncode}"
@@ -436,9 +436,9 @@ def test_daily_summary_step1_refuses_to_run_unsubstituted(tmp_path):
 
     # And the --date override is followable: replacing the whole TARGET_DATE line works.
     lines = block.replace("'<days>'", "7").splitlines()
-    idx = [i for i, l in enumerate(lines) if l.startswith("TARGET_DATE=")]
-    assert len(idx) == 1, "TARGET_DATE= must be exactly one line for the instruction to hold"
-    lines[idx[0]] = "TARGET_DATE=2026-08-10"
+    idx = [i for i, l in enumerate(lines) if l.startswith("TARGET_DATE =")]
+    assert len(idx) == 1, "TARGET_DATE = must be exactly one line for the instruction to hold"
+    lines[idx[0]] = 'TARGET_DATE = "2026-08-10"'
     out = _run("\n".join(lines), tmp_path)
     assert "TARGET_DATE: 2026-08-10" in out and "WEEK_START:  2026-08-03" in out, out
     assert "DAY_NAME:    Monday" in out, out

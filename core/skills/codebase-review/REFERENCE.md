@@ -49,6 +49,40 @@ time the two halves drifted.
 
 *Sections below this line are editor rationale for single rules, not declared rules.*
 
+## Step 2a — why a section glob resolves with `:(glob)`, in one command
+
+2a-1 used to match files to sections by derived-root prefix plus extension (2a-2 named no
+method and inherited it), because a plain pathspec has no `**`: git's default matching lets `*` cross a `/` and
+gives `**` no meaning of its own, so `api/**/*.py` drops the direct child `api/server.py`, and
+`api/routes/**/*.py` matches nothing when every route file sits directly in `api/routes/`. The
+workaround was coarser than the glob in both directions: prefix plus extension cannot tell
+`src/*.py`'s `src/top.py` from `src/a/b.py`, so a nested file no section names read as covered.
+The stale-section sweep ran the plain pathspec as written, so it flagged a section whose files are
+all direct children of a `**/` glob as stale, and kept `src/*.py` live on a nested file alone.
+2a-0's subtree test named no resolution at all, so it now points at the same one.
+
+Git's `:(glob)` magic gives `**/` its zero-or-more meaning and keeps `*` inside one directory,
+which is what the maps mean. It is also how `/security-audit`'s residual partition (`security_partition.py`) resolves a section glob, so the coverage
+audit and the residual dispatch agree on which files a section binds, a brace list included. Two
+resolvers with different semantics over the same maps is the
+drift this replaced.
+
+**One command, and git does the subtraction.** Roots as positive pathspecs and every glob as
+`:(glob,exclude)` print the unmatched set directly — the root listing minus the union of the
+globs — without a runner diffing two listings of hundreds of paths by eye. The long form is
+required: `':!(glob)src/*.py'` excluded nothing when tried, because the `:!` short form does not
+take `(glob)` after it. The output is read, not parsed, so it is not `-z`: `ls-files` C-quotes a
+name holding an unusual byte, which is unambiguous in a report.
+
+**What the runner does to a glob first, and why.** A `<…>` glob is dropped per glob because a
+header can mix concrete and placeholder globs, and the concrete ones bind. A brace list is expanded
+because git has none (`/review-close`'s security-map filter and the residual partition do the
+same, with one expansion and one ceiling, before matching). `[…]` is passed verbatim rather than escaped by the runner, because the
+residual partition passes it verbatim too: escaping in one resolver and not the other would reopen
+the disagreement, so a literal bracket is fixed in the map (`\[id\]`), where both read it. With
+no concrete glob there are no roots and no exclusions, and `git ls-files` with no pathspec lists
+the whole repository, which would report every tracked file as unmatched.
+
 ## Step 9b — why the demotion commit is its own
 
 Step 9's promotion commit has already been made by the time 9b runs, so "folding" 9b's changes

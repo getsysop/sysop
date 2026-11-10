@@ -380,6 +380,67 @@ def test_a_venv_symlink_into_this_repository_is_not_dirt(tmp_path):
     assert "SYNCED" in _sync(root).stdout and _tip(root, "feat/cl") == work
 
 
+# `status --porcelain` C-quotes these names (`?? "sp ace"`), and the quoted string named no file,
+# so each link read as dirt. Valid UTF-8 only: APFS refuses a name that is not.
+_QUOTED_NAMES = ["sp ace", "café", 'quo"te']
+
+
+def _venv_root(tmp_path: Path) -> Path:
+    root = _repo(tmp_path)
+    (root / ".gitignore").write_text("sysop/runtime/\n.venv/\n")
+    _g(root, "commit", "-qam", "ignore .venv/")
+    _g(root, "push", "-q", "origin", "main")
+    (root / ".venv").mkdir()
+    return root
+
+
+def test_venv_symlinks_with_quoted_names_are_not_dirt(tmp_path):
+    root = _venv_root(tmp_path)
+    clone = _claim(root, "T-1", "feat/cl")
+    for name in _QUOTED_NAMES:
+        (clone / name).symlink_to(root / ".venv")
+    assert '?? "' in _g(clone, "status", "--porcelain"), "the fixture's names are not quoted"
+    work = _commit(clone)
+    out = _sync(root).stdout
+    assert "SYNCED" in out and _tip(root, "feat/cl") == work, out
+
+
+@pytest.mark.parametrize("name", _QUOTED_NAMES)
+def test_a_real_file_with_a_quoted_name_is_still_dirt(tmp_path, name):
+    root = _venv_root(tmp_path)
+    clone = _claim(root, "T-1", "feat/cl")
+    for link in _QUOTED_NAMES:
+        (clone / link).symlink_to(root / ".venv")
+    _commit(clone)
+    (clone / f"{name}.txt").write_text("work\n")
+    assert "— 1 pending changes in" in _line(_sync(root).stdout, "DIRTY")
+
+
+def test_a_staged_rename_is_one_pending_change(tmp_path):
+    """Under `status -z` a rename is two fields, `R  <new>` then `<old>`; the old path is not
+    a second change."""
+    root = _venv_root(tmp_path)
+    clone = _claim(root, "T-1", "feat/cl")
+    _commit(clone)
+    _g(clone, "mv", "a.txt", "re named.txt")
+    assert "— 1 pending changes in" in _line(_sync(root).stdout, "DIRTY")
+    for name in _QUOTED_NAMES:
+        (clone / name).symlink_to(root / ".venv")
+    assert "— 1 pending changes in" in _line(_sync(root).stdout, "DIRTY")
+
+
+def test_untracked_work_the_config_hides_is_still_dirt(tmp_path):
+    """`status.showUntrackedFiles=no` in the clone: the sync reads `--untracked-files=normal`,
+    so a real untracked file still stops it (Phase 476's round, lens 1)."""
+    root = _venv_root(tmp_path)
+    clone = _claim(root, "T-1", "feat/cl")
+    _commit(clone)
+    _g(clone, "config", "status.showUntrackedFiles", "no")
+    (clone / "work.txt").write_text("work\n")
+    assert "work.txt" not in _g(clone, "status", "--porcelain")
+    assert "— 1 pending changes in" in _line(_sync(root).stdout, "DIRTY")
+
+
 def test_a_symlink_to_an_unignored_target_is_still_dirt(tmp_path):
     root = _repo(tmp_path)
     clone = _claim(root, "T-1", "feat/cl")
@@ -864,7 +925,7 @@ def test_the_reject_remedy_no_longer_fetches_from_origin():
 
 from test_fix_in_branch_tier import _pin_hash, _pin_norm, _pin_program  # noqa: E402
 
-PINS = {"1-pre": "4348c33a0cbcb9df",  # Phase 410: from_origin keeps only the line naming refs/heads/<b> (ls-remote tail-matches); Phase 393: `begin` left the section for its own, ahead of the flag sections; Phase 390: begin names 4a-append and 4a-fix, and the close id is written at 4a and 4a-fix; Phase 386: the section plus clone_sync.py; Phase 387's round: appended fenced, so its indentation counts (Phase 380: dict(...) env-strip); Phase 388: + the `close_arms.py begin` paragraph, Phase 355's text unchanged
+PINS = {"1-pre": "ec2720ff5f46bff7",  # Phase 476 (`Q-649` (b)): `clone_sync.py` reads `status --porcelain -z --untracked-files=normal` (`entries`), so a C-quoted name is not dirt, a rename is one change, and a `status.showUntrackedFiles=no` hides no work (the round); Phase 410: from_origin keeps only the line naming refs/heads/<b> (ls-remote tail-matches); Phase 393: `begin` left the section for its own, ahead of the flag sections; Phase 390: begin names 4a-append and 4a-fix, and the close id is written at 4a and 4a-fix; Phase 386: the section plus clone_sync.py; Phase 387's round: appended fenced, so its indentation counts (Phase 380: dict(...) env-strip); Phase 388: + the `close_arms.py begin` paragraph, Phase 355's text unchanged
          "2a step 0a": "389c3c0fb0b60907"}
 # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_review_close_clone_sync as T; T._print_pins()"
 

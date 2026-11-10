@@ -14,6 +14,7 @@ import re
 import sys
 from pathlib import Path
 from _command_blocks import command_blocks, unfilled
+from test_step_4d_split import _prepare_close  # noqa: E402
 from skill_runner_text import text_of
 
 TESTS = Path(__file__).resolve().parent
@@ -56,7 +57,7 @@ def test_load_refuses_a_run_while_another_stop_stands(repo: Path) -> None:
     r = _run(repo, "begin", "main")
     run_id = re.search(r"^RUN: (\S+)", r.stdout, re.M).group(1)
     (_runs(repo) / run_id / "questions.md").write_text("")
-    assert _run(repo, "finish", run_id).returncode == 0
+    assert _run(repo, "finish", run_id, _prepare_close(repo)).returncode == 0
     assert _run(repo, "stop", RUN, "Step 4c", "why").returncode == 0
     r = _run(repo, "load", run_id, "main")
     assert r.returncode == 2 and "stopped" in r.stderr, r.stderr
@@ -332,7 +333,7 @@ def test_the_prepare_with_an_agent_hands_the_night_its_resume(repo: Path) -> Non
     r = _run(repo, "begin", "main", "--agent", AGENT)
     run_id = re.search(r"^RUN: (\S+)", r.stdout, re.M).group(1)
     (_runs(repo) / run_id / "questions.md").write_text("")
-    r = _run(repo, "finish", run_id)
+    r = _run(repo, "finish", run_id, _prepare_close(repo))
     assert f"RESUME: /review-close --resume {run_id} --request-review --agent {AGENT} --unattended" in r.stdout, r.stdout
     r = _run(repo, "resumable", "--agent", AGENT)
     assert r.returncode == 0 and r.stdout.strip() == run_id, r.stdout + r.stderr
@@ -418,7 +419,7 @@ def _prepared(repo: Path, *agent: str, finish: bool = True) -> str:
     run_id = re.search(r"^RUN: (\S+)", r.stdout, re.M).group(1)
     if finish:
         (_runs(repo) / run_id / "questions.md").write_text("")
-        assert _run(repo, "finish", run_id).returncode == 0
+        assert _run(repo, "finish", run_id, _prepare_close(repo)).returncode == 0
     return run_id
 
 

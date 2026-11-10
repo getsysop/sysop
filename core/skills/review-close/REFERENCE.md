@@ -1028,6 +1028,32 @@ running the skill; it is why a rule in that step is shaped the way it is, so tha
 changing one knows what the shape was bought with. Authored, not copied — the runner keeps the
 rule, this keeps the argument.
 
+### Why only ours is removed, and only by `reap`
+
+The check used to list everything under
+`.claude/worktrees/` and every move of the main checkout's branches and config as this close's leak,
+and the arm's remedy removed the worktree and deleted the branch. A session working beside the close
+lost an unpushed commit that way. A `worktree-agent-*` name is the harness's in every session, so a
+peer's isolated agent carries one too, and its uncommitted files can be that session's work: that is
+why only a worktree whose path the runner recorded from a spawn's result may have its files
+discarded, and why `own` refuses any path that is not a linked worktree under `.claude/worktrees/`.
+Measured at the phase's open on Claude Code: a running agent's worktree is `locked` by the parent
+`claude` process, so git refuses to remove it, and the harness removes a finished agent's clean
+worktree itself; a finished agent that wrote a file leaves an unlocked dirty one, which plain
+`git worktree remove` refuses. `reap` deletes only a `worktree-agent-*` branch the agents baseline
+did not have: an agent can check out any branch in its worktree (a claim's, the default branch, or
+one a peer made during the window), and two rounds reproduced `reap` deleting each of them under
+looser rules, by "held by a recorded worktree" and then by "made during the window". An agent branch Step 2a never
+reviews is inert for the rest of the close (it is never merged, so Step 6 never sees it), which is
+why a `KEPT:` line is reported rather than fixed.
+
+### Why the post-spawn check is a delta
+
+Moved verbatim from the runner's HARD RULE when Step 2b's check learned to sort what it finds by
+whose it is, to keep the core at its byte budget. "Step 2 above" is Step 2b step 2's baseline.
+
+**It must be a delta, not an absolute cleanliness test — that is why step 2 above captures a baseline.** Nothing in this skill establishes that the primary worktree is clean when the agents run: Step 1b's `tracked-clean` reads tracked files once, before them, and Step 1a excludes it by construction (it skips the **primary checkout**, matched by path identity, as Step 6's `pr` re-sync note also states in its own words — until this phase both sites said *the worktree whose branch is `main`*, which is the same worktree only while the primary happens to be on `main`). A bare `git diff --quiet HEAD --` here would fire on any ordinary uncommitted work and SKIP a close that is fine — a false-FAIL on the dominant path, which is how a gate gets disabled by the first operator who hits it.
+
 ### What the doc-only skip's cross-reference used to claim, and why it is gone
 
 The paragraph scoping step 0's skip away from step 3b's gate carried a parenthetical retracting an
@@ -1242,8 +1268,11 @@ classifies `clean-merged`, a review finds no commits on it, and cleanup offers t
 
 **Two of those three links are closed, and the record has to say which.** An earlier build
 added the `worktree-agent-*` exclusion to Step 1c's enumerator — *"exclude them here and everywhere
-else branches are enumerated"* — and to Step 2a, which now skips *"any **agent worktree branch** (a
-branch whose registered worktree lives under `.claude/worktrees/`)"*. So a leaked agent branch is
+else branches are enumerated"* — and to Step 2a, which skipped any branch whose registered worktree
+lives under `.claude/worktrees/`. It now skips a `worktree-agent-*` branch, or one there with no
+commit of its own; one there with commits is asked about in an attended close and skipped, with a
+line saying so, in any other: a consumer's reused agent
+worktree held real work, and the location rule skipped it without a word. So a leaked agent branch is
 not reviewed at Step 2a, and it never reaches Step 6's per-branch cleanup either — but the reason
 is one step further along than it looks, and stating it loosely is how the previous version of this
 paragraph went wrong. Step 6 iterates **the branches Step 4a actually merged**, not Step 2a's
@@ -2947,6 +2976,64 @@ on executed-with-zero-findings lines.) Quoting the lines verbatim is the report 
 support. Round 2 added `failed`: a crashed *non-blocking* stage (an invalid semgrep rule) exits 0,
 prints no `⚠`, and left the arm saying `clean` over a scan that did not run.
 `tests/test_prescan_merge_gate.py` binds the counts and the marker to `render()`.
+
+## Step 4a — the reviewed commit
+
+Step 2 reads each branch at one commit, and Step 4a used to merge whatever `refs/heads/<branch>`
+named when it got there. Between the two sit Step 2b's reviewers, Step 3's verification and Step
+3c's smoke, which take minutes in an attended close and can take a night across `--prepare` and
+`--resume`. A session that still owns the branch can commit to it in that window, and its commits
+then landed with no review. A consumer saw this on a lockless PR branch.
+
+**Where the commit is recorded.** Step 2a step 1 runs `close_arms.py reviewed` for every branch
+it reviews, before the branch's diff is read, and the script reads the tip itself so no runner
+copies a SHA from one step to another. Step 2a is the one point every approved branch passes: a
+doc-only branch spawns no Step 2b reviewer, and when every target is doc-only Step 2b takes no
+baseline, so neither `review_pins.py`'s `PIN=` nor `2b-baseline.txt` covers every branch. Nor is
+`gate_verdict.py record` a source: it stores the echoed SHA only for a clean `APPROVED` with
+`NOTES: none`. A move after Step 2a's read is a mismatch even when Step 2b's reviewers read the
+newer commit, because Step 2a and Step 2d did not.
+
+**The close's own commit.** Step 2a step 3a's `Commit it to the branch` answer commits an
+ignored file to the branch after the record. `reviewed --own-commit` records it only when its
+only parent is the commit recorded last, so an attended close does not ask again about the commit
+the person just chose, while a commit someone else made beneath it, or a merge, is still shown at
+Step 4a. A resume needs no such record: it applies that answer before its second `check`, which
+reads the branch as moved, and the Step 2a re-run that follows records the new commit.
+
+**A resume** copies, with `close_run.py reviewed`, the commits the prepare's own Step 2a
+recorded, which the prepare's `finish` carries into the run from its receipt. Not `begin`'s tips:
+`begin` runs before Step 2a, so a branch that moved after `begin`, was reviewed there, and moved
+back reads `CURRENT` to `check` while the commit now on it was never read. Against the prepare's
+record the same branch reads `REWRITTEN:` at Step 4a. A branch the prepare's Step 2a did not
+record is `NOT REVIEWED`, and Step 4a reads it `UNRECORDED:`. A branch the resume re-runs from
+Step 2a records again, and the later record wins. The resume cannot use `2b-baseline.txt`:
+another close can overwrite it between the prepare and the resume, and `consume --restore-2b`
+does not restore it.
+
+**On a mismatch**, by the maintainer's ruling: an attended close shows the commits and asks to merge or
+4a-SKIP; `--headless` and `--unattended` 4a-SKIP. The branch is not merged at the reviewed commit
+instead: the close would report it merged while the newer commits stayed unmerged on it. A close that fixes
+a Step 2b BLOCK in the branch and carries on meets the ask too, which is the point: the fix is a
+commit no review read.
+
+**The PR-reuse shape** skips Step 4a, so its probe runs `tip --peek` as a sixth condition and
+takes the integration-branch shape on a mismatch, where Step 4a's check asks. `--peek` records
+nothing: a probe that made the arm due would leave it unloaded whenever Step 4a item 1 then
+routed the branch to neither arm (a closed-task edit, `REPLAY 0`) or the branch returned to its
+reviewed commit, and Step 8's `check` would name an arm nothing owed.
+
+**A skipped branch still stops the close when it was the only one.** Step 4a-post's empty-list
+rule stops a close whose approved branches merged nothing, and this arm's 4a-SKIP counts there as
+every 4a-SKIP does: the close stops, or parks durably when unattended, before anything is pushed.
+Leaving it out was tried and refused: under `pr`, the close then went on to push an empty
+integration branch, which `gh pr create` refuses, and parked there with a remote branch left
+behind. An early finish that skips Step 4d's push when nothing merged would avoid both, and is a
+larger change than this check.
+
+**What it does not close.** The check runs immediately before item 2's merge, not inside it: a
+commit made in the seconds between the two still merges. `--land` pins the PR's `headRefOid`
+already.
 
 ## Step 4a's shared-append resolver — provenance
 

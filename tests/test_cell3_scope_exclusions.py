@@ -54,7 +54,7 @@ def test_both_skills_deny_manifest_exclusion_semantics():
 def test_both_skills_carry_the_zero_or_more_glob_caveat():
     for name, text in _REVIEW_SKILLS.items():
         assert "zero or more" in text, (
-            f"{name}: the 2a-1 glob-matching caveat (`**/` = zero or more path "
+            f"{name}: Step 2a's 'Resolving a section glob' paragraph (`**/` = zero or more path "
             "components) regressed — direct-children files can be false-flagged as gaps"
         )
 

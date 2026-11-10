@@ -53,7 +53,8 @@ def _commands() -> dict[str, str]:
         by[sub] = cmd
     # Phase 380 (`Q-664`): the prepare with `--agent` selects and holds; `eligible` runs
     # against a class, so `test_unattended_half_a_build.py` runs it.
-    assert set(by) == {"begin", "finish", "load", "check", "consume", "eligible", "hold"}, sorted(by)
+    # Phase 477 (`Q-737`): `reviewed` copies the prepare's tips into the resume's receipt.
+    assert set(by) == {"begin", "finish", "load", "check", "reviewed", "consume", "eligible", "hold"}, sorted(by)
     return by
 
 
@@ -71,7 +72,7 @@ def repo(tmp_path: Path) -> Path:
         assert _sh(root, cmd).returncode == 0, cmd
     (root / "sysop/scripts").mkdir(parents=True)
     # As a full-mode install lays them out: close_run.py imports the shared pending-doc reader.
-    for name in ("close_run.py", "pending_doc_hold.py"):
+    for name in ("close_run.py", "pending_doc_hold.py", "close_arms.py"):
         shutil.copy2(SCRIPT.parent / name, root / "sysop/scripts" / name)
     # PyYAML is a declared hard dependency, found in the project's venv as a consumer keeps it.
     # A placed worktree has no `.venv`; the venv pytest runs in stands in (CI has none, and its
@@ -109,12 +110,33 @@ def test_the_prescribed_commands_run_as_written(repo: Path) -> None:
     assert r.returncode == 0 and r.stdout.startswith("HELD: feat/a at "), r.stdout + r.stderr
     held = json.loads((repo / "sysop/runtime/close/holds/feat%2Fa.json").read_text(encoding="utf-8"))
     assert held["reason"] == "VERDICT: BLOCKED: rule 1 (a.py:1)", held
-    r = _sh(repo, sub(cmds["finish"]))
+    # The prepare's own receipt, as its `begin` opens one, and Step 2a step 1's record of
+    # feat/a alone: `finish` carries that record, and the resume copies only it.
+    sys.path.insert(0, str(SCRIPT.parent))
+    import close_arms
+    arms = " ".join(sorted(close_arms.ARMS))
+    r = _sh(repo, f"python3 sysop/scripts/close_arms.py begin '--prepare' {arms}")
+    assert r.returncode == 0, r.stderr
+    prep = r.stdout.split()[1]
+    assert _sh(repo, f"python3 sysop/scripts/close_arms.py reviewed {prep} feat/a").returncode == 0
+    fin = sub(cmds["finish"]).replace("<close-id>", prep)
+    assert not unfilled(fin), fin
+    r = _sh(repo, fin)
     assert r.returncode == 0 and f"RESUME: /review-close --resume {run_id}" in r.stdout, r.stdout + r.stderr
     for name in ("load", "check"):
         r = _sh(repo, sub(cmds[name]))
         assert r.returncode == 0, (name, r.stderr)
     assert r.stdout.strip() == "CURRENT"
+    # The resume's receipt, as its `begin` opens one, then the copy of the prepare's records.
+    r = _sh(repo, f"python3 sysop/scripts/close_arms.py begin '--resume {run_id}' {arms}")
+    assert r.returncode == 0, r.stderr
+    cid = r.stdout.split()[1]
+    rev = sub(cmds["reviewed"]).replace("<close-id>", cid)
+    assert not unfilled(rev), rev
+    r = _sh(repo, rev)
+    tips = {b: _sh(repo, f"git rev-parse refs/heads/{b}").stdout.strip() for b in ("feat/a", "feat/b")}
+    assert r.returncode == 0 and r.stdout == f"REVIEWED: feat/a {tips['feat/a']}\nNOT REVIEWED: feat/b\n", \
+        r.stdout + r.stderr
     r = _sh(repo, sub(cmds["consume"]))
     assert r.returncode == 0, r.stderr
     assert json.loads((run_dir / "manifest.json").read_text())["consumed"]

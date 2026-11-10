@@ -51,16 +51,31 @@ mutation has to break something real.
 for historical interest", "legacy guidance", "bypass this block when...") and
 the list can always be extended one phrase further than the guard. Inverted:
 Steps 7 and 8 may contain only the conditional clauses enumerated in
-`CONDITIONAL_ALLOWLIST` -- verified to be exactly six, all legitimate -- and any
-*new* one fires. A future author adding a real conditional adds it to the list,
-which is the review checkpoint we want rather than a hole.
+`CONDITIONAL_ALLOWLIST` -- each one kept live by
+`test_the_conditional_allowlist_is_exhaustive_and_live` -- and any *new* one fires. A
+future author adding a real conditional adds it to the list, which is the review
+checkpoint we want rather than a hole.
 
-Population is `claim-task/SKILL.md`, `_shared/plan-review-preference.md`,
-`WORKFLOW.md` § 2.2 and `WORKFLOW_GUIDE.md` § 2 -- the last added because round 2
-found it unguarded *and written by the same commit*, the author-side rule-1 case
-("derive the population from the source of truth, not from one file") applied to
-the guards themselves. `/auto-build` runs the same pipeline shape but was not
-rewritten by this phase, and widening to it would fail on work not done.
+Population: this module reads eight files, each held in a module-level `REPO_ROOT /`
+constant, and `test_the_docstring_names_the_population` keeps this list and that count
+in step with those constants:
+
+- `core/skills/claim-task/SKILL.md` -- the orchestrator itself;
+- `core/skills/_shared/plan-review-preference.md` -- the plan-review partial;
+- `core/companion/docs/WORKFLOW.md` (§ 2.2) and `core/companion/docs/WORKFLOW_GUIDE.md`
+  (§ 2) -- the guide added because round 2 found it unguarded *and written by the same
+  commit*, the author-side rule-1 case ("derive the population from the source of
+  truth, not from one file") applied to the guards themselves;
+- `docs/getting-started.md` and `core/companion/tasks/schema.md` -- the tutorial's
+  `/claim-task` passage and the `### Plan` contract;
+- `core/companion/scripts/claim_record.py` and `core/companion/scripts/close_index.py`
+  -- Step 7f's plan write-back and `/review-close` Step 4c's park reaper, heredocs in
+  the skills until they became shipped scripts: the first is parsed as Step 7f's
+  program, and the second's park glob is pinned against the park filename shape.
+
+`CONDITIONAL_ALLOWLIST`'s liveness corpus is the first four. `/auto-build` runs the same
+pipeline shape but was not rewritten by this phase, and widening to it would fail on
+work not done.
 """
 
 from __future__ import annotations
@@ -70,7 +85,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from skill_runner_text import text_of
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL = REPO_ROOT / "core/skills/claim-task/SKILL.md"
@@ -79,7 +93,6 @@ WORKFLOW = REPO_ROOT / "core/companion/docs/WORKFLOW.md"
 GUIDE = REPO_ROOT / "core/companion/docs/WORKFLOW_GUIDE.md"
 GETTING_STARTED = REPO_ROOT / "docs/getting-started.md"
 SCHEMA = REPO_ROOT / "core/companion/tasks/schema.md"
-REVIEW_CLOSE = REPO_ROOT / "core/skills/review-close/SKILL.md"
 # Step 7f's write-back and Step 4c's park reaper: each step's heredoc until Phase 386
 # (`Q-409` P3), shipped scripts since.
 CLAIM_RECORD = REPO_ROOT / "core/companion/scripts/claim_record.py"
@@ -616,11 +629,8 @@ CONDITIONAL_ALLOWLIST = (
     "This write is skipped more often than any other step in this sequence",  # 7e read-back rationale
     "the failure this closes is an executor skipping a sequence item",  # Step 8 arm's rationale
     "do not run /document-work",                                     # Step 8 arm's halt instruction
-    # The round rewrote 7e's read-back paragraph, which retired the clause that used to
-    # sit here ("so a skip here surfaces either way") and introduced this one. Both are
-    # descriptive: this sentence states what the cheap grep CANNOT do and names Step 8 as
-    # the authority, which is the opposite of making a step optional.
-    "An earlier version omitted -A1 while telling you to inspect that text",
+    # (Phase 476's round moved the `-A1` provenance clause that sat here into
+    # `claim-task/REFERENCE.md` § *Step 7e item 3*, so it is no longer in the runner.)
     # WORKFLOW.md § 2.2
     "SUPERSEDED | stop | Step 7d's revise rejected",                # routing row 1 (the word itself)
     "classification write for THIS run with verdict: SUPERSEDED",   # 7d revise instruction
@@ -2768,3 +2778,76 @@ def test_partial_negative_controls_do_not_fire():
         assert rewritten != t, f"{name}: no-op rewrite -- the control proves nothing"
         got = partial_problems(rewritten)
         assert got == [], f"guard fired on a legitimate rewrite ({name}) -- over-strict: {got}"
+
+
+# ------------------------------------------------------- the population, declared
+
+_COUNT_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve".split())}
+
+
+def path_constants(source: str) -> dict[str, str]:
+    """`{name: repo-relative path}` for each module-level `NAME = REPO_ROOT / "..."`."""
+    out: dict[str, str] = {}
+    for node in ast.parse(source).body:
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            continue
+        parts: list[str] = []
+        v = node.value
+        while isinstance(v, ast.BinOp) and isinstance(v.op, ast.Div) \
+                and isinstance(v.right, ast.Constant) and isinstance(v.right.value, str):
+            parts.insert(0, v.right.value)
+            v = v.left
+        if parts and isinstance(v, ast.Name) and v.id == "REPO_ROOT":
+            out[node.targets[0].id] = "/".join(parts)
+    return out
+
+
+def population_problems(source: str) -> list[str]:
+    """The docstring names every file this module reads, states the count, and every
+    constant it names is read.
+
+    Derived from the module's own constants rather than a retyped list: the docstring
+    once named four files while the module read seven, which understated coverage in
+    the direction nobody checks, and a later reader repeated the wrong roster.
+    """
+    tree = ast.parse(source)
+    doc = re.sub(r"\s+", " ", ast.get_docstring(tree) or "")
+    consts = path_constants(source)
+    if not consts:
+        return ["no `REPO_ROOT /` constants resolved -- this check proves nothing"]
+    loads: dict[str, int] = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+            loads[n.id] = loads.get(n.id, 0) + 1
+    p: list[str] = []
+    for name, rel in consts.items():
+        if f"`{rel}`" not in doc:
+            p.append(f"the docstring does not name `{rel}` ({name}), a constant this module defines")
+        if not loads.get(name):
+            p.append(f"{name} (`{rel}`) is defined and never read -- delete it or use it")
+    m = re.search(r"this module reads (\w+) files", doc, re.I)
+    stated = _COUNT_WORDS.get(m.group(1).lower()) if m else None
+    if stated != len(consts):
+        p.append(f"the docstring states {m.group(1) if m else 'no'} files; the module "
+                 f"defines {len(consts)} `REPO_ROOT /` constants")
+    return p
+
+
+def test_the_docstring_names_the_population():
+    source = Path(__file__).read_text(encoding="utf-8")
+    assert population_problems(source) == []
+
+
+def test_the_population_check_reds_on_drift():
+    source = Path(__file__).read_text(encoding="utf-8")
+    anchor = 'GUIDE = REPO_ROOT / "core/companion/docs/WORKFLOW_GUIDE.md"\n'
+    assert anchor in source, "anchor is stale -- this control proves nothing"
+    # An undeclared constant, read somewhere: named-in-docstring and count both red.
+    added = source.replace(anchor, anchor + 'EXTRA = REPO_ROOT / "core" / "x.md"\nEXTRA.name\n', 1)
+    got = population_problems(added)
+    assert any("`core/x.md`" in g for g in got) and any("states eight" in g for g in got), got
+    # A declared constant nothing reads.
+    dead = source.replace("GETTING_STARTED.read_text", "Path().read_text", 1)
+    assert any("GETTING_STARTED" in g and "never read" in g for g in population_problems(dead))

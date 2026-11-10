@@ -129,6 +129,23 @@ def rebasing(wt: str) -> str:
     return ''
 
 
+def status_entries(raw: str) -> list[str]:
+    """`git status --porcelain -z` output as one `XY <path>` string per entry. Under `-z` no
+    name is quoted, where plain `--porcelain` C-quotes one holding a space, a `"`, a backslash,
+    a control character or a non-ASCII byte (`?? "sp ace"`), a string that names no file. A
+    rename or copy is two fields, `XY <new>` then `<old>`; the old path is consumed, so it is
+    neither a second change nor read as an entry of its own."""
+    fields = iter(raw.split('\0'))
+    entries = []
+    for field in fields:
+        if not field:
+            continue
+        if 'R' in field[:2] or 'C' in field[:2]:
+            next(fields, None)
+        entries.append(field)
+    return entries
+
+
 def ignored_link(wt: str, entry: str, root: str) -> bool:
     """An untracked symlink whose target the main checkout ignores — tooling, not work."""
     link = os.path.join(wt, entry)
@@ -173,7 +190,7 @@ def cmd_worktrees(default: str) -> None:
         # `--untracked-files=normal`: a `status.showUntrackedFiles=no` in any config would hide
         # untracked work, and `git worktree remove` honours the same setting, so nothing after
         # this step would see it either (Phase 421's round, lens A).
-        st = git('status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=none',
+        st = git('status', '--porcelain', '-z', '--untracked-files=normal', '--ignore-submodules=none',
                  cwd=wt) if os.path.isdir(wt) else None
         if st is None or st.returncode != 0:
             err = os.fsdecode(st.stderr).strip().splitlines()[-1:] if st else ['the directory is missing']
@@ -184,8 +201,8 @@ def cmd_worktrees(default: str) -> None:
         if not os.path.lexists(os.path.join(wt, '.git')):
             print(f'DIRTY    {branch}  ({wt})  — no .git link, so git reads it as part of another checkout')
             continue
-        significant = [line for line in out(st).splitlines() if line
-                       and not (line.startswith('?? ') and ignored_link(wt, line[3:], root))]
+        significant = [line for line in status_entries(out(st))
+                       if not (line.startswith('?? ') and ignored_link(wt, line[3:], root))]
         log = git('log', '--oneline', f'refs/heads/{default}..refs/heads/{branch}', '--not',
                   '--glob=refs/sysop/merged-pr-heads/*')
         if significant:
@@ -257,7 +274,7 @@ def cmd_strip_links(wt: str) -> None:
         err = os.fsdecode(r.stderr).strip().splitlines()
         stop(f'git status failed in {wt}: {err[-1] if err else "exit " + str(r.returncode)}')
     root, removed, failed = main_root(), 0, []
-    for field in out(r).split('\0'):
+    for field in status_entries(out(r)):
         if not field.startswith('?? '):
             continue
         entry = field[3:]

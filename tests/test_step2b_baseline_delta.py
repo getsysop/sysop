@@ -101,7 +101,9 @@ def test_capture_and_assertion_use_the_same_untracked_mode() -> None:
     `--porcelain` collapses an untracked directory to one `?? dir/` line, so an agent writing
     inside an already-untracked directory is invisible. One function serves both ends."""
     src = (SCRIPTS / "review_pins.py").read_text(encoding="utf-8")
-    assert src.count("git('status', '--porcelain', '-uall')") == 1, "one status read, in tree_now()"
+    # Phase 479: unquoted (`core.quotePath=false`), so a non-ASCII worktree name matches.
+    assert src.count("git('-c', 'core.quotePath=false', 'status', '--porcelain', '-uall')") == 1, (
+        "one status read, in tree_now()")
     assert src.count("tree_now()") == 3, "the capture and the check must read the tree one way"
 
 

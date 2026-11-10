@@ -74,15 +74,32 @@ MAP_CONCRETE = """\
 """
 
 
-def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
+def _tracked(root: Path) -> list[str]:
+    p = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True)
+    return [x for x in p.stdout.decode("utf-8", "surrogateescape").split("\0") if x] \
+        if p.returncode == 0 else []
+
+
+def _run(root: Path, *args: str, manifest: list[str] | None = None,
+         auto_manifest: bool = True) -> subprocess.CompletedProcess:
+    """Run the script. Unless `args` names `--manifest-file` (or `--help`), pass a manifest
+    file beside `root` listing `manifest`, or every file `git ls-files` lists — the old
+    whole-repo population, so the tests written against it keep measuring the same thing."""
+    extra: list[str] = []
+    if auto_manifest and "--manifest-file" not in args and "--help" not in args:
+        mf = root.parent / f"{root.name}.manifest.txt"
+        lines = _tracked(root) if manifest is None else manifest
+        mf.write_text("".join(f"{x}\n" for x in lines), encoding="utf-8",
+                      errors="surrogateescape")
+        extra = ["--manifest-file", str(mf)]
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "--root", str(root), *args],
+        [sys.executable, str(SCRIPT), "--root", str(root), *extra, *args],
         capture_output=True, text=True,
     )
 
 
-def _report(root: Path, *args: str) -> dict:
-    p = _run(root, "--json", *args)
+def _report(root: Path, *args: str, **kw) -> dict:
+    p = _run(root, "--json", *args, **kw)
     assert p.returncode == 0, f"exit {p.returncode}: {p.stderr}"
     return json.loads(p.stdout)
 
@@ -1064,7 +1081,8 @@ def test_git_pathspec_glob_semantics_hold_on_this_machine(repo: Path) -> None:
                            cwd=repo, capture_output=True, text=True).stdout.split()
     assert "svc/main.py" not in plain, (
         "git's default pathspec now matches direct children — re-derive whether `:(glob)` is "
-        "still needed, and update `Q-302`, which is filed on this behaviour"
+        "still needed, and update both review skills' Step 2a 'Resolving a section glob' "
+        "paragraph, which relies on it"
     )
     assert {"svc/main.py", "svc/inner/deep.py"} <= set(magic)
 
@@ -1248,3 +1266,336 @@ def test_an_uncoverable_residual_returns_zero_not_a_budget() -> None:
         "a residual no budget can cover must report 0 (rendered UNREACHABLE), never the "
         "group count dressed up as an achievable budget"
     )
+
+
+# --------------------------------------------------------------------------- #
+# the manifest is the skill's Step 1 list, passed as a file
+# --------------------------------------------------------------------------- #
+
+def test_the_manifest_file_is_required(repo: Path) -> None:
+    """No silent `git ls-files` fallback. The script listing the whole repository is the
+    defect: it sized the residual over files Step 1 excludes. Required, an old skill on this
+    script and this skill on an old script both stop at argparse, exit 2."""
+    p = _run(repo, "--json", auto_manifest=False)
+    assert p.returncode == 2, (
+        f"with no --manifest-file the script exited {p.returncode} — it built a manifest of "
+        "its own, which is the population Step 1 never declared"
+    )
+    assert "--manifest-file" in p.stderr, p.stderr
+
+
+def test_the_partition_runs_over_the_listed_manifest_not_the_repository(repo: Path) -> None:
+    """A Step 1 manifest that excludes markdown and one mapped script: neither may be counted,
+    mapped, or handed to a residual agent."""
+    listed = [f for f in _tracked(repo) if not f.endswith(".md") and f != "scripts/deploy.sh"]
+    assert len(listed) < len(_tracked(repo)) - 1, "fixture lost the files this test drops"
+    r = _report(repo, manifest=listed)
+    assert r["status"] == "ok", r
+    assert r["manifest"] == len(listed), (
+        f"manifest {r['manifest']} is not the {len(listed)} paths the file lists"
+    )
+    assert r["mapped"] + r["residual"] == r["manifest"], (
+        "mapped + residual must partition the LISTED manifest — a section hit outside it "
+        "(scripts/deploy.sh) was counted as mapped"
+    )
+    handed = {f for a in r["assignments"] for f in a["files"]}
+    assert handed <= set(listed), f"residual agents were handed {sorted(handed - set(listed))}"
+    assert "docs/guide.md" not in handed
+
+
+def test_blank_lines_dot_slash_and_crlf_name_the_same_files(repo: Path, tmp_path: Path) -> None:
+    files = _tracked(repo)
+    clean = tmp_path / "clean.txt"
+    clean.write_text("".join(f"{f}\n" for f in files), encoding="utf-8")
+    messy = tmp_path / "messy.txt"
+    messy.write_bytes(("\r\n".join(["", *(f"./{f}" if i % 2 else f for i, f in enumerate(files)),
+                                    "   ", ""]) + "\r\n").encode("utf-8"))
+    a = _report(repo, "--manifest-file", str(clean))
+    b = _report(repo, "--manifest-file", str(messy))
+    assert a["status"] == b["status"] == "ok", (a.get("notes"), b.get("notes"))
+    for key in ("manifest", "mapped", "residual", "assignments"):
+        assert a[key] == b[key], f"{key} differs between the clean and the messy file"
+
+
+@pytest.mark.parametrize("bad,expect", [
+    (["scripts/deploy.sh", "scripts/deploy.sh"], "listed more than once"),
+    (["scripts/deploy.sh", "./scripts/deploy.sh"], "listed more than once"),
+    (["gone.py"], "does not list"),
+    (["api"], "does not list"),
+    (["/etc/passwd"], "does not list"),
+    (["../outside.py"], "does not list"),
+])
+def test_a_path_that_would_change_a_count_is_refused(repo: Path, bad: list, expect: str) -> None:
+    """A duplicate counts one file twice; a path git does not track can never be mapped, so it
+    would be residual whatever the map says. Neither may be counted quietly."""
+    listed = [f for f in _tracked(repo) if f != "scripts/deploy.sh"] + bad
+    p = _run(repo, "--json", manifest=listed)
+    assert p.returncode == 0, p.stderr
+    r = json.loads(p.stdout)
+    assert r["status"] == "bad-manifest" and r["assignments"] == [], r
+    assert "manifest" not in r, "a refused manifest must report no counts"
+    assert any(expect in n for n in r["notes"]), r["notes"]
+    human = _run(repo, manifest=listed).stdout
+    assert "not assessed" in human and expect in human, human
+
+
+def test_an_empty_or_unreadable_manifest_file_is_not_assessed(repo: Path, tmp_path: Path) -> None:
+    empty = tmp_path / "empty.txt"
+    empty.write_text("\n\n", encoding="utf-8")
+    r = _report(repo, "--manifest-file", str(empty))
+    assert r["status"] == "empty" and any("lists no paths" in n for n in r["notes"]), r
+    for target in (tmp_path / "missing.txt", tmp_path):
+        r = _report(repo, "--manifest-file", str(target))
+        assert r["status"] == "unreadable-manifest", r
+    bad = tmp_path / "latin1.txt"
+    bad.write_bytes(b"caf\xe9.py\n")
+    assert _report(repo, "--manifest-file", str(bad))["status"] == "unreadable-manifest"
+
+
+def test_the_skill_passes_its_manifest_to_every_invocation() -> None:
+    """Every prescribed run of the script carries `--manifest-file` and the file Step 1
+    writes, and Step 1 says to write it."""
+    text = SKILL.read_text(encoding="utf-8")
+    runs = re.findall(r"^python3 sysop/scripts/security_partition\.py.*$", text, re.M)
+    assert runs, "the skill prescribes no run of the partition"
+    for line in runs:
+        assert "--manifest-file sysop/runtime/audit-scope.txt" in line, line
+        assert "--json" in line, line
+    step1 = text[text.index("## Step 1"):text.index("## Step 2")]
+    assert "`sysop/runtime/audit-scope.txt`" in step1, (
+        "Step 1 no longer writes the manifest file Step 3-0c passes"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# a brace list in a section glob binds its expansions
+# --------------------------------------------------------------------------- #
+
+MAP_BRACES = """\
+## `parsers/rules*.{jsonl,json}` — Rules files
+
+**Check:**
+- **A03 Injection**: validate rule input
+
+## `web/*.{ts,tsx}`, `src/{a,b}/*.{py,sh}` — Mixed
+
+**Check:**
+- **A03 Injection**: escape output
+
+## `big/{a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n}{o,p}{q,r}/x.py` — Past the ceiling
+
+**Check:**
+- **A01 Access Control**: n/a
+"""
+
+
+def test_a_brace_glob_binds_each_of_its_expansions(tmp_path: Path) -> None:
+    """`parsers/rules*.{jsonl,json}` is a real consumer's map shape. Unexpanded, git matched
+    no file, so its rules files fell to the residual sweep instead of their section."""
+    files = {
+        "parsers/rules.jsonl": "x\n", "parsers/rules_v2.json": "x\n", "parsers/other.py": "x\n",
+        "web/app.ts": "x\n", "web/view.tsx": "x\n", "web/style.css": "x\n",
+        "src/a/m.py": "x\n", "src/b/n.sh": "x\n", "src/c/o.py": "x\n",
+        "big/acegikmoq/x.py": "x\n",
+    }
+    r = _mkrepo(tmp_path / "braces", files, mapdoc=MAP_BRACES)
+    rep = _report(r)
+    handed = {f for a in rep["assignments"] for f in a["files"]}
+    bound = {"parsers/rules.jsonl", "parsers/rules_v2.json", "web/app.ts", "web/view.tsx",
+             "src/a/m.py", "src/b/n.sh"}
+    assert not (bound & handed), f"brace-matched files fell to the residual: {sorted(bound & handed)}"
+    assert {"parsers/other.py", "web/style.css", "src/c/o.py"} <= handed
+    # 2^9 = 512 expansions: past the ceiling, binds nothing, and says so.
+    assert "big/acegikmoq/x.py" in handed
+    assert any("expands to more than" in n and "big/" in n for n in rep["notes"]), rep["notes"]
+
+
+@pytest.mark.parametrize("glob", [
+    "*.{ts,tsx}", "parsers/rules*.{jsonl,json}", "src/{a,b}/*.{py,sh}", "{x,{y,z}}/w",
+    "a{,b}c", "no/braces/**/*.py", "{a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n}{o,p}{q,r}",
+    "{a,b}{c,d}{e,f}{g,h}{i,j}{k,l}{m,n}{o,p}",
+    "./x/*.py", "././x/*.py", "/x/*.py", "//x", "{./a,/b}/*.py", "./", " ./padded/*.py ",
+])
+def test_the_brace_expansion_matches_the_security_map_filter(glob: str) -> None:
+    """Two readers of one map: the residual partition and `/review-close`'s security-map
+    filter must expand and normalise a glob alike and refuse the same oversize one."""
+    sys.path.insert(0, str(ROOT / "core" / "companion" / "scripts"))
+    import security_map_filter as F
+    m = _module()
+    got = F.tokens(f"`{glob}`")
+    if got and got[0].startswith("\0"):
+        assert m.brace_count(glob) > m.BRACE_EXPAND_LIMIT, glob
+    else:
+        assert m.brace_count(glob) <= m.BRACE_EXPAND_LIMIT, glob
+        assert m.glob_alternatives(glob) == got, glob
+    assert m.BRACE_EXPAND_LIMIT == F.EXPAND_LIMIT
+
+
+MAP_LEADING = """\
+## `/svc/*.py`, `././scripts/*.sh` — Leading slash and dot-slash
+
+**Check:**
+- **A03 Injection**: parameterize
+
+## `{/web,../outside}/*.ts` — One bad alternative beside a good one
+
+**Check:**
+- **A03 Injection**: escape output
+"""
+
+
+def test_a_leading_slash_binds_and_a_refused_glob_is_named(tmp_path: Path) -> None:
+    """`/svc/*.py` is refused by git as outside the repository, and the refusal read as an
+    empty match; batched with `../outside/*.ts`, the good `web/*.ts` alternative was voided
+    with it. Each alternative is normalised as the filter does, and a glob git still refuses
+    is named, never read as binding nothing in silence."""
+    files = {"svc/a.py": "x\n", "scripts/b.sh": "x\n", "web/c.ts": "x\n", "other/d.py": "x\n"}
+    r = _mkrepo(tmp_path / "leading", files, mapdoc=MAP_LEADING)
+    rep = _report(r)
+    handed = {f for a in rep["assignments"] for f in a["files"]}
+    assert not ({"svc/a.py", "scripts/b.sh", "web/c.ts"} & handed), (
+        f"normalised or sibling-bound files fell to the residual: {sorted(handed)}")
+    assert "other/d.py" in handed
+    assert any("../outside/*.ts" in n and "could not be resolved by git" in n
+               for n in rep["notes"]), rep["notes"]
+
+
+# --------------------------------------------------------------------------- #
+# Step 1's own recipes print C-quoted names
+# --------------------------------------------------------------------------- #
+
+QUOTED_FILES = {"café.py": "x\n", "tab\tname.py": "x\n", 'q"uote.py': "x\n", "plain.py": "x\n"}
+
+
+def _recipe(root: Path, recipe: str) -> str:
+    """Step 1's recipe, run as the skill prints it: git's default `core.quotePath`."""
+    p = subprocess.run(["bash", "-c", recipe], cwd=root, capture_output=True, text=True,
+                       check=True)
+    return p.stdout
+
+
+@pytest.mark.parametrize("recipe", [
+    "git ls-files -- .",
+    "git log --since=2000-01-01 --name-only --pretty=format: -- . | sort -u",
+])
+def test_step_1_recipe_output_with_quoted_names_is_counted(tmp_path: Path, recipe: str) -> None:
+    """`git ls-files` and `git log --name-only` C-quote `café.py` and a tab name by default;
+    read raw, those lines were refused as untracked, steering the runner to drop tracked
+    files."""
+    r = _mkrepo(tmp_path / "quoted", QUOTED_FILES)
+    out = _recipe(r, recipe)
+    assert '"caf\\303\\251.py"' in out and '"tab\\tname.py"' in out, out
+    mf = tmp_path / "m.txt"
+    mf.write_text(out, encoding="utf-8")
+    rep = _report(r, "--manifest-file", str(mf))
+    assert rep["status"] == "ok", rep.get("notes")
+    assert rep["manifest"] == len(_tracked(r)), rep["manifest"]
+    handed = {f for a in rep["assignments"] for f in a["files"]}
+    assert {"café.py", "tab\tname.py", 'q"uote.py'} <= handed
+
+
+def test_a_quoted_and_a_raw_line_for_one_file_are_a_duplicate(tmp_path: Path) -> None:
+    r = _mkrepo(tmp_path / "dup", QUOTED_FILES)
+    rep = _report(r, manifest=["café.py", '"caf\\303\\251.py"', "plain.py"])
+    assert rep["status"] == "bad-manifest", rep
+    assert any("listed more than once" in n and "café.py" in n for n in rep["notes"]), rep
+
+
+def test_a_bom_is_read_through_and_whitespace_is_named(repo: Path, tmp_path: Path) -> None:
+    files = _tracked(repo)
+    bom = tmp_path / "bom.txt"
+    bom.write_bytes(b"\xef\xbb\xbf" + "".join(f"{f}\n" for f in files).encode("utf-8"))
+    assert _report(repo, "--manifest-file", str(bom))["status"] == "ok"
+    rep = _report(repo, manifest=[f for f in files if f != "Dockerfile"] + ["Dockerfile "])
+    assert rep["status"] == "bad-manifest", rep
+    assert any("only by surrounding whitespace" in n and "'Dockerfile '" in n
+               for n in rep["notes"]), rep["notes"]
+
+
+def test_the_unquoter_matches_the_shipped_one() -> None:
+    """A copy of `ignored_refs.py`'s `_unquote` (that script does not ship in a loop install);
+    the two must decode alike."""
+    sys.path.insert(0, str(ROOT / "core" / "companion" / "scripts"))
+    import ignored_refs as I
+    m = _module()
+    for t in ['"caf\\303\\251.py"', '"tab\\tname.py"', '"a\\"b\\\\c"', "plain.py",
+              '"x\\q"', '"\\a\\b\\v\\f\\r\\n"', '"bad\\377.py"', '"', '""']:
+        assert m._unquote(t) == I._unquote(t), t
+
+
+# --------------------------------------------------------------------------- #
+# placeholder alternatives, the brace ceiling's edge, exclusion-glob notes
+# --------------------------------------------------------------------------- #
+
+def test_a_placeholder_alternative_drops_only_itself(tmp_path: Path) -> None:
+    """`{<api module>,lib}/*.py` binds `lib/*.py`: a placeholder is dropped per expanded
+    alternative, never by marking the whole section all-placeholder."""
+    mapdoc = ("## `{<api module>,lib}/*.py` — Mixed alternatives\n\n"
+              "**Check:**\n- **A03 Injection**: parameterize\n")
+    r = _mkrepo(tmp_path / "alt", {"lib/a.py": "x\n", "other/b.py": "x\n"}, mapdoc=mapdoc)
+    rep = _report(r)
+    handed = {f for a in rep["assignments"] for f in a["files"]}
+    assert "lib/a.py" not in handed, "the concrete alternative of a mixed brace glob bound nothing"
+    assert rep["placeholder_sections"] == 0, rep["placeholder_sections"]
+
+
+def test_the_brace_ceiling_admits_exactly_its_limit(tmp_path: Path) -> None:
+    """256 expansions bind; 257 are refused and named."""
+    m = _module()
+    at = "n/f{" + ",".join(str(i) for i in range(m.BRACE_EXPAND_LIMIT)) + "}.py"
+    over = "o/f{" + ",".join(str(i) for i in range(m.BRACE_EXPAND_LIMIT + 1)) + "}.py"
+    assert m.brace_count(at) == m.BRACE_EXPAND_LIMIT and m.brace_count(over) == m.BRACE_EXPAND_LIMIT + 1
+    mapdoc = (f"## `{at}` — At the limit\n\n**Check:**\n- **A03 Injection**: x\n\n"
+              f"## `{over}` — Past it\n\n**Check:**\n- **A03 Injection**: x\n")
+    r = _mkrepo(tmp_path / "ceil", {"n/f0.py": "x\n", "o/f0.py": "x\n"}, mapdoc=mapdoc)
+    rep = _report(r)
+    handed = {f for a in rep["assignments"] for f in a["files"]}
+    assert "n/f0.py" not in handed, "a glob of exactly the limit was refused"
+    assert "o/f0.py" in handed, "a glob past the limit bound"
+    assert any("expands to more than" in n and "o/f{" in n for n in rep["notes"]), rep["notes"]
+    assert not any("n/f{" in n for n in rep["notes"]), rep["notes"]
+
+
+def test_an_exclusion_glob_git_refuses_is_named(repo: Path) -> None:
+    (repo / "CLAUDE.md").write_text(
+        "## Map coverage exclusions\n\n- `../outside/**` — not ours\n", encoding="utf-8")
+    rep = _report(repo)
+    assert any("../outside/**" in n and "could not be resolved by git" in n
+               for n in rep["notes"]), rep["notes"]
+
+
+# --------------------------------------------------------------------------- #
+# the skill's manifest clauses, each in its own step
+# --------------------------------------------------------------------------- #
+
+def _between(text: str, start: str, *ends: str) -> str:
+    i = text.index(start)
+    j = min(k for k in (text.find(e, i + len(start)) for e in ends) if k != -1)
+    return text[i:j]
+
+
+def test_the_skill_s_manifest_clauses_sit_in_their_steps() -> None:
+    text = SKILL.read_text(encoding="utf-8")
+    step1 = _between(text, "## Step 1", "## Step 2")
+    for clause in (
+        "then drop every path `git ls-files` no longer lists",
+        "**Write the manifest to `sysop/runtime/audit-scope.txt` with the `Write` tool:** the "
+        "file list plus every always-include file it does not already hold",
+        "both numbers summed (`+<N>` counts only the always-include files the list did not "
+        "hold), the paths in `sysop/runtime/audit-scope.txt` — is this round's `manifest`",
+    ):
+        assert clause in step1, f"Step 1 lost: {clause[:70]}"
+    step30c = _between(text, "### 3-0c.", "\n## ", "\n### ")
+    for clause in (
+        "If the script exits 2 naming `--manifest-file` as an unrecognized argument, the "
+        "bash-installed script is older than this skill",
+        "`bash sysop/scripts/sysop-update.sh`",
+        "On status `bad-manifest`",
+    ):
+        assert clause in step30c, f"Step 3-0c lost: {clause[:70]}"
+    step3c = _between(text, "## Step 3c:", "## Step 4:")
+    assert "the manifest Step 1 wrote, as written" in step3c
+    assert "**Do not rewrite `sysop/runtime/audit-scope.txt` here:**" in step3c
+    assert "Write the Step 1 file list" not in step3c, (
+        "Step 3c rewrites the scope file from memory again: the ingest would digest a smaller "
+        "set than Step 3-0c partitioned")

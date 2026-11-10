@@ -613,14 +613,30 @@ date -u +%Y%m%dT%H%M%SZ            # the <CYCLE_TS> for the path below
 ```bash
 # `mkdir` does NOT fail on an unsubstituted placeholder: it would create a directory
 # literally named `<TASK_ID>` and every artifact would land where no reader looks. So
-# the path is substituted ONCE, into a variable, and the `case` tests that variable —
-# a partial substitution must not pass the gate and still reach the mkdir.
+# the path is substituted ONCE, into CLAIM_DIR, and the check tests that value — a
+# partial substitution must not pass the gate and still reach the mkdir. Python, as
+# /claim-task Step 7-pre mints the same directory: one `python3 -` call is what
+# `Bash(python3 -:*)` admits, where a `case`, an `exit` or a bare `mkdir` binds no rule.
+python3 - <<'PY'
+import sys
+from pathlib import Path
+
 CLAIM_DIR="sysop/runtime/claim/<TASK_ID>/<CYCLE_TS>"
-case "$CLAIM_DIR" in *'<'*|*'>'*) echo "❌ Placeholder not substituted — refusing to mint the artifact directory." >&2; exit 1 ;; esac
-mkdir -p "$(dirname "$CLAIM_DIR")" && mkdir "$CLAIM_DIR" && echo "CLAIM_DIR=$(pwd -P)/$CLAIM_DIR"
+if "<" in CLAIM_DIR or ">" in CLAIM_DIR:
+    print("❌ Placeholder not substituted — refusing to mint the artifact directory.", file=sys.stderr)
+    sys.exit(1)
+d = Path(CLAIM_DIR)
+try:
+    d.parent.mkdir(parents=True, exist_ok=True)
+    d.mkdir()  # no exist_ok: a directory that already exists is an error
+except OSError as e:
+    print("mkdir: " + CLAIM_DIR + ": " + (e.strerror or str(e)), file=sys.stderr)
+    sys.exit(1)
+print("CLAIM_DIR=" + str(Path.cwd().resolve() / CLAIM_DIR))
+PY
 ```
 
-The last `mkdir` has no `-p`, so it fails on a directory that already exists. That is what makes the post-6a plan check below mean anything: a `plan.md` left by an earlier run cannot pass for this one. On `File exists`, read the date again and re-run. Hold the printed absolute path as that task's `<CLAIM_DIR>`; the sub-agents `cd` into the worktree and write to it by that path.
+The last `mkdir` is called without `exist_ok`, so it fails on a directory that already exists. That is what makes the post-6a plan check below mean anything: a `plan.md` left by an earlier run cannot pass for this one. On `File exists`, read the date again and re-run. Hold the printed absolute path as that task's `<CLAIM_DIR>`; the sub-agents `cd` into the worktree and write to it by that path.
 
 **Then capture each task's pre-plan HEAD.** The integrity check below compares against it, so it has to be read *before* the spawn or it means nothing. Run this once per task in the batch, substituting the worktree path Step 5 recorded:
 
@@ -973,7 +989,7 @@ RECORD_PY
 
 **Do not write the record yourself from `PLAN_TEXT[<TASK_ID>]`.** You hold the plan and could, but a record composed by the orchestrator is further from the diff than one written by the agent that made the change. A `FAILED` verdict the human can act on beats a record nobody stands behind — `/claim-task` Step 8 carries the same prohibition in as many words.
 
-**Then copy any `IGNORED-REF:` lines the agent quoted (Step 7c item 4c) into that task's Step 8 `Notes`.**
+**Then copy any `IGNORED-REF:` lines the agent quoted (Step 7c item 4c) into that task's Step 8 `Notes`.** Copy any UI-verify note it quoted (item 5) there too.
 
 **Then check that `<CLAIM_DIR>/revised-plan.md` exists.** If it does not, write `no revised-plan.md: the executor skipped item 2` into that task's Step 8 `Notes`. It does not change the status.
 
@@ -1110,7 +1126,7 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
 
    **`STOP: no such file` means the path is wrong, not the record:** `<BODY_PATH_AS_RESOLVED>` is the `body:` value from `tasks/index.yml`, which is relative to `tasks/` (e.g. `open/<TASK_ID>.md`). Exit 3 means a placeholder is still in it.
 
-   **Any other non-zero exit (no `STOP:` line; `grep` found no heading) means the section is not there — go back and write it.** `-A1` prints the line under the heading, so a section still reading `<recorded at /claim-task plan time …>` is visible to you here — that is the schema template, not a record, and Step 2d classifies it `missing` too, so replace it.
+   **Read the output, not the exit status:** a `grep` that finds nothing can come back as a success, with the `OK: … is a file` line alone. **No `<n>:` line naming `Test decision` means the section is not there — go back and write it.** `-A1` prints the line under the heading, so a section still reading `<recorded at /claim-task plan time …>` is visible to you here — that is the schema template, not a record, and Step 2d classifies it `missing` too, so replace it.
 
    **Know exactly what this proves, because an earlier version of this step claimed more and was wrong in both directions at once.** It is a **shallow** check, the same shape `/claim-task` Step 7e ships: it catches the write that silently did not happen, and nothing else. It does **not** verify that the record is real. `grep` cannot tell a heading in the body from one inside a fenced block, so on a body carrying a `## Plan` section — whose fence quotes its own `## Test decision` line — a hit can be a quotation.
 
@@ -1126,7 +1142,7 @@ You are executing roadmap task `<TASK_ID>`. The orchestrator has already:
 
    Treat any non-zero exit like an implementation finding: fix the underlying issue, do not silence it without a `# type: ignore[...]` or `// eslint-disable-next-line <rule> -- <reason>` justified inline. If the gate exits non-zero and you cannot fix it (e.g., missing toolchain dependency in the worktree), emit `STATUS: FAILED` with the stderr in `ERROR`.\
 4c. **Check for gitignored files your work reads.** From `<WORKTREE_PATH>`, run `python3 sysop/scripts/ignored_refs.py . <default branch>`. **Exit 0**: go on. **Exit 1**: quote every `IGNORED-REF:` line in your final message, and do not commit the file, edit `.gitignore` or file a task for it. **Any other exit** means the script failed: put its error in your final message and go on.
-5. **Post-fix UI verification** (the same gate `/claim-task` Step 7e's executor runs internally) only if any `frontend/` files changed — invoke `.claude/skills/_shared/ui-verify.md`.\
+5. **Post-fix UI verification** (the same gate `/claim-task` Step 7e's executor runs internally) only if any `frontend/` files changed — invoke `.claude/skills/_shared/ui-verify.md`, and quote any note from that partial's § Step 7 catalogue verbatim in your final message.\
 5b. **Invoke `/document-work --non-interactive`** via the `Skill` tool to commit your work, write `sysop/runtime/pending-docs/<sanitized-branch>.md`, and enforce the follow-up stub check.
 
    The `--non-interactive` flag (see `/document-work` Step 0) tells the skill to:

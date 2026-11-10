@@ -119,6 +119,9 @@ LOOP_UNUSED_CLAUDE_SECTIONS=(
 # remove that worktree on exit, since a worktree can't cleanly remove itself).
 REF_OVERRIDE=""
 REF_WORKTREE=""
+# The commit --ref pinned, resolved before the temporary worktree is made (the
+# preserved-paths summary names it in its `git diff` lines).
+REF_COMMIT=""
 SYSOP_SRC_CLONE=""
 
 # Phase 142: Codex-native skill registration. The installer emits two RELATIVE
@@ -291,6 +294,9 @@ declare -A DIVERGENCE_LAYER_SHADOWS=()
 declare -A DIVERGENCE_LAYER_UNTRACKED=()
 OLD_COMMIT=""
 PRESERVED_PATHS=()
+# The preserved paths whose upstream copy also changed since OLD_COMMIT, each mapped
+# to its source path relative to REPO_ROOT (for the summary's `git diff` line).
+declare -A PRESERVED_UPSTREAM_CHANGED=()
 declare -A ACCEPT_UPSTREAM=()
 # Phase 128: sysop/ namespace migration state. MIGRATION_MODE is set when the
 # --update flow detects an old-layout tree OR an old-spelled lock. NS_MOVE_OLD/NEW
@@ -1138,7 +1144,16 @@ copy_file() {
       [[ ! -f "$_anc" ]] && [[ -f "$DIVERGENCE_SHADOW/$_old" ]] && _anc="$DIVERGENCE_SHADOW/$_old"
     fi
     if [[ -f "$_work" ]] && [[ -f "$_anc" ]] && ! cmp -s "$_anc" "$_work"; then
-      if [[ "${ACCEPT_UPSTREAM[$_relp]:-0}" == "1" ]]; then
+      if cmp -s "$src" "$_work"; then
+        # The consumer's edit is already this update's copy, byte for byte (a fix
+        # applied by hand before upstream shipped it): nothing is kept back, and
+        # the copy below writes the same bytes. A matching --accept-upstream
+        # entry did its job, so it is not reported stale.
+        if [[ "${ACCEPT_UPSTREAM[$_relp]:-0}" == "1" ]]; then
+          ACCEPT_UPSTREAM[$_relp]="applied"
+        fi
+        note "✓ matches upstream: $_relp (consumer-modified since ${OLD_COMMIT:0:12}, and identical to this update's copy)"
+      elif [[ "${ACCEPT_UPSTREAM[$_relp]:-0}" == "1" ]]; then
         # Consumer explicitly opted to take upstream — record + fall through
         # to the cp below. Mark the accept-upstream slot so post-pipeline
         # accounting can flag stale entries.
@@ -1149,7 +1164,15 @@ copy_file() {
         # MANAGED_PATHS so the lock stays accurate; numstat won't see this
         # path (working tree didn't change), so report_post_overwrite_deltas
         # emits a dedicated preserved-paths block above its numstat table.
-        note "⚠ preserved: $_relp (consumer-modified since ${OLD_COMMIT:0:12}; use --accept-upstream $_relp to overwrite)"
+        # Whether upstream also moved the file is the three-way half: the old
+        # install's copy against this update's. A kept copy upstream changed
+        # lacks that change, and the skills this run refreshes may call it.
+        local _upstream="upstream unchanged since then"
+        if ! cmp -s "$_anc" "$src"; then
+          _upstream="upstream ALSO changed it since then, and your copy lacks that change"
+          PRESERVED_UPSTREAM_CHANGED[$_relp]="${src#"$REPO_ROOT"/}"
+        fi
+        note "⚠ preserved: $_relp (consumer-modified since ${OLD_COMMIT:0:12}; $_upstream; use --accept-upstream $_relp to overwrite)"
         PRESERVED_PATHS+=("$_relp")
         record_managed_path "$dst"
         return 0
@@ -2072,8 +2095,9 @@ report_pre_overwrite_divergence() {
   hdr "⚠  committed local edits in managed paths"
   say ""
   say "  These files contain committed content that differs from Sysop's"
-  say "  prior install. The overwrite below will replace them; consumer-added"
-  say "  content will be lost unless re-applied AFTER --update completes."
+  say "  prior install. The overwrite below will replace them, and consumer-added"
+  say "  content will be lost unless re-applied AFTER --update completes, except in"
+  say "  the sysop/scripts/ files it keeps: the preserved-paths block below names those."
   say ""
   local entry mp added removed
   for entry in "${DIVERGED_PATHS[@]}"; do
@@ -2102,11 +2126,34 @@ report_post_overwrite_deltas() {
     say ""
     local pp
     for pp in "${PRESERVED_PATHS[@]}"; do
-      printf '  ↻  %s   (consumer-modified; --accept-upstream to overwrite)\n' "$pp"
+      if [[ -n "${PRESERVED_UPSTREAM_CHANGED[$pp]:-}" ]]; then
+        printf '  ↻  %s   (consumer-modified; UPSTREAM CHANGED it too; --accept-upstream to overwrite)\n' "$pp"
+      else
+        printf '  ↻  %s   (consumer-modified; upstream unchanged; --accept-upstream to overwrite)\n' "$pp"
+      fi
     done
     say ""
     say "  preserved: ${#PRESERVED_PATHS[@]} managed path(s) preserved due to consumer modification."
     say "  Re-run with --accept-upstream <relpath> (repeatable) or --accept-upstream-list <file> to override."
+    if (( ${#PRESERVED_UPSTREAM_CHANGED[@]} > 0 )); then
+      say ""
+      say "  ⚠ upstream changed ${#PRESERVED_UPSTREAM_CHANGED[@]} of them since ${OLD_COMMIT:0:12}. Each kept copy lacks"
+      say "    upstream's change, and the skills this update refreshed may rely on it. Read the"
+      say "    change, then take it (--accept-upstream, re-applying your edit if it is still"
+      say "    needed) or merge it by hand:"
+      # Under --ref, REPO_ROOT is a temporary worktree the EXIT trap removes, so
+      # name the clone and the pinned commit; otherwise the source's working tree
+      # is what was installed, and a one-sided diff reads exactly that.
+      local _diff_root="$REPO_ROOT" _diff_to=""
+      if [[ -n "$REF_WORKTREE" ]] && [[ -n "$SYSOP_SRC_CLONE" ]] && [[ -n "$REF_COMMIT" ]]; then
+        _diff_root="$SYSOP_SRC_CLONE"
+        _diff_to="${REF_COMMIT:0:12} "
+      fi
+      for pp in "${PRESERVED_PATHS[@]}"; do
+        [[ -n "${PRESERVED_UPSTREAM_CHANGED[$pp]:-}" ]] || continue
+        printf '      git -C %q diff %s %s-- %q\n' "$_diff_root" "${OLD_COMMIT:0:12}" "$_diff_to" "${PRESERVED_UPSTREAM_CHANGED[$pp]}"
+      done
+    fi
   fi
 
   # Phase 24b stale --accept-upstream surfacing. Each ACCEPT_UPSTREAM entry
@@ -6116,6 +6163,7 @@ main() {
       exit 1
     fi
     SYSOP_SRC_CLONE="$REPO_ROOT"
+    REF_COMMIT="$_ref_commit"
     REF_WORKTREE="$(mktemp -d)"
     rmdir "$REF_WORKTREE"   # git worktree add wants a non-existing path
     if ! git -C "$SYSOP_SRC_CLONE" worktree add --detach --quiet "$REF_WORKTREE" "$REF_OVERRIDE" 2>/dev/null; then

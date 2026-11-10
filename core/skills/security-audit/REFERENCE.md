@@ -49,6 +49,40 @@ a rule exists is usually a finding class that went missing when it did not.
 
 *Sections below this line are editor rationale for single rules, not declared rules.*
 
+## Step 2a — why a section glob resolves with `:(glob)`, in one command
+
+2a-1 used to match files to sections by derived-root prefix plus extension (2a-2 named no
+method and inherited it), because a plain pathspec has no `**`: git's default matching lets `*` cross a `/` and
+gives `**` no meaning of its own, so `api/**/*.py` drops the direct child `api/server.py`, and
+`api/routes/**/*.py` matches nothing when every route file sits directly in `api/routes/`. The
+workaround was coarser than the glob in both directions: prefix plus extension cannot tell
+`src/*.py`'s `src/top.py` from `src/a/b.py`, so a nested file no section names read as covered.
+The stale-section sweep ran the plain pathspec as written, so it flagged a section whose files are
+all direct children of a `**/` glob as stale, and kept `src/*.py` live on a nested file alone.
+2a-0's subtree test named no resolution at all, so it now points at the same one.
+
+Git's `:(glob)` magic gives `**/` its zero-or-more meaning and keeps `*` inside one directory,
+which is what the maps mean. It is also how Step 3-0c's residual partition (`security_partition.py`) resolves a section glob, so the coverage
+audit and the residual dispatch agree on which files a section binds, a brace list included. Two
+resolvers with different semantics over the same maps is the
+drift this replaced.
+
+**One command, and git does the subtraction.** Roots as positive pathspecs and every glob as
+`:(glob,exclude)` print the unmatched set directly — the root listing minus the union of the
+globs — without a runner diffing two listings of hundreds of paths by eye. The long form is
+required: `':!(glob)src/*.py'` excluded nothing when tried, because the `:!` short form does not
+take `(glob)` after it. The output is read, not parsed, so it is not `-z`: `ls-files` C-quotes a
+name holding an unusual byte, which is unambiguous in a report.
+
+**What the runner does to a glob first, and why.** A `<…>` glob is dropped per glob because a
+header can mix concrete and placeholder globs, and the concrete ones bind. A brace list is expanded
+because git has none (`/review-close`'s security-map filter and the residual partition do the
+same, with one expansion and one ceiling, before matching). `[…]` is passed verbatim rather than escaped by the runner, because the
+residual partition passes it verbatim too: escaping in one resolver and not the other would reopen
+the disagreement, so a literal bracket is fixed in the map (`\[id\]`), where both read it. With
+no concrete glob there are no roots and no exclusions, and `git ls-files` with no pathspec lists
+the whole repository, which would report every tracked file as unmatched.
+
 ## Step 2b — why the pip-audit stage picks a target and prints it
 
 A bare `pip-audit` audits the interpreter it is installed into. Installed as a uv tool, with pipx or
@@ -214,6 +248,55 @@ it, so the runner then writes `(none — write no file)` in the placeholder. The
 heredocs only, which is the fail-safe direction: it can still compute, and it cannot collide with a
 sibling. Seeding a rule was not done here, because it would widen the permission surface of every
 install to buy a scratch file that a heredoc already replaces.
+
+## Step 3-0c — why the partition reads Step 1's manifest from a file
+
+The partition used to list `git ls-files` itself. That is not the round's manifest: Step 1 narrows
+the list by scope or by the incremental window, removes its exclusion classes and adds the
+always-include files, so the script subtracted the mapped set from a different, larger set than
+the one Step 1 declared and Step 5b prints. Measured on one consumer: 2,698 tracked files, 1,149
+of them in Step 1's exclusion classes (1,126 markdown), and 62 of the 100 files the default budget
+handed out were markdown. The residual's counts and the `Coverage:` line's `manifest` were not
+commensurable, and the residual budget went to prose.
+
+**Why a file, and not a copy of the exclusion list.** Copying Step 1's rules into the script makes
+two definitions of one set that drift, and the script still could not rebuild the rest: the scope
+comes from the consumer's `CLAUDE.md` mapping, the incremental window from the last Round's date,
+and the always-include set from prose. The skill already holds the list, so it hands it over. The
+list is still model-built, so two runs on one commit can differ; the file makes the partition agree
+with this run's Step 1, not with another run's.
+
+**Why required, with no fallback.** A fallback to `git ls-files` would bring the defect back
+silently for any runner that left the flag off. Required, version skew fails loudly both ways: an
+older skill on this script and this skill on an older script both stop at argparse with exit 2,
+and the skill names the update for the second.
+
+**Why some lines are read through and others refused.** Blank lines, a leading `./`, a CRLF
+ending and a leading BOM name the same file. So does a C-quoted line: Step 1's recipes run with
+git's default `core.quotePath`, so `git ls-files` and `git log --name-only` print `café.py` as
+`"caf\303\251.py"` and quote a tab, a `"` or a backslash, and read raw every such tracked file
+was refused as untracked, steering the runner to drop it. A line that is itself tracked is taken
+as written first; otherwise one whose decoded name is tracked counts as that name, and duplicates
+are checked after decoding. The decoder is `ignored_refs.py`'s, copied because that script does
+not ship in a loop install. A refused path that differs from a tracked one only by surrounding
+whitespace is named as such, so the fix is not mistaken for dropping the file. A duplicate would count one file twice in `manifest`; a path
+`git ls-files` does not list can never be bound by a section (section globs resolve against
+tracked files), so it would sit in the residual whatever the map says, and a deleted one is a
+file no agent can open. Either changes a reported number, so the file is refused whole with the
+paths named, never corrected quietly. Step 1's incremental recipe drops deleted paths for the same
+reason: `git log --name-only` names them.
+
+**Why the always-include files are in it.** They are files this round audits. One that no section
+binds, such as an auth module under an unlocalized map, is what the residual sweep exists to
+reach, and leaving it out of the manifest would assign it to nobody.
+
+**Why `audit-scope.txt`.** It is already the Step 1 file list Step 3c passes the ingest, and it
+already has its `Edit` rule in both install modes, so `dontAsk` admits the `Write` with no new
+rule. Step 3c passes it as written and rewrites it only when it is missing or its count is not
+Step 1's `Files:` count, which is how a concurrent round's rewrite shows. Step 3c used to rewrite
+it from the runner's memory of "the Step 1 file list", which could drop the always-include files,
+so the ingest bucketed and digested, and Step 7's mark recorded, a smaller set than Step 3-0c
+partitioned and Step 5b counted. Used as written, the three are one set.
 
 ## Step 7 — why the claude-security mark names its scope, and carries a digest
 

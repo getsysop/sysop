@@ -166,7 +166,24 @@ MARKER = re.compile(r"^<!-- sysop:arm=(\S+) -->[ \t]*$")
 #: a `<base>` site without step 1 (a landed branch, a resume's `RERUN 2b` or `RERUN 3`), and the
 #: `--yes` clause on the update line. Its round dropped Step 3's stale "(the same per-branch read
 #: Step 3c makes)". Each sits at the site that runs it.
-CORE_BUDGET_BYTES = 289_193
+#: Phase 477 (`Q-737`, Wade's ruling of 2026-11-08: ask attended, 4a-SKIP headless) raised it to
+#: 290_344 (+1151): Step 2a step 1's `close_arms.py reviewed` record, Step 4a item 1's `tip`
+#: check with its exit and its `4a-moved` stub and marker, Step 8's `Merged after review:` row
+#: and the 4a-SKIP item naming `tip`'s line. The ask itself is the arm. Each sits at its step.
+#: Its rounds set it to 290_397 (+53): round 1 left a skipped branch out of Step 4a-post's count
+#: (+88), round 2 found that under `pr` the close then pushed an empty integration branch, and the
+#: maintainer ruled the exemption reverted; what stays is 4a-post's cause list naming a Step 4a skip.
+#: Phase 479 (`Q-530`, Wade's rulings of 2026-11-09: only ours, report and continue on FOREIGN,
+#: force-remove only a recorded worktree) lowered it to 290_310 (-87): Step 2a's exclusion keyed
+#: on the name or a zero-commit branch under `.claude/worktrees/`, Step 2b step 4's `own` record,
+#: the exit-keyed arm stub and Step 8's `Left by 2b:` row (+711), paid for by moving the HARD
+#: RULE's "it must be a delta" rationale to `REFERENCE.md` § *Step 2b — provenance* (-798).
+#: Its round set it to 290_580 (+270): Step 2a asks about, or SKIPs, a branch with commits under
+#: `.claude/worktrees/` (the entry's filed fix, which the build had read as "review it"), Step 2b
+#: step 4 records only the notice's `worktreePath`, the stub's exit 2 and `--prepare` destination,
+#: and `DISCARDING:` on Step 8's row. Each is an instruction the round found missing. After round 2,
+#: 290_602 (+22): Step 2b's list of SKIPs that are not targets names the new one.
+CORE_BUDGET_BYTES = 290_602
 
 GIT_ENV = {k: v for k, v in os.environ.items()
            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
@@ -952,7 +969,7 @@ def _arm_files():
 #: Every arm a command can make due: `arm`'s table, the arms `conflicts` and `notes` record,
 #: the flag arms `begin` records, and the arms `exited` records.
 REQUIRABLE = ({a for arms in close_arms.ARM_FOR.values() for a in arms} | {close_arms.CONFLICT_ARM, close_arms.NOTES_ARM,
-                                                   close_arms.POLICY_ARM}
+                                                   close_arms.MOVED_ARM, close_arms.POLICY_ARM}
               | {arm for _, arm in close_arms.FLAG_ARMS} | close_arms.EXIT_ARMS)
 
 
@@ -960,14 +977,14 @@ def test_review_close_has_its_arms():
     assert [p.name for p in _arm_files()] == [
         "1b-dirty-primary.md", "2a-ignored-refs.md", "2b-large-diff.md", "2b-leak.md", "2b-no-conventions.md",
         "2b-twin-spawn.md", "3b-collect-exit.md", "3b-rollback.md", "3c-signals.md", "4-pre-pr.md",
-        "4a-append.md", "4a-fix.md", "4a-post-failure.md", "4a-post-prescan.md",
+        "4a-append.md", "4a-fix.md", "4a-moved.md", "4a-post-failure.md", "4a-post-prescan.md",
         "4a-published.md", "4b-batches.md",
         "4c-check-exit.md", "4c-unmerged.md", "4d-direct.md", "4d-pr.md", "6-direct.md",
         "6-pr-cleanup.md", "6-pr-gate.md", "prepare-resume.md", "request-review-land.md"]
     assert set(close_arms.ARMS) == {"1b-dirty-primary", "2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions", "2b-twin-spawn",
                                     "3b-collect-exit", "3b-rollback", "3c-signals", "4-pre-pr",
                                     "4a-append",
-                                    "4a-fix", "4a-post-failure", "4a-post-prescan",
+                                    "4a-fix", "4a-moved", "4a-post-failure", "4a-post-prescan",
                                     "4a-published", "4b-batches",
                                     "4c-check-exit",
                                     "4c-unmerged",
@@ -1074,7 +1091,7 @@ def test_the_close_runs_each_receipt_command():
     text = text_of(CLOSE_CORE)
     for cmd in ('python3 sysop/scripts/close_arms.py begin "<flags>" 1b-dirty-primary 2a-ignored-refs 2b-large-diff '
                 '2b-leak 2b-no-conventions 2b-twin-spawn 3b-collect-exit 3b-rollback 3c-signals '
-                '4-pre-pr 4a-append 4a-fix 4a-post-failure 4a-post-prescan 4a-published 4b-batches '
+                '4-pre-pr 4a-append 4a-fix 4a-moved 4a-post-failure 4a-post-prescan 4a-published 4b-batches '
                 '4c-check-exit '
                 '4c-unmerged 4d-direct '
                 '4d-pr 6-direct '
@@ -1082,6 +1099,9 @@ def test_the_close_runs_each_receipt_command():
                 'python3 sysop/scripts/close_arms.py policy "<close-id>"\n',
                 'python3 sysop/scripts/close_arms.py conflicts "<close-id>"\n',
                 'python3 sysop/scripts/close_arms.py notes "<close-id>" <count>\n',
+                # Phase 477 (`Q-737`): Step 2a step 1's record and Step 4a item 1's check.
+                'python3 sysop/scripts/close_arms.py reviewed "<close-id>" "<branch>"`',
+                '   python3 sysop/scripts/close_arms.py tip "<close-id>" "<branch>"\n',
                 # Phase 430 (P5): Step 2a step 3a's check, with its exit code.
                 'python3 sysop/scripts/close_arms.py exited "<close-id>" 2a-ignored-refs <code>\n',
                 # Phase 406: Step 2b's four, each a printed value passed on as a literal `1`.
@@ -1671,8 +1691,12 @@ def test_workflow_names_begins_arm_list():
     text = (REPO / "core" / "companion" / "docs" / "WORKFLOW.md").read_text(encoding="utf-8")
     assert "| `close_arms.py begin <flags> <arm-id>...` · `policy <close-id>` · `read-policy <dir>` · `arm <close-id> <step>` · " \
            "`conflicts <close-id>` · `notes <close-id> <count>` · " \
+           "`reviewed <close-id> <branch> [--own-commit]` · `tip <close-id> <branch> [--peek]` · " \
            "`exited <close-id> <arm-id> <code>` · " \
            "`loaded <close-id> <arm-id> <digest> <skill-dir>` · " in text
+    # Phase 477 (`Q-737`): the tip check and the arm it makes due.
+    assert "Step 4a's `tip` when a branch is not the commit Step 2a " \
+           "recorded with `reviewed` (Phase 477), `steps/4a-moved.md`;" in text
     # Phase 397 (P5): Step 3b's two exit arms and the command that makes them due.
     assert "Step 3b's `exited` when the collect exits non-zero, `steps/3b-collect-exit.md`, or " \
            "`git worktree remove` refuses, `steps/3b-rollback.md`;" in text

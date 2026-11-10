@@ -116,7 +116,18 @@ if _SUBCOMMAND == 'landed':
         rc, tip = git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", cwd=ws)
         if rc == 0:
             tips.append((f"workspace {ws}", tip))
-        st = git("status", "--porcelain", cwd=ws)[1].splitlines()
+        # `-z`, read unstripped: plain `--porcelain` C-quotes a name holding a space, a `"`, a
+        # backslash, a control character or a non-ASCII byte (`?? "sp ace"`), which names no
+        # file, so `noise` read a tooling link as work. A rename's or copy's second field is its
+        # old path, consumed here, not an entry.
+        fields, st = iter(os.fsdecode(subprocess.run(
+            ["git", "status", "--porcelain", "-z", "--untracked-files=normal"], capture_output=True, cwd=ws).stdout).split("\0")), []
+        for f in fields:
+            if not f:
+                continue
+            if "R" in f[:2] or "C" in f[:2]:
+                next(fields, None)
+            st.append(f)
         if (git("branch", "--show-current", cwd=ws)[1] == branch
                 and [ln for ln in st if not (ln.startswith("?? ") and noise(ws, ln[3:]))]):
             print(f"NOT LANDED — workspace {ws} has uncommitted work on it")

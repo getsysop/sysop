@@ -539,10 +539,14 @@ def test_no_site_in_the_skill_still_asserts_the_branch_name_mechanism():
     wording in italics to say it was replaced; it is exempted by span, not by weakening
     the pattern.
     """
+    # Phase 479 moved the paragraph carrying the historical note, verbatim, to the skill's
+    # REFERENCE.md (§ *Step 2b — provenance*), so the note is exempted there and both files
+    # are scanned.
     text = text_of(SKILL)
+    ref = (SKILL.parent / "REFERENCE.md").read_text(encoding="utf-8")
     exempt = "until this phase both sites said *the worktree whose branch is `main`*"
-    assert exempt in text, "the historical-note exemption is stale — re-point it"
-    haystack = text.replace(exempt, "")
+    assert exempt in ref, "the historical-note exemption is stale — re-point it"
+    haystack = text + "\n" + ref.replace(exempt, "")
     hits = [ph for ph in RETIRED_MECHANISM if ph in haystack]
     assert not hits, (
         f"the retired branch-name mechanism is still asserted at {hits}. The primary is "
@@ -551,8 +555,11 @@ def test_no_site_in_the_skill_still_asserts_the_branch_name_mechanism():
 
 def test_the_skill_states_the_population_by_identity():
     text = text_of(SKILL)
+    # Phase 479 moved the Step 2b HARD RULE's "it must be a delta" paragraph, which carries the
+    # second site, verbatim to REFERENCE.md § *Step 2b — provenance*; it is read there.
+    ref = (SKILL.parent / "REFERENCE.md").read_text(encoding="utf-8")
+    assert carries(ref, "it skips the **primary checkout**, matched by path identity")
     for phrase in ("excluding the **primary checkout**",
-                   "it skips the **primary checkout**, matched by path identity",
                    "excludes the primary checkout by path identity"):
         # Phase 425 (`Q-629`): the fourth site, "deliberately skips the primary checkout",
         # was Step 4a's warning about a stage extract left at the repo root; the extracts went

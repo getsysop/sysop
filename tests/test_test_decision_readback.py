@@ -535,11 +535,12 @@ class TestTheExecutorArm:
     def test_the_executor_is_told_to_read_its_write_back(self):
         text = _live_text()
         assert "**Then read it back, before you go on.**" in text
-        assert "grep -niE -A1 '^#{1,6}[[:space:]]*test[[:space:]]+decision" in text, (
+        assert "grep -niE -A1 '^#+[[:space:]]*test[[:space:]]+decision" in text, (
             "-A1 is load-bearing: without it the step tells the executor to inspect the "
             "line under the heading, which its own output never shows")
-        assert 'case "$body" in *"<"*)' in text, (
-            "an unsubstituted <BODY_PATH_AS_RESOLVED> makes grep exit 2 for a missing "
+        assert ('python3 sysop/scripts/git_check.py file "<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>" '
+                '&& grep -niE -A1') in text, (
+            "an unsubstituted <BODY_PATH_AS_RESOLVED> makes grep fail for a missing "
             "FILE, which reads exactly like a missing RECORD")
         assert "The authority is the orchestrator's Step 8 read-back" in text, (
             "the grep is fence-blind; a step that does not say so invites the next "

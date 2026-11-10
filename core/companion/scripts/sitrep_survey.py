@@ -16,9 +16,10 @@ Usage:
 JSON contract (`--json`, `schema_version` 1). A consumer may rely on these keys:
 
     top level         schema_version, timestamp, main_root, head_short,
-                      stale_days, tasks, review_batches, discrepancies,
-                      open_roadmap_ids, failed_in_merged_batches,
-                      recommended_next, suggested_order
+                      stale_days, tasks, review_batches, review_ready_stale,
+                      review_ready_merged, discrepancies, open_roadmap_ids,
+                      failed_in_merged_batches, recommended_next,
+                      suggested_order
     tasks[]           task_id, state, state_marker, branch, worktree,
                       commits_ahead, unpushed, has_lock, has_index_entry,
                       index_status, dirty, doc_work_ids, pending_doc,
@@ -1126,6 +1127,13 @@ def _held_doc_names(main_root: Path, branch: str) -> list[str]:
     return [name for name, _ in _held_docs(main_root, branch)]
 
 
+def _hold_clear_step(target: str) -> str:
+    """The step a `hold:` asks of a human, for any `pending_doc_hold.py clear` TARGET
+    (a task id, a branch or a doc name)."""
+    return (f"finish what its pending doc's `hold:` names, then "
+            f"python3 sysop/scripts/pending_doc_hold.py clear {target}")
+
+
 def _doc_holds(main_root: Path, branch: str) -> list[str]:
     """The `hold:` reasons (`Q-625`) of the held docs naming `branch`.
 
@@ -1235,7 +1243,8 @@ def _live_work_past(main_root: Path, branch: str, lock: "Lock | None",
             if tip:
                 tips.append(tip)
             on_branch = _git(["branch", "--show-current"], cwd=str(ws), hermetic=True)
-            status = _git(["status", "--porcelain"], cwd=str(ws), hermetic=True).splitlines()
+            status = _status_entries(_git(["status", "--porcelain", "-z", "--untracked-files=normal"],
+                                          cwd=str(ws), hermetic=True))
             if on_branch == branch and [ln for ln in status
                                         if not (ln.startswith("?? ") and _ignored_symlink(ws, ln[3:], main_root))]:
                 return True
@@ -1251,6 +1260,25 @@ def _live_work_past(main_root: Path, branch: str, lock: "Lock | None",
     if rtip:
         tips.append(rtip)
     return any(not any(_is_ancestor(tip, c, main_root) for c in containers) for tip in tips)
+
+
+def _status_entries(raw: str) -> list[str]:
+    """`git status --porcelain -z` output as one `XY <path>` string per entry.
+
+    Under `-z` git quotes no name, where plain `--porcelain` C-quotes one holding a space, a
+    `"`, a backslash, a control character or a non-ASCII byte (`?? "sp ace"`): the quoted
+    string names no file, so `_ignored_symlink` read a tooling link as live work. A rename or
+    copy is two fields, `XY <new>` then `<old>`; the old path is consumed, not read as an
+    entry of its own (`scope_overlap.py` reads the same shape)."""
+    fields = iter(raw.split("\0"))
+    out = []
+    for f in fields:
+        if not f:
+            continue
+        if "R" in f[:2] or "C" in f[:2]:
+            next(fields, None)
+        out.append(f)
+    return out
 
 
 def _ignored_symlink(where: Path, entry: str, main_root: Path) -> bool:
@@ -1479,9 +1507,14 @@ def _commits_unpushed(branch: str, main_root: Path) -> int:
 def _worktree_dirty(worktree_path: Path, main_root: "Path | None" = None) -> bool:
     """Uncommitted changes in a worktree. With `main_root`, an untracked symlink to a target
     the repository ignores (BeanRider ISSUE-0043) is not one, as `/review-close` Step 1a and
-    Step 1-pre read it (Phase 360, round 2, lens D)."""
-    raw = _git(["-c", "core.quotePath=true", "status", "--porcelain"], cwd=str(worktree_path))
-    lines = raw.splitlines()
+    Step 1-pre read it (Phase 360, round 2, lens D).
+
+    A worktree whose `.git` link is gone reads dirty, as `/review-close` Step 1a reads it: git
+    would walk up to an enclosing repository and report that one's status instead."""
+    if not os.path.lexists(worktree_path / ".git"):
+        return True
+    lines = _status_entries(_git(["status", "--porcelain", "-z", "--untracked-files=normal"],
+                                 cwd=str(worktree_path)))
     if main_root is not None:
         lines = [ln for ln in lines
                  if not (ln.startswith("?? ") and _ignored_symlink(worktree_path, ln[3:], main_root))]
@@ -2228,10 +2261,7 @@ def _classify_task(
                 f"then python3 sysop/scripts/clear_user_action.py {task_id}"
             )
         if holds:
-            steps.append(
-                f"finish what its pending doc's `hold:` names, then "
-                f"python3 sysop/scripts/pending_doc_hold.py clear {task_id}"
-            )
+            steps.append(_hold_clear_step(task_id))
         next_action = (f"{'; '.join(steps)} and /review-close" if steps
                        else f"/review-close {task_id}")
         if landed_pr:
@@ -2545,7 +2575,8 @@ def _batch_worktree_path(main_root: Path, n: int) -> Path:
 def _batch_without_lock(batches: list[dict[str, Any]], where: str, removal: str,
                         caveat: str, lock: Lock | None,
                         moved: tuple[Path, Path] | None = None,
-                        moved_locked: bool = False) -> Discrepancy:
+                        moved_locked: bool = False, stale_action: str = "",
+                        merged_action: str = "") -> Discrepancy:
     batch, n = batches[0], batches[0]["number"]
     status = batch["status"]
     detail = f"{where} is Batch {n}'s branch ('{status}' in review_tasks.md), but "
@@ -2562,6 +2593,15 @@ def _batch_without_lock(batches: list[dict[str, Any]], where: str, removal: str,
         # `write_batch_lock` leaves an existing lock as-is, so a re-run cannot repair it.
         remedy = (f"make BATCH-{n}.lock's branch: and Batch {n}'s > **Branch:** agree; "
                   f"bash sysop/scripts/batch_work.sh {n} leaves an existing lock as-is")
+    elif lock is None and merged_action:
+        # The batch's `merged, close pending` route, so the two cannot disagree: a re-attach
+        # or a `--release` (which commits the header back to `Pending`) is the wrong move.
+        remedy = (f"{merged_action}: the branch is already merged, so the batch needs "
+                  "closing, not claiming or releasing")
+    elif status == "Review Ready" and stale_action:
+        # The P2 header arm's stale-doc command, so the two cannot disagree.
+        remedy = (f"{stale_action}: the batch is done but its pending-doc is stale, and "
+                  "the close reads its batch set from review_tasks.md, not from locks")
     elif status == "Review Ready":
         remedy = (f"/review-close (batch {n}): the batch is done and waiting on review, and "
                   "the close reads its batch set from review_tasks.md, not from locks")
@@ -2593,7 +2633,11 @@ def _find_discrepancies(
     main_root: Path,
     unreadable: list | None = None,
     review_batches: list[dict[str, Any]] | None = None,
+    ready_stale: dict[int, str] | None = None,
+    merged_actions: dict[int, str] | None = None,
 ) -> list[Discrepancy]:
+    """`ready_stale`: `Review Ready` batch number → its stale-doc command.
+    `merged_actions`: batch number → its `merged, close pending` route."""
     out: list[Discrepancy] = []
 
     # A hand-off no task state carries (`Q-411`): every close stops on its marker regardless.
@@ -2724,7 +2768,8 @@ def _find_discrepancies(
                 batches, f"worktree {w.path} on branch {w.branch}", removal, caveat,
                 lock_by_id.get(f"BATCH-{n}"),
                 None if _same_dir(w.path, expected) else (w.path, expected),
-                w.locked))
+                w.locked, (ready_stale or {}).get(n, ""),
+                (merged_actions or {}).get(n, "")))
         else:
             out.append(
                 Discrepancy(
@@ -2755,10 +2800,37 @@ def _find_discrepancies(
             continue
         if b in live_batch_by_branch:
             batches = live_batch_by_branch[b]
+            n = batches[0]["number"]
+            named_by = _held_doc_names(main_root, b)
+            # Never `git branch -D` a branch a pending doc names: a close needs it to route
+            # the doc (Step 6 keeps such a branch for the same reason).
+            removal = (f"keep the branch: pending doc(s) {', '.join(named_by)} in "
+                       "sysop/runtime/pending-docs/ name it, and a close routes the doc "
+                       "through it" if named_by
+                       else f"investigate; if dead, git branch -D {b}")
             out.append(_batch_without_lock(
-                batches, f"branch {b} (no worktree)",
-                f"investigate; if dead, git branch -D {b}", caveat,
-                lock_by_id.get(f"BATCH-{batches[0]['number']}")))
+                batches, f"branch {b} (no worktree)", removal, caveat,
+                lock_by_id.get(f"BATCH-{n}"),
+                stale_action=(ready_stale or {}).get(n, ""),
+                merged_action=(merged_actions or {}).get(n, "")))
+            continue
+        kept_for = _held_docs(main_root, b)
+        if kept_for:
+            # Step 6 keeps a branch while a pending doc in the main checkout names it (a
+            # batch close removes the lock at Step 4b, before Step 4c holds the doc), and
+            # the next close's Step 4c needs the branch to route that doc.
+            holds = _doc_holds(main_root, b)
+            detail = (f"branch {b} has no lock, no worktree, no index entry, but pending "
+                      f"doc(s) {', '.join(n for n, _ in kept_for)} in sysop/runtime/"
+                      "pending-docs/ name it — Step 6 keeps it while the doc waits, and the "
+                      "close that consolidates the doc removes it: do not delete it")
+            if holds:
+                detail += "; held by `hold: " + "`, `hold: ".join(holds) + "`"
+            route = "/review-close"
+            if holds:
+                route = f"{_hold_clear_step(shlex.quote(b))}, and {route}"
+            out.append(Discrepancy(kind="branch kept for a pending doc", detail=detail,
+                                   suggestion=f"{caveat}{route}"))
             continue
         out.append(
             Discrepancy(
@@ -2832,7 +2904,7 @@ def _find_discrepancies(
     # stopped before its report. Same rule as `close_arms.py unchecked`, including its
     # record shapes: a receipt it cannot read is reported, not skipped.
     arms_dir = main_root / "sysop" / "runtime" / "close-arms"
-    shapes = {"begin": 2, "policy": 3, "required": 3, "loaded": 4, "checked": 3}
+    shapes = {"begin": 2, "policy": 3, "required": 3, "loaded": 4, "checked": 3, "reviewed": 4}
     if arms_dir.is_dir():
         now = time.time()
         for r in sorted(arms_dir.glob("*.tsv")):
@@ -3162,10 +3234,12 @@ def _classify_review_batches(
         )
         has_triage_record = bool(triaged_verdict) and not record_conflict
         has_lock = branch in lock_by_branch
-        has_branch = branch in wt_branches or bool(
-            _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=str(main_root))
-        )
+        has_branch = _batch_branch_exists(branch, wt_branches, main_root)
         commits = _commits_ahead_of_main(branch, main_root) if has_branch else []
+        # Measured once, before the arms: the unclaimed-`Pending` arm below must not take a
+        # merged branch either (`--release` leaves exactly that header).
+        merged_ref = (_batch_merged_ref(branch, lock_by_branch.get(branch), worktrees,
+                                        main_root) if has_branch and not commits else "")
         all_dw_ids = {tid for c in commits for tid in c.doc_work_ids}
         batch_task_ids = {t["id"] for t in b["tasks"]}
         doc_worked = batch_task_ids & all_dw_ids
@@ -3222,7 +3296,7 @@ def _classify_review_batches(
                 claim_id, unreadable_lock.path, unreadable_lock.unreadable)
             notes.append(f"lock {unreadable_lock.path} could not be read: "
                          f"{unreadable_lock.unreadable}")
-        elif b["status"] == "Pending" and not has_lock:
+        elif b["status"] == "Pending" and not has_lock and not merged_ref:
             state = "pending (not claimed)"
             if not has_triage_record:
                 # No durable verdict — /triage has never classified this batch,
@@ -3311,18 +3385,23 @@ def _classify_review_batches(
             state = stall_state
             next_action = stall_action
             notes.extend(stall_notes)
+        elif merged_ref:
+            # The task path's `merged, close pending` (`_merged_into_default`, which needs a
+            # pending doc in the main checkout naming the branch, so a never-started claim
+            # is not caught). A `direct` close that stopped after Step 4a and before Step
+            # 4b's close_batch.sh leaves this; a re-run close reviews an empty diff, so the
+            # route closes the batch by hand first. After the stall arms: a park wins.
+            state = _MERGED_STATE
+            next_action = _merged_batch_action(main_root, branch, b["number"], merged_ref)
+            notes.extend(_merged_batch_notes(main_root, branch, merged_ref))
         elif done == total and (drift := _batch_doc_drift(
                 branch, lock_by_branch.get(branch), worktrees, main_root, notes)):
             # The task path's `pending doc stale`, for a batch branch whose doc predates
             # later commits (Step 3b refuses it). Only a batch whose tasks all carry trailers
             # gets here: `/document-work` emits them, `/auto-fix` and `/auto-judge` do not.
             state = "pending doc stale"
-            next_action = (f"/document-work on {branch} (re-stamps the pending-doc's "
-                           f"branch_tip), then /review-close (batch {b['number']})")
-            notes.append(
-                f"{drift.commits} commit(s) landed on {branch} after the pending-doc's "
-                f"branch_tip {drift.tip[:12]} — /review-close would refuse the doc as stale"
-            )
+            next_action = _stale_batch_action(branch, b["number"])
+            notes.append(_stale_batch_note(branch, drift))
         elif done == total:
             state = "ready for /review-close"
             next_action = f"/review-close (batch {b['number']})"
@@ -3373,6 +3452,113 @@ def _batch_doc_drift(branch: str, lock: Lock | None, worktrees: list[Worktree],
     return drift if drift.commits else None
 
 
+def _batch_branch_exists(branch: str, wt_branches: set[str], main_root: Path) -> bool:
+    return branch in wt_branches or bool(
+        _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=str(main_root))
+    )
+
+
+def _batch_merged_ref(branch: str, lock: Lock | None, worktrees: list[Worktree],
+                      main_root: Path) -> str:
+    """`_merged_into_default` for a batch branch, with its worktree and dirtiness
+    resolved as `run_survey` resolves a task's."""
+    worktree = next((w for w in worktrees if w.branch == branch and not w.is_main), None)
+    dirty = (_worktree_dirty(worktree.path, main_root)
+             if worktree is not None and worktree.path.is_dir() else False)
+    return _merged_into_default(main_root, branch, lock, worktree, dirty)
+
+
+def _merged_batch_action(main_root: Path, branch: str, number: int, merged_ref: str) -> str:
+    """`close_batch.sh <N>` first: it marks the batch `Merged`, commits, and drops the lock,
+    whatever the doc says. What is left is the kept-branch discrepancy's route. It checks
+    the LOCAL default branch, so a merge only the remote-tracking ref holds is brought into
+    it first, fast-forward only: when the local branch has commits of its own the merge
+    refuses, and how to reconcile them is the person's call, not a merge commit this
+    survey writes for them."""
+    if "/" in merged_ref:
+        on = resolve_default_branch(main_root)
+        close = (f"git merge --ff-only {shlex.quote(merged_ref)} (from the main checkout, "
+                 f"on {on}; if it refuses, {on} has commits of its own: bring it level with "
+                 f"{merged_ref} first), then bash sysop/scripts/close_batch.sh {number}")
+    else:
+        close = (f"bash sysop/scripts/close_batch.sh {number} (from the main checkout, "
+                 f"on {merged_ref})")
+    if _doc_holds(main_root, branch):
+        return f"{close}; then {_hold_clear_step(shlex.quote(branch))}, and /review-close"
+    return f"{close}, then /review-close"
+
+
+def _merged_batch_notes(main_root: Path, branch: str, merged_ref: str) -> list[str]:
+    notes = [f"branch {branch} is an ancestor of {merged_ref} and pending doc(s) "
+             f"{', '.join(_held_doc_names(main_root, branch))} in the main checkout name it, "
+             "but close_batch.sh has not marked the batch Merged — a close that merged it "
+             "and stopped before Step 4b leaves this, and a re-run close reviews an empty "
+             "diff for it"]
+    if "/" in merged_ref:
+        notes.append(f"its tip is on {merged_ref} but not on the local default branch, which "
+                     f"close_batch.sh checks — so the route merges {merged_ref} first")
+    for reason in _doc_holds(main_root, branch):
+        notes.append(f"its pending doc carries `hold: {reason}`, so the close holds the doc "
+                     "until that is cleared")
+    return notes
+
+
+def _stale_batch_action(branch: str, number: int) -> str:
+    """Row `4g`'s command: the `pending doc stale` batch state's, and the `Review Ready`
+    header arm's for a stale doc."""
+    return (f"/document-work on {branch} (re-stamps the pending-doc's "
+            f"branch_tip), then /review-close (batch {number})")
+
+
+def _stale_batch_note(branch: str, drift: DocDrift) -> str:
+    return (f"{drift.commits} commit(s) landed on {branch} after the pending-doc's "
+            f"branch_tip {drift.tip[:12]} — /review-close would refuse the doc as stale")
+
+
+@dataclass
+class ReviewReadyDoc:
+    """A `Review Ready` batch's pending doc, measured as the batch path measures it."""
+    branch: str
+    drift: DocDrift | None  # set only when the doc is STALE
+    notes: list[str] = field(default_factory=list)
+    # Set when a close merged the branch and stopped before close_batch.sh (the batch
+    # twin of `merged, close pending`): its route, which outranks a stale doc's.
+    merged_action: str = ""
+
+
+def _review_ready_docs(batches: list[dict[str, Any]], locks: list[Lock],
+                       worktrees: list[Worktree], main_root: Path) -> dict[int, ReviewReadyDoc]:
+    """Each `Review Ready` batch's pending doc, keyed by batch number, through
+    `_batch_doc_drift` unchanged. Such a batch never enters `_classify_review_batches`,
+    and `/review-close` Step 3b refuses its stale doc (exit 6) all the same. No
+    `Doc-Work:` gate, unlike the state arm: the header declares the work done, `/auto-fix`
+    and `/auto-judge` write a batch's doc with no trailer, and Step 3b measures the doc
+    either way. A batch with no branch on disk is skipped, as the state path skips it."""
+    lock_by_branch = {l.branch: l for l in locks if l.branch}
+    wt_branches = {w.branch for w in worktrees if not w.is_main}
+    out: dict[int, ReviewReadyDoc] = {}
+    for b in batches:
+        branch = b.get("branch", "")
+        if (b.get("status") != "Review Ready" or not branch
+                or not _batch_branch_exists(branch, wt_branches, main_root)):
+            continue
+        lock = lock_by_branch.get(branch)
+        merged_ref = _batch_merged_ref(branch, lock, worktrees, main_root)
+        if merged_ref:
+            out[b["number"]] = ReviewReadyDoc(
+                branch=branch, drift=None,
+                notes=_merged_batch_notes(main_root, branch, merged_ref),
+                merged_action=_merged_batch_action(main_root, branch, b["number"],
+                                                   merged_ref))
+            continue
+        notes: list[str] = []
+        drift = _batch_doc_drift(branch, lock, worktrees, main_root, notes)
+        if drift is not None:
+            notes.append(_stale_batch_note(branch, drift))
+        out[b["number"]] = ReviewReadyDoc(branch=branch, drift=drift, notes=notes)
+    return out
+
+
 # ── Survey orchestration ─────────────────────────────────────────
 
 
@@ -3391,9 +3577,12 @@ class Survey:
     # Pending/In Progress, and /roadmap documents that filter as a premise. The
     # recommendation cascade still needs the one live status that waits on a
     # human (Phase 222, Q-014) — so it rides its own field, read from the raw
-    # headers, and the payload contract is untouched. Defaulted so existing
+    # headers, and `review_batches` keeps its filter. Defaulted so existing
     # fixture constructors stay valid; run_survey always populates it.
     review_ready_batches: list[tuple[int, str]] = field(default_factory=list)
+    # Each `Review Ready` batch's pending doc, by batch number (`_review_ready_docs`): the
+    # P2 header arm routes a stale one to row 4g's command at P2's rank. Absent → as before.
+    review_ready_docs: dict[int, ReviewReadyDoc] = field(default_factory=dict)
     # (path, reason, consequence, remedy) for every input a reader could not
     # read. Non-empty → RECOMMENDED NEXT routes to the repair first and the
     # idle arm cannot fire: a survey over an unread input is not a survey.
@@ -3523,9 +3712,16 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
     review_states = _classify_review_batches(
         review_batches_raw, locks, worktrees, main_root
     )
+    ready_docs = _review_ready_docs(review_batches_raw, locks, worktrees, main_root)
 
     discrepancies = _find_discrepancies(
-        locks, worktrees, index, main_root, unreadable, review_batches_raw
+        locks, worktrees, index, main_root, unreadable, review_batches_raw,
+        ready_stale={n: _stale_batch_action(d.branch, n)
+                     for n, d in ready_docs.items() if d.drift is not None},
+        merged_actions={**{r.batch_number: r.next_action for r in review_states
+                           if r.state == _MERGED_STATE},
+                        **{n: d.merged_action for n, d in ready_docs.items()
+                           if d.merged_action}},
     )
     if not default_branch and refused_default:
         # `Q-383`: a name exists but is refused. The generic line below would be
@@ -3597,6 +3793,7 @@ def run_survey(stale_days: int = DEFAULT_STALE_DAYS) -> Survey:
             for b in review_batches_raw
             if b.get("status") == "Review Ready"
         ],
+        review_ready_docs=ready_docs,
         discrepancies=discrepancies,
         stale_days=stale_days,
         open_roadmap_ids=open_roadmap_ids,
@@ -3646,6 +3843,20 @@ def render_text(s: Survey) -> str:
         lines.append(
             f"REVIEW READY (waiting on /review-close): batch {nums}"
         )
+        for n, _ in s.review_ready_batches:
+            doc = s.review_ready_docs.get(n)
+            if doc is None or not doc.notes:
+                continue
+            if doc.merged_action:
+                lines.append(f"  Batch {n:<6} {_MERGED_STATE}")
+                lines.append(f"               ↳ next: {doc.merged_action}")
+            elif doc.drift is not None:
+                lines.append(f"  Batch {n:<6} pending doc stale")
+                lines.append(f"               ↳ next: {_stale_batch_action(doc.branch, n)}")
+            else:
+                lines.append(f"  Batch {n}")
+            for note in doc.notes:
+                lines.append(f"               · {note}")
         lines.append("")
     if s.review_batches:
         lines.append(f"REVIEW BATCHES ({len(s.review_batches)})")
@@ -3753,6 +3964,7 @@ def _recommended_next(s: Survey) -> Recommendation | None:
 
     Priority order: unreadable input → lock unreadable (task, batch) →
     a stopped close → awaiting --land → land parked → review-close (task) → review-close (batch) → unpushed doc-work →
+    merged, close pending (task, then batch) → a branch kept for its pending doc →
     /triage if any pending batch lacks a Triaged: record → /auto-fix and/or /auto-judge →
     code committed, docs pending → pending doc stale (task, then batch) →
     continue in-progress (task, then batch) →
@@ -3859,6 +4071,25 @@ def _recommended_next(s: Survey) -> Recommendation | None:
     # to exactly the state that outranks everything below.
     if s.review_ready_batches:
         num, _title = s.review_ready_batches[0]
+        doc = s.review_ready_docs.get(num)
+        if doc is not None and doc.merged_action:
+            # Same rank, row 3c's command: a re-run close would review an empty diff.
+            return Recommendation(
+                command=doc.merged_action,
+                reason=(f"Batch {num} header reads `Review Ready`, but its branch was merged "
+                        "and close_batch.sh has not marked the batch Merged"),
+                detail_lines=list(doc.notes),
+            )
+        if doc is not None and doc.drift is not None:
+            # Same rank, row 4g's command: Step 3b would refuse the doc (exit 6).
+            return Recommendation(
+                command=_stale_batch_action(doc.branch, num),
+                reason=(
+                    f"Batch {num} header reads `Review Ready`, but its pending-doc is stale "
+                    "— /review-close would refuse it"
+                ),
+                detail_lines=list(doc.notes),
+            )
         return Recommendation(
             command=f"/review-close (batch {num})",
             reason=(
@@ -3903,6 +4134,30 @@ def _recommended_next(s: Survey) -> Recommendation | None:
                 f"the task is not done until a close consolidates its doc{more}"
             ),
             detail_lines=list(t.notes),
+        )
+    # P3b's batch twin: a batch branch a close merged, still `In Progress` in the header.
+    merged_batches = [rb for rb in s.review_batches if rb.state == _MERGED_STATE]
+    if merged_batches:
+        rb = merged_batches[0]
+        more = f" ({len(merged_batches) - 1} more)" if len(merged_batches) > 1 else ""
+        return Recommendation(
+            command=rb.next_action,
+            reason=(f"Batch {rb.batch_number}'s branch was merged, but close_batch.sh has "
+                    f"not marked the batch Merged{more}"),
+            detail_lines=list(rb.notes),
+        )
+    # P3d (`/sitrep` row 3d): a branch a completed close kept for its pending doc. No batch
+    # state carries it (Step 4b already flipped the header to `Merged`), so it rides its
+    # discrepancy, as P0d does; without this arm the report read idle over it.
+    kept = [d for d in s.discrepancies if d.kind == "branch kept for a pending doc"]
+    if kept:
+        d = kept[0]
+        more = f" ({len(kept) - 1} more)" if len(kept) > 1 else ""
+        return Recommendation(
+            command=d.suggestion,
+            reason=f"a close kept a branch for its pending doc, which no close has "
+                   f"consolidated yet{more}",
+            detail_lines=[d.detail],
         )
 
     # P4: pending unclaimed batches — route via the Triaged: verdict record
@@ -4320,6 +4575,17 @@ def _suggested_order(s: Survey) -> list[str]:
     for ts in s.tasks:
         if ts.state == "ready for /review-close":
             out.append(f"/review-close {ts.task_id} (ready now)")
+    # The `Review Ready` header batches, at P2's rank as in `_recommended_next`; a stale
+    # doc keeps the rank and takes row 4g's command.
+    for n, _ in s.review_ready_batches:
+        doc = s.review_ready_docs.get(n)
+        if doc is not None and doc.merged_action:
+            out.append(f"Batch {n}: merged by a previous close — {doc.merged_action}")
+        elif doc is not None and doc.drift is not None:
+            out.append(f"Batch {n} header reads Review Ready, but its pending-doc is stale — "
+                       f"{_stale_batch_action(doc.branch, n)}")
+        else:
+            out.append(f"/review-close (batch {n}, header reads Review Ready)")
     for rb in s.review_batches:
         if rb.state == "ready for /review-close":
             out.append(f"/review-close (batch {rb.batch_number}, ready now)")
@@ -4332,6 +4598,13 @@ def _suggested_order(s: Survey) -> list[str]:
     for ts in s.tasks:
         if ts.state == _MERGED_STATE:
             out.append(f"{ts.task_id}: merged by a previous close — {ts.next_action}")
+    for rb in s.review_batches:
+        if rb.state == _MERGED_STATE:
+            out.append(f"Batch {rb.batch_number}: merged by a previous close — "
+                       f"{rb.next_action}")
+    for d in s.discrepancies:
+        if d.kind == "branch kept for a pending doc":
+            out.append(f"a branch kept for its pending doc — {d.suggestion}")
     # 2b. Code committed, docs pending (Q-019). Between the close tiers and
     # in-progress, matching `_recommended_next`'s P4e placement: this task is
     # further along than an in-progress one and not yet closable.
@@ -4511,6 +4784,19 @@ def render_json(s: Survey) -> str:
                 "stale_days": s.stale_days,
                 "tasks": [_ts(t) for t in s.tasks],
                 "review_batches": [_rb(r) for r in s.review_batches],
+                # `Review Ready` batch numbers whose pending doc is stale. A flat list beside
+                # `review_batches`, which keeps its Pending/In Progress filter: `/roadmap`'s
+                # header-status row routes a batch named here to /document-work first.
+                "review_ready_stale": [
+                    n for n, _ in s.review_ready_batches
+                    if (d := s.review_ready_docs.get(n)) is not None and d.drift is not None
+                ],
+                # Likewise those a close merged and stopped before close_batch.sh marked
+                # them Merged: `/roadmap` routes a batch named here to close_batch.sh first.
+                "review_ready_merged": [
+                    n for n, _ in s.review_ready_batches
+                    if (d := s.review_ready_docs.get(n)) is not None and d.merged_action
+                ],
                 "discrepancies": [_d(d) for d in s.discrepancies],
                 "open_roadmap_ids": s.open_roadmap_ids,
                 "failed_in_merged_batches": [
