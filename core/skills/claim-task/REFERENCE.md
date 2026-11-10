@@ -222,6 +222,24 @@ through to `OK` and the gate opens.
 build, whose first round replaced the first cut's named base with the captured tip and whose
 second added the pre-plan HEAD and branch conditions.
 
+## Step 7e item 3 — the read-back checks the file first, and is read by its output
+
+The `git_check.py file` call ahead of the `grep` is not decoration. Without it an unsubstituted
+`<BODY_PATH_AS_RESOLVED>` makes `grep` fail for a missing *file*, which reads exactly like a
+missing *record* and sends the executor into a rewrite loop against a path that does not exist.
+The call is also the shape `dontAsk` admits: the guard it replaced was a `case … esac` with an
+`exit`, and `dontAsk` denies an `exit` wherever it sits, so no shell-only guard could keep its
+own exit code.
+
+The runner is told to read the output, not the exit status, because Claude Code reports a `grep`
+that matches nothing as a success: on a body with no heading the call came back with the
+`OK: … is a file` line alone and no error. A `<n>:` line naming `Test decision` is the only sign
+of a hit.
+
+`-A1` prints the line under the heading so the schema's template text is visible. An earlier
+version omitted it while telling the executor to inspect that text, which its own output could
+never show.
+
 ## Step 7e item 5b — the ignored-file check reports and files nothing
 
 A gate that reads the working tree passes on an ignored file the commit will not carry. The
@@ -234,6 +252,35 @@ deliberate (a secret, a large corpus) and committing past it is the human's call
 
 Why the script reads only files a file pattern ignores, and skips prose, is in
 `review-close/REFERENCE.md` § *Step 2a — provenance*; the same script serves both.
+
+## Step 8 — the auto-mode chain names UI-verify catalogue rows, not a summary of them
+
+**The rule.** Step 8's auto-mode chaining skips `/document-work` on two rows of
+`_shared/ui-verify.md` § Step 7, named by their *Condition* cells, and says the other two do not
+skip it. Step 7e item 6 has the executor surface any catalogue note verbatim, so Step 8 has the
+row to read; Step 8 prints that note under its report and, when the chain stops on it, says so.
+The partial requires the note in the parent's handoff, and the sealed report Step 8 already
+prints is the reviewer's, which never carries it: without its own relay line an auto-mode stop
+read "Run `/document-work` next" with no reason given.
+
+**What it protects.** The four rows are not equivalent. *No frontend files in diff* and *Dev
+server not running* return cleanly (the partial's Step 2 says so in terms); the auth-gated or
+deferred row and the Playwright-unavailable row each tell a human to look before merging. The
+clause used to read "when a UI-verify note flags pending manual checking", a paraphrase that
+merged the two kinds: read one way it withheld the chain on a clean dev-server skip, and read the
+other way it chained straight past a real *"Manual verification required before merging"*. The
+executor prompt had the matching gap: it asked for the dev-server note verbatim and no other, so
+the two notes that should stop the chain were the ones nothing asked it to deliver.
+
+**What its loss or softening would change.** Restating the rows in prose, or copying their emitted
+strings into Step 8, makes two lists that drift; naming the *Condition* cells points at the one
+list. `tests/test_claim_task_ui_verify_chain.py` reads the catalogue, sorts its rows by whether
+the emitted text asks for a manual check, and requires Step 8 to place each one, so a row added
+to the catalogue goes red until Step 8 says which side it is on.
+
+**Provenance.** Reported by a consumer, who also flagged `/auto-build` for the same paraphrase.
+Measured: `/auto-build`'s executor only invokes the partial, and no chaining clause there reads a
+UI-verify note, so it has no twin.
 
 ## Steps 8b and 8c — the ask, and why the answers run is a spawn of its own
 

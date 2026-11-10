@@ -152,12 +152,19 @@ def _build_old_consumer(root, mode="full", diverge=None, extra_managed=()):
 
 
 def _pre_namespace_commit():
-    """The newest commit whose install.sh predates the sysop/ namespace."""
-    r = _git(REPO_ROOT, "rev-list", "HEAD", "--max-count=40")
-    for c in r.stdout.split():
-        show = _git(REPO_ROOT, "show", f"{c}:install.sh")
-        if show.returncode == 0 and "sysop/scripts" not in show.stdout:
-            return c
+    """The newest commit whose install.sh predates the sysop/ namespace: the parent of the
+    first commit that put `sysop/scripts` into install.sh. A scan of HEAD's last 40 commits
+    found it only while Phase 128 was within 40 commits of HEAD; after that every test behind
+    this guard skipped (found by Phase 480's round)."""
+    r = _git(REPO_ROOT, "log", "--format=%H", "--reverse", "-S", "sysop/scripts", "--",
+             "install.sh")
+    first = r.stdout.split()[:1]
+    if r.returncode != 0 or not first:
+        return None
+    c = _git(REPO_ROOT, "rev-parse", f"{first[0]}~1").stdout.strip()
+    show = _git(REPO_ROOT, "show", f"{c}:install.sh")
+    if c and show.returncode == 0 and "sysop/scripts" not in show.stdout:
+        return c
     return None
 
 

@@ -19,7 +19,7 @@ It is deliberately **lightweight**. v1 = changelog + version proposal + tag + op
 
 ## Pre-flight: Permission Guard
 
-The **dry-run default requires no permission rules** — it only reads git history, `tasks/index.yml`, and `CHANGELOG.md`, and prints a plan. Per `_shared/permission-guard.md` § Notes, read-only git ops (`git log`, `git describe`, `git tag --list`) are auto-approved and not listed as allow-rules. On this default path the skill is as portable as `/daily-summary` — with one caveat: the *optional* Step 5 PR-link enrichment (only under `pr` merge policy) shells `gh pr list`, which relies on the `Bash(gh pr list:*)` rule already in the Sysop template. It is deliberately **not** on the required list — a missing rule or absent `gh` degrades it silently (the plan is complete without PR links), so it never blocks a dry-run.
+The **dry-run default requires no permission rules** — it only reads git history, `tasks/index.yml`, and `CHANGELOG.md`, and prints a plan. Per `_shared/permission-guard.md` § Notes, read-only git ops (`git log`, `git describe`, `git tag --list`) are auto-approved and not listed as allow-rules. On this default path the skill needs no rule at all — with one caveat: the *optional* Step 5 PR-link enrichment (only under `pr` merge policy) shells `gh pr list`, which relies on the `Bash(gh pr list:*)` rule already in the Sysop template. It is deliberately **not** on the required list — a missing rule or absent `gh` degrades it silently (the plan is complete without PR links), so it never blocks a dry-run.
 
 The write path requires rules **conditionally**, mirroring `/review-close`'s policy-gated requirement (only demand what the chosen path invokes). Read `.claude/settings.json` (and `.claude/settings.local.json` if present — allow-rules union across the two) and confirm `permissions.allow` contains:
 
@@ -147,7 +147,7 @@ Build and print, in full, exactly what would be written/created:
 - **BREAKING:** <breaking entries, if any>
 ```
 
-Use today's date for the entry: a plain `date +%Y-%m-%d` is portable on both BSD and GNU `date` (it's simple formatting — no arithmetic, unlike `/daily-summary`'s window math, so no BSD/GNU divergence to guard). If `date` is somehow unavailable, fall back to the tip commit's date (`git log -1 --format=%ad --date=short HEAD`), which is deterministic and close to the release moment.
+Use today's date for the entry: a plain `date +%Y-%m-%d` is portable on both BSD and GNU `date` (it's simple formatting — no arithmetic, so no BSD/GNU divergence to guard). If `date` is somehow unavailable, fall back to the tip commit's date (`git log -1 --format=%ad --date=short HEAD`), which is deterministic and close to the release moment.
 
 **Tag** — an annotated tag `<prefix><new version>` with a one-paragraph message summarizing the release (the top highlights). Show the message and the tag name; the actual creation (Step 8.3) passes the message via `git tag -a … -F <file>`, never inline.
 

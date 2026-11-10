@@ -890,6 +890,9 @@ CHAINED_SITES = {
     ],
     "claim-task/SKILL.md": [
         'python3 sysop/scripts/git_check.py head-is "<default branch>" && git add tasks/index.yml && git commit -m "chore: release <CLAIM_ID>"',
+        # Step 7e's read-back (Phase 476, `Q-665`): the line /auto-build's item 3-record ships.
+        'python3 sysop/scripts/git_check.py file "<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>" && grep -niE -A1 '
+        "'^#+[[:space:]]*test[[:space:]]+decision\\b' \"<WORKTREE_PATH>/<BODY_PATH_AS_RESOLVED>\"",
         'python3 sysop/scripts/git_check.py head-is "<default branch>" && git add "<BODY_PATH_AS_RESOLVED>" && git commit -m "plan: record reviewed plan for <CLAIM_ID>"',
         'python3 sysop/scripts/git_check.py head-is "<default branch>" && git add tasks/index.yml && git commit -m "chore: release <CLAIM_ID>"',
     ],

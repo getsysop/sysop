@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" prepare-resume 859ebf5c0cef210f "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" prepare-resume 37a76228e53f7a0d "<skill directory>"
 ```
 
 It prints `LOADED: prepare-resume`. **Exit 2**: stop and show its stderr.
@@ -60,13 +60,13 @@ A prepare runs Steps 1, 2, 3 and 3c for real, asks the human nothing, records th
 
 5. **Write the state as you go.** Each branch's `STATE` file holds Step 1a's class and any Step 1-pre line; Step 2a's verdict, its reason and any step 0, 0a or 0b line; Step 2b's verdicts and `NOTES:` from both fleets, or why a fleet skipped; Step 2d's tally; Step 2e's report; and the numbers of its pending questions. `<DIR>/close.md` holds Step 1's other lines, Step 2b's verdicts and `NOTES:` for the unpushed-main group, Step 2c's result, Step 3's `Verification:` line or why it did not run, Step 3c's output verbatim (its first line, the carried lines and every signal block), and every Step 8 row these steps produced. Write `questions.md` even when it holds no question.
 
-6. **Finish** at the end of Step 3c:
+6. **Finish** at the end of Step 3c, with the close id `begin` printed:
 
    ```bash
-   python3 sysop/scripts/close_run.py finish "<run-id>"
+   python3 sysop/scripts/close_run.py finish "<run-id>" "<close-id>"
    ```
 
-   Exit 1 names each missing file: write it, then run `finish` again. Then report the run id, each branch's verdict, the `QUESTIONS:` count, every `MOVED DURING PREPARE:` line and the `RESUME:` line, and stop.
+   Exit 1 names each missing file: write it, then run `finish` again. **Exit 2**: stop and show its stderr. Then report the run id, each branch's verdict, the `QUESTIONS:` count, every `MOVED DURING PREPARE:` line and the `RESUME:` line, and stop.
 
 ### Under `--resume <run-id>`
 
@@ -87,7 +87,13 @@ Run the default-branch resolve and the permission guard above first. Then, in th
    python3 sysop/scripts/close_run.py check "<run-id>" "<default branch>"
    ```
 
-   Act now only on these lines:
+   Then record the commits the prepare reviewed, with the close id `begin` printed, for Step 4a's tip check. **Exit 2**: stop and show its stderr.
+
+   ```bash
+   python3 sysop/scripts/close_run.py reviewed "<run-id>" "<close-id>"
+   ```
+
+   Act now only on the check's lines:
    - `GONE <branch>: …` — drop the branch: its recorded state and questions no longer apply. Name it on Step 8's `Resumed:` row with the line's reason.
    - `RERUN <branch>: …` or `RERUN ALL: …` — set aside that branch's recorded questions, or every branch's; item 6 re-runs those branches and asks afresh.
    - `RERUN 3: …` — set aside the recorded Step 3c questions; item 6 re-runs Step 3c.

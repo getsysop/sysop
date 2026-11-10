@@ -75,6 +75,16 @@ def repo(tmp_path: Path) -> Path:
     return root
 
 
+def _prepare_close(root: Path) -> str:
+    """The prepare's own `close_arms.py` receipt, which `finish` reads its Step 2a records from."""
+    sys.path.insert(0, str(SCRIPT.parent))
+    import close_arms
+    r = subprocess.run([sys.executable, str(SCRIPT.parent / "close_arms.py"), "begin", "",
+                        *sorted(close_arms.ARMS)], cwd=root, capture_output=True, text=True, env=_ENV)
+    assert r.returncode == 0, r.stderr
+    return r.stdout.split()[1]
+
+
 def _begin(root: Path, *branches: str) -> dict:
     r = _run(root, "begin", "main", *(branches or ("feat/a", "feat/b")))
     assert r.returncode == 0, r.stderr
@@ -88,7 +98,7 @@ def _finish(root: Path, run: dict, questions: str = "") -> subprocess.CompletedP
     for p in run["states"].values():
         p.write_text("verdict: approve\n", encoding="utf-8")
     (Path(run["DIR"]) / "questions.md").write_text(questions, encoding="utf-8")
-    r = _run(root, "finish", run["RUN"])
+    r = _run(root, "finish", run["RUN"], _prepare_close(root))
     assert r.returncode == 0, r.stdout + r.stderr
     return r
 
@@ -126,7 +136,7 @@ def test_finish_refuses_a_branch_with_no_state(repo: Path) -> None:
     run = _begin(repo)
     run["states"]["feat/a"].write_text("verdict: approve\n", encoding="utf-8")
     (Path(run["DIR"]) / "questions.md").write_text("", encoding="utf-8")
-    r = _run(repo, "finish", run["RUN"])
+    r = _run(repo, "finish", run["RUN"], _prepare_close(repo))
     assert r.returncode == 1 and "MISSING STATE feat/b:" in r.stdout
     assert "finished" not in json.loads((Path(run["DIR"]) / "manifest.json").read_text())
     assert _run(repo, "load", run["RUN"], "main").returncode == 2
@@ -136,7 +146,7 @@ def test_finish_refuses_without_questions_file(repo: Path) -> None:
     run = _begin(repo)
     for p in run["states"].values():
         p.write_text("verdict: approve\n", encoding="utf-8")
-    r = _run(repo, "finish", run["RUN"])
+    r = _run(repo, "finish", run["RUN"], _prepare_close(repo))
     assert r.returncode == 1 and "questions.md" in r.stdout
 
 
@@ -349,7 +359,7 @@ def test_begin_with_no_branch_opens_a_run(repo: Path) -> None:
     assert _check(repo, run) == ["CURRENT"]
 
 
-@pytest.mark.parametrize("args", [[], ["begin"], ["finish"], ["load", "x"], ["check", "x"],
+@pytest.mark.parametrize("args", [[], ["begin"], ["finish"], ["finish", "x"], ["load", "x"], ["check", "x"],
                                   ["consume", "x", "--force"], ["frob", "x"]])
 def test_usage_errors_exit_3(repo: Path, args) -> None:
     assert _run(repo, *args).returncode == 3

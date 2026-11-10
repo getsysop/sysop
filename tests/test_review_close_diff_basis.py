@@ -683,9 +683,10 @@ def test_2b_targets_exclude_branches_step_2a_skipped():
     close over work already declared out of scope."""
     block = _step_2b(text_of(REVIEW_CLOSE))
     # Phase 354 widened it to every Step 2a SKIP: an unanswered ignored file is one too, and
-    # Phase 355 added step 0a's clone that was not brought across.
-    assert ("classified **SKIP** (paused work present, clone not brought across, or an ignored "
-            "file unanswered) is *not* a target") in block
+    # Phase 355 added step 0a's clone that was not brought across; Phase 479 a branch with
+    # commits in an agent worktree.
+    assert ("classified **SKIP** (paused work present, clone not brought across, an ignored "
+            "file unanswered, or in an agent worktree) is *not* a target") in block
 
 
 def test_the_unpushed_main_group_has_a_retrieval_command_not_just_a_predicate():

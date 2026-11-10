@@ -31,9 +31,8 @@ Two `git` readers decode path lists that git prints raw (`-z`), where a tracked
 file named in a non-UTF-8 encoding kills the run the same way:
 `ingest_security_report._commit_changed_files` and `run_checks/semgrep.py`'s
 `_git_lines`. Both route into their existing "git could not answer" path.
-`sitrep_survey._worktree_dirty` reads `git status`, which prints such a name
-raw only under a consumer's `core.quotePath=false`; there the existing path
-("" = clean) would be false, so it forces the quoted form instead.
+`sitrep_survey._worktree_dirty` reads `git status --porcelain -z`, which prints
+every name raw, and `_git`'s `os.fsdecode` round-trips it.
 `security_partition.py` names such a file and assesses nothing (status
 `undecodable-path`, exit 0): a partial partition would silently drop it.
 
@@ -1070,9 +1069,9 @@ def test_sitrep_clean_inputs_report_no_unreadable_discrepancy(tmp_path, monkeypa
 
 def test_sitrep_dirty_check_survives_a_consumer_quotepath_false(tmp_path):
     """`git status` prints a non-UTF-8 name raw when the consumer has set
-    `core.quotePath=false`, and `_git` decodes strictly. Only emptiness matters
-    to the dirty check, so it forces the quoted form rather than catching —
-    catching would return "" and report a dirty worktree clean."""
+    `core.quotePath=false`. The dirty check reads `status --porcelain -z`, which
+    quotes nothing, and `_git`'s `os.fsdecode` round-trips the raw name; catching
+    would return "" and report a dirty worktree clean."""
     repo, _ = _repo_with_non_utf8_path(tmp_path)
     _git(repo, "config", "core.quotePath", "false")
     subprocess.run([b"git", b"-C", os.fsencode(repo), b"rm", b"-q", b"--cached", b"caf\xe9.py"],
@@ -1134,7 +1133,9 @@ def test_security_partition_names_a_non_utf8_tracked_name(tmp_path):
     (repo / ".claude").mkdir()
     (repo / ".claude" / "security_map.md").write_text(
         "## A01 Broken Access Control\n\n**Globs:** `**/*.py`\n\n", encoding="utf-8")
-    base = [sys.executable, str(SCRIPTS / "security_partition.py"), "--root", str(repo)]
+    (tmp_path / "manifest.txt").write_text("", encoding="utf-8")
+    base = [sys.executable, str(SCRIPTS / "security_partition.py"), "--root", str(repo),
+            "--manifest-file", str(tmp_path / "manifest.txt")]
     r = subprocess.run(base + ["--json"], capture_output=True, text=True)
     assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
     report = json.loads(r.stdout)
@@ -1179,9 +1180,11 @@ def test_security_partition_still_partitions_a_utf8_non_ascii_name(tmp_path):
     (repo / ".claude").mkdir()
     (repo / ".claude" / "security_map.md").write_text(
         "## A01 Broken Access Control\n\n**Globs:** `**/*.py`\n\n", encoding="utf-8")
+    (tmp_path / "manifest.txt").write_text("café.py\n", encoding="utf-8")
     r = subprocess.run([sys.executable, str(SCRIPTS / "security_partition.py"), "--root",
-                        str(repo), "--json"], capture_output=True, text=True)
-    assert r.returncode == 0 and json.loads(r.stdout)["status"] != "undecodable-path", r.stdout
+                        str(repo), "--manifest-file", str(tmp_path / "manifest.txt"), "--json"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0 and json.loads(r.stdout)["status"] == "ok", r.stdout
 
 
 # -- round 2: the remaining absorbing arms --------------------------------------
@@ -1220,8 +1223,10 @@ def test_security_partition_vendor_lock_note_reaches_the_report(tmp_path):
     (repo / ".claude" / "sysop.lock").write_bytes(b'{"managed_paths": ["\xff"]}')
     _git(repo, "add", "a.py")
     _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "i")
+    (tmp_path / "manifest.txt").write_text("a.py\n", encoding="utf-8")
     r = subprocess.run([sys.executable, str(SCRIPTS / "security_partition.py"), "--root",
-                        str(repo), "--json"], capture_output=True, text=True)
+                        str(repo), "--manifest-file", str(tmp_path / "manifest.txt"), "--json"],
+                       capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert any("sysop.lock" in n for n in json.loads(r.stdout)["notes"]), r.stdout
 

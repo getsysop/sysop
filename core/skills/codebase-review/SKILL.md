@@ -204,7 +204,7 @@ That yields **both directories and root-level files**. They are judged different
 
 **The invariant.** Every top-level entry holding tracked code (see the scoping note below) must be either:
 
-- **(a) covered** — for a **directory**, at least one `convention_map.md` section glob resolves beneath it; for a **root-level file**, at least one section glob **matches it directly** (a section glob may name a root-level file directly), or
+- **(a) covered** — for a **directory**, at least one `convention_map.md` section glob resolves beneath it (resolved with `:(glob)`, as 2a-1 says); for a **root-level file**, at least one section glob **matches it directly** (a section glob may name a root-level file directly), or
 - **(b) explicitly excluded** — named in `<project>/CLAUDE.md` § "Map coverage exclusions" **with a stated one-line reason** (e.g. `` - `vendor/` — third-party code, not ours to change ``), or
 - **(c) unlocalized** — a placeholder section plausibly covers it, per the guard above. **(c) is a named gap, not coverage**: it keeps the entry off the unmapped-entry class below, but the section binds nothing until its globs resolve, so the entry stays on the `Unlocalized` report line and on the localization backlog.
 
@@ -231,9 +231,9 @@ Inventory Completeness — Unmapped Top-Level Entries:
 
 ### 2a-1. Files not matched by any convention_map section
 
-Parse the `## ` section headers from `.claude/convention_map.md` to extract the file globs for each section (the section header format is `## <glob list> — <Section Name>`). Derive the unique top-level path roots from those section globs (e.g., `<api module>/`, `<frontend>/`, `<scripts dir>/`, `<tests dir>/`). Then run `git ls-files -- <derived roots>` and check each code file against the extracted globs. Collect files that don't match any section.
+Parse the `## ` section headers from `.claude/convention_map.md` to extract the file globs for each section (the section header format is `## <glob list> — <Section Name>`; each backticked token in the glob list is one glob). Derive the unique top-level path roots from those section globs (e.g., `<api module>/`, `<frontend>/`, `<scripts dir>/`, `<tests dir>/`). Then list the tracked files under those roots that no section glob matches, in one command — each root as a plain pathspec, each glob as an exclusion: `git ls-files -- '<root>' … ':(glob,exclude)<glob>' …`. What it prints is the unmatched set; apply the exclusions below to it.
 
-**Glob-matching caveat.** Interpret `**/` in a section glob as **zero or more** path components — `<api module>/routes/**/*.py` must count files sitting directly in `<api module>/routes/` (e.g. `<api module>/routes/foo.py`), not only files in a sub-directory. Match by derived-root **prefix + extension**; do not hand a raw `**/*.py` section glob to `git ls-files` as a pathspec, whose default matching omits those direct-children files and would false-flag them as unmatched coverage gaps. (Prefix+extension is coarser than the exact glob — acceptable for a coverage audit.)
+**Resolving a section glob.** Hand each glob to git with the `:(glob)` pathspec magic — `':(glob)<glob>'` to list what it matches, `':(glob,exclude)<glob>'` to subtract it — never as a plain pathspec, which has no `**`. Under `:(glob)`, `**/` is **zero or more** path components (`<api module>/routes/**/*.py` matches `<api module>/routes/foo.py` as well as nested files) and `*` stays inside one directory (`src/*.py` does not match `src/a/b.py`). Single-quote each pathspec. Drop every glob still in `<…>` form — per glob, not per section: a header mixing concrete and placeholder globs binds what its concrete globs match. Expand a brace list first (`*.{ts,tsx}` is two globs: git has no brace expansion). Pass the rest verbatim: `[…]` is a character class, so a map glob naming a literal `[id]` directory must spell it `\[id\]`, and a section that matches nothing for that reason needs its glob fixed, not retiring. If no section in the map has a concrete glob, report the map unlocalized instead of running the command: with no roots and no exclusions it lists the whole repository.
 
 **Exclude from the gap report** (these are expected to be unmatched):
 - Config-only files: `Dockerfile`, deploy configs (e.g., `firebase.json`, `apphosting.yaml`, `vercel.json`), `*.yml`, `*.yaml`, `*.json`, `*.sql`
@@ -251,7 +251,7 @@ Convention Map Coverage — Unmatched Files:
 
 ### 2a-2. Files not matched by any security_map section
 
-Parse the `## ` section headers from `.claude/security_map.md` to extract the file globs for each section (same header format as convention_map). Derive the unique top-level path roots from those section globs. Then run `git ls-files -- <derived roots>` and check each code file against the extracted globs. Collect files that don't match any section.
+Parse the `## ` section headers from `.claude/security_map.md` to extract the file globs for each section (same header format as convention_map). Derive the unique top-level path roots from those section globs. Then run 2a-1's command over these roots and globs, resolving each glob as 2a-1 says; what it prints is the unmatched set.
 
 **Exclude from the gap report** (these have negligible security surface):
 - Config-only files: `Dockerfile`, deploy configs (e.g., `firebase.json`, `apphosting.yaml`, `vercel.json`), `*.yml`, `*.yaml`, `*.json`, `*.sql`
@@ -286,7 +286,7 @@ Convention Map Coverage — Unmapped Conventions:
 
 The checks above run **forward** (code → map: which files lack coverage). This check runs **backward** (map → code: which map content has lost its referent), catching conventions that went stale when the code moved out from under them. Like the forward checks it is deterministic — no LLM needed — and it **flags candidates only; it never auto-retires a convention** (the retirement *decision* stays human and deliberate — see the routing note in 2a-5).
 
-**(a) Stale sections — glob matches no tracked file (a removed category, staleness Mode C).** For each `## <glob list> — <Section Name>` section parsed above, run `git ls-files -- <section globs>`. A section whose globs match **zero** tracked files has lost its scoped surface — flag it. Before treating an empty section as stale, rule out three look-alikes:
+**(a) Stale sections — glob matches no tracked file (a removed category, staleness Mode C).** For each `## <glob list> — <Section Name>` section parsed above, run `git ls-files -- ':(glob)<glob>' …` over its concrete globs, resolved as 2a-1 says. A section whose globs match **zero** tracked files has lost its scoped surface — flag it. Before treating an empty section as stale, rule out three look-alikes:
 - **Relocation, not removal:** if the forward pass (2a-1 / 2a-2) found newly-unmatched files in a sibling location, the files probably *moved* — the fix is to update the glob, not retire the section.
 - **Aspirational / lead section:** a glob may legitimately precede the code so new files get coverage before they are written (§ 5.3 feedback loop). A section added in a recent round for not-yet-created files is not stale — note and skip.
 - **Un-substituted placeholder:** a glob still in `<...>` placeholder form matches nothing because the consumer has not localized it to real paths — an install artifact, not staleness. Skip it.

@@ -151,7 +151,7 @@ which (if any) are missing.
           .claude/ maps, checks.yml and semgrep/, and the pre-commit hook), and
           tasks/vision.md and tasks/decisions.md (/intake, /onboard);
         - a path outside the project: a Read or an Edit there; and `git -C <path>`,
-          `cd <path> && git …` or `git --git-dir=…` at any path, which the skills' own
+          `cd <path> && git …` or `git --git-dir=…` at any path, which /review-close's own
           steps replace with sysop/scripts/git_ro.py;
         - a plugin install's step files, read from outside the project: the seeded
           Read(~/.claude/plugins/cache/sysop/**) covers a GitHub install from the marketplace

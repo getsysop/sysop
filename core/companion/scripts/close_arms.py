@@ -19,6 +19,10 @@ shape makes the receipt unreadable:
     required  <arm-id>     <utc>
     loaded    <arm-id>     <digest>  <utc>
     checked   <utc>        <ok | missing N>
+    reviewed  <branch>     <sha>     <utc>
+
+A `reviewed` record is the commit a branch's review read, for Step 4a's `tip`. Branch names
+cannot hold a tab or a newline (`git check-ref-format`), so they fit a field.
 
 Subcommands (each prints one line per fact):
 
@@ -77,6 +81,27 @@ Subcommands (each prints one line per fact):
         Step 4a-fix, after the merges: `<count>` is the number of notes Step 2b collected,
         one per bullet under a `NOTES:` block (`NOTES: none` is 0). Above 0 it records `required 4a-fix` and prints `ARM: 4a-fix`; at 0 it
         prints `ARM: none`. Exit 2: the count is not a whole number.
+    reviewed <close-id> <branch> [--own-commit]
+        Step 2a step 1, before the branch's diff is read, and again whenever Step 2a re-runs for
+        it. Records `refs/heads/<branch>`'s commit as the one this close reviews and prints
+        `REVIEWED: <branch> <sha>`. The latest record for a branch is the one `tip` compares.
+        A resume records the prepare's commits with `close_run.py reviewed` instead.
+        `--own-commit`: after Step 2a step 3a commits an ignored file to the branch. Records the
+        new commit only when its only parent is the commit recorded last, so neither a commit
+        someone else made beneath it nor a merge is taken in; otherwise prints `NOT RECORDED: <branch> …` and exits 1,
+        recording nothing, and Step 4a's `tip` shows the commits.
+        Exit 2, recording nothing: the branch is empty, a placeholder, or not a local branch.
+    tip <close-id> <branch> [--peek]
+        Step 4a item 1, before a branch is merged. When the
+        branch is still at the latest commit `reviewed` recorded for it, prints
+        `TIP: <branch> <sha>` and `ARM: none`. Otherwise it records `required 4a-moved` and
+        prints one of `MOVED: <branch> …` (the reviewed commit is in the branch's history:
+        the commits added since follow, newest first), `REWRITTEN: <branch> …` (it is not:
+        the reviewed commits no longer on it follow, marked `<`, then the new ones, marked `>`,
+        each side capped on its own), or `UNRECORDED: <branch> …` (no commit was recorded for
+        it in this close), then `ARM: 4a-moved`. `--peek`, the `pr` arm's reuse probe: the
+        first line alone, recording nothing; Step 4a's own `tip` makes the arm due. Exit 2, recording nothing: the
+        branch is empty, a placeholder or not a local branch, or git could not compare.
     exited <close-id> <arm-id> <code>
         Where an arm's trigger is a command's exit code, run after that command with the code
         written out. Today nine steps' fifteen arms (`EXIT_ARMS`): Step 1b's tracked-file
@@ -135,8 +160,8 @@ from pathlib import Path
 # The arms this script knows. `begin` refuses a skill that marks any other set.
 ARMS = frozenset({"1b-dirty-primary", "2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions",
                   "2b-twin-spawn", "3b-collect-exit", "3b-rollback", "3c-signals", "4-pre-pr",
-                  "4a-append", "4a-fix", "4a-post-failure", "4a-post-prescan", "4a-published",
-                  "4b-batches", "4c-check-exit", "4c-unmerged", "4d-direct", "4d-pr", "6-direct",
+                  "4a-append", "4a-fix", "4a-moved", "4a-post-failure", "4a-post-prescan",
+                  "4a-published", "4b-batches", "4c-check-exit", "4c-unmerged", "4d-direct", "4d-pr", "6-direct",
                   "6-pr-cleanup", "6-pr-gate", "prepare-resume", "request-review-land"})
 # Step 4-pre's two `pr` shapes: `policy` records it due when it reads `pr`.
 POLICY_ARM = "4-pre-pr"
@@ -170,9 +195,12 @@ FLAG_ARMS = (("--prepare", "prepare-resume"), ("--resume", "prepare-resume"),
 VALUE = {"--resume": re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{4}"),
          "--land": re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{4}"),
          "--agent": re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}")}
-# The arms `conflicts` and `notes` make due.
+# The arms `conflicts`, `notes` and `tip` make due.
 CONFLICT_ARM = "4a-append"
 NOTES_ARM = "4a-fix"
+MOVED_ARM = "4a-moved"
+# How many of the commits since review `tip` prints before it names the rest by count.
+TIP_LOG_MAX = 20
 # The arms `exited` makes due: each one's trigger is a command's non-zero exit, or a value a
 # command printed that the core compares with a literal and passes on as `1`.
 EXIT_ARMS = frozenset({"1b-dirty-primary", "2a-ignored-refs", "2b-large-diff", "2b-leak", "2b-no-conventions",
@@ -225,10 +253,10 @@ def receipts(root: Path) -> Path:
     return root / "sysop" / "runtime" / "close-arms"
 
 
-def receipt(close_id: str, must_exist: bool = True) -> Path:
+def receipt(close_id: str, must_exist: bool = True, root: "Path | None" = None) -> Path:
     if not ID.fullmatch(close_id):
         raise Refuse(f"{close_id!r} is not a close id: substitute the one `begin` printed")
-    p = receipts(main_root()) / f"{close_id}.tsv"
+    p = receipts(root if root is not None else main_root()) / f"{close_id}.tsv"
     if must_exist and not p.is_file():
         raise Refuse(f"no receipt for {close_id}: `begin` did not run in this "
                      "repository, or the id is not this close's")
@@ -241,7 +269,7 @@ def append(p: Path, *fields: str) -> None:
 
 
 # record kind -> its field count, the kind included.
-SHAPES = {"begin": 2, "policy": 3, "required": 3, "loaded": 4, "checked": 3}
+SHAPES = {"begin": 2, "policy": 3, "required": 3, "loaded": 4, "checked": 3, "reviewed": 4}
 
 
 class Vanished(Exception):
@@ -496,6 +524,129 @@ def cmd_notes(args: list) -> int:
     return 0
 
 
+def branch_commit(branch: str) -> str:
+    """The commit `refs/heads/<branch>` names, or a refusal. The ref is read exactly: a bare
+    name resolves a same-named tag first, and `rev-parse` would take `feat~1` as a revision."""
+    if not branch.strip() or "<" in branch:
+        raise Refuse(f"branch {branch!r} is empty or not substituted: write the branch out")
+    g = subprocess.run(["git", "show-ref", "--verify", "--hash", f"refs/heads/{branch}"],
+                       capture_output=True, env=GIT_ENV)
+    sha = os.fsdecode(g.stdout).strip()
+    if g.returncode != 0 or not sha:
+        raise Refuse(f"{branch!r} is not a local branch (no refs/heads/{branch})")
+    return sha
+
+
+def record_reviewed(p: Path, branch: str, sha: str) -> None:
+    """One `reviewed` record. `close_run.py reviewed` writes the prepare's commits through it."""
+    if not branch or "\t" in branch or "\n" in branch or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha):
+        raise Refuse(f"not a branch and commit to record: {branch!r} {sha!r}")
+    append(p, "reviewed", branch, sha, utc())
+
+
+def cmd_reviewed(args: list) -> int:
+    if len(args) not in (2, 3) or args[2:] not in ([], ["--own-commit"]):
+        raise Refuse("usage: reviewed <close-id> <branch> [--own-commit]")
+    p = receipt(args[0])
+    sha = branch_commit(args[1])
+    if args[2:]:
+        was = [r[2] for r in records(p) if r[0] == "reviewed" and r[1] == args[1]]
+        g = subprocess.run(["git", "rev-parse", "--verify", "-q", f"{sha}^1"],
+                           capture_output=True, env=GIT_ENV)
+        parent = os.fsdecode(g.stdout).strip() if g.returncode == 0 else ""
+        # A merge commit brings in a second line of history no review read.
+        merge = subprocess.run(["git", "rev-parse", "--verify", "-q", f"{sha}^2"],
+                               capture_output=True, env=GIT_ENV).returncode == 0
+        if not was or parent != was[-1] or merge:
+            print(f"NOT RECORDED: {args[1]} is at {sha}, which is not a single non-merge commit on top of "
+                  + (f"the recorded {was[-1]}" if was else "a recorded commit")
+                  + ": Step 4a's tip check shows the commits")
+            return 1
+    record_reviewed(p, args[1], sha)
+    print(f"REVIEWED: {args[1]} {sha}")
+    return 0
+
+
+# Read-only log flags: no external diff, textconv, signature check (`log.showSignature` runs
+# gpg) or colour, whatever the consumer's config says.
+LOG = ["git", "log", "--no-color", "--no-ext-diff", "--no-textconv", "--no-show-signature",
+       "--no-notes", "--stat", "--format=%h %s"]
+
+
+def git_out(args: list, what: str) -> bytes:
+    g = subprocess.run(args, capture_output=True, env=GIT_ENV)
+    if g.returncode != 0:
+        raise Refuse(f"git could not {what}: "
+                     f"{os.fsdecode(g.stderr).strip() or 'exit ' + str(g.returncode)}")
+    return g.stdout
+
+
+def side(mark: str, rng: str, what: str) -> bytes:
+    """One side of a rewrite, newest first and capped, each commit marked."""
+    n = int(git_out(["git", "rev-list", "--count", rng], "count the commits").strip() or b"0")
+    log = git_out(LOG + [f"--format={mark} %h %s", f"--max-count={TIP_LOG_MAX}", rng], what)
+    if n > TIP_LOG_MAX:
+        log += f"... and {n - TIP_LOG_MAX} more: git log {rng}\n".encode()
+    return log
+
+
+def cmd_tip(args: list) -> int:
+    if len(args) not in (2, 3) or args[2:] not in ([], ["--peek"]):
+        raise Refuse("usage: tip <close-id> <branch> [--peek]")
+    close_id, branch = args[:2]
+    peek = args[2:] == ["--peek"]
+    p = receipt(close_id)
+    now = branch_commit(branch)
+    was = [r[2] for r in records(p) if r[0] == "reviewed" and r[1] == branch]
+    if was and was[-1] == now:
+        print(f"TIP: {branch} {now}")
+        if not peek:
+            print("ARM: none")
+        return 0
+    lines: list = []
+    if not was:
+        lines.append(f"UNRECORDED: {branch} is at {now}, and no commit was recorded for it at "
+                     "Step 2a in this close".encode())
+        log = b""
+    else:
+        old = was[-1]
+        a = subprocess.run(["git", "merge-base", "--is-ancestor", old, now],
+                           capture_output=True, env=GIT_ENV)
+        if a.returncode not in (0, 1):
+            raise Refuse(f"git could not compare {old} with {now}: "
+                         f"{os.fsdecode(a.stderr).strip() or 'exit ' + str(a.returncode)}")
+        if a.returncode == 0:
+            rng = f"{old}..{now}"
+            n = int(git_out(["git", "rev-list", "--count", rng], "count the commits").strip() or b"0")
+            lines.append(f"MOVED: {branch} was {old} at review and is {now}: "
+                         f"{n} commit(s) added since".encode())
+            log = git_out(LOG + [f"--max-count={TIP_LOG_MAX}", rng], "list the commits")
+            if n > TIP_LOG_MAX:
+                log += f"... and {n - TIP_LOG_MAX} more: git log {rng}\n".encode()
+        else:
+            gone = int(git_out(["git", "rev-list", "--count", f"{now}..{old}"], "count the commits").strip() or b"0")
+            new = int(git_out(["git", "rev-list", "--count", f"{old}..{now}"], "count the commits").strip() or b"0")
+            lines.append(f"REWRITTEN: {branch} was {old} at review and is {now}, and the reviewed "
+                         f"commit is no longer in its history: {gone} reviewed commit(s) are gone "
+                         f"(`<`) and {new} are new (`>`)".encode())
+            # Each side capped on its own, the reviewed side first, so neither hides the other.
+            log = (side("<", f"{now}..{old}", "list the reviewed commits")
+                   + side(">", f"{old}..{now}", "list the new commits"))
+    if peek:
+        sys.stdout.buffer.write(lines[0] + b"\n")
+        sys.stdout.buffer.flush()
+        return 0
+    append(p, "required", MOVED_ARM, utc())
+    # Bytes, as git gave them: a commit subject that is not UTF-8 must not stop the report.
+    out = sys.stdout.buffer
+    for ln in lines:
+        out.write(ln + b"\n")
+    out.write(log)
+    out.write(f"ARM: {MOVED_ARM}\n".encode())
+    out.flush()
+    return 0
+
+
 def cmd_exited(args: list) -> int:
     if len(args) != 3:
         raise Refuse("usage: exited <close-id> <arm-id> <code>")
@@ -618,7 +769,8 @@ def cmd_unchecked(args: list) -> int:
 
 
 COMMANDS = {"begin": cmd_begin, "policy": cmd_policy, "read-policy": cmd_read_policy, "arm": cmd_arm,
-            "conflicts": cmd_conflicts, "notes": cmd_notes, "exited": cmd_exited,
+            "conflicts": cmd_conflicts, "notes": cmd_notes, "reviewed": cmd_reviewed,
+            "tip": cmd_tip, "exited": cmd_exited,
             "loaded": cmd_loaded, "check": cmd_check, "unchecked": cmd_unchecked}
 
 

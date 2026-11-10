@@ -724,12 +724,14 @@ class TestReasonsArePinned:
 # 4. What the round found — every one of these had NO guard when it was found
 # ─────────────────────────────────────────────────────────────────────────────
 def _extract_claim_dir_gate() -> str:
-    """The shipped `CLAIM_DIR=` + `case` + `mkdir` block — /auto-build 6d's until Phase
-    344 moved it to 6a, where the planner's `plan.md` needs the directory first. Lifted to
-    the end of the `mkdir` line, so the `echo` of the path runs too."""
+    """The shipped `CLAIM_DIR=` + check + `mkdir` block — /auto-build 6d's until Phase
+    344 moved it to 6a, where the planner's `plan.md` needs the directory first. A `python3 -`
+    heredoc since Phase 476 (`Q-665`: a `case`, an `exit` and `mkdir` bind no rule under
+    `dontAsk`), so the whole fence is lifted, from its opener to the closing delimiter."""
     body = AUTO_BUILD.read_text()
-    start = body.index('CLAIM_DIR="sysop/runtime/claim/')
-    end = body.index("\n", body.index('mkdir "$CLAIM_DIR"', start))
+    at = body.index('CLAIM_DIR="sysop/runtime/claim/')
+    start = body.index("python3 - <<'PY'", body.rfind("```", 0, at))
+    end = body.index("\nPY\n", at) + len("\nPY")
     return body[start:end]
 
 
@@ -767,8 +769,8 @@ class TestTheClassificationDirGate:
 
     def test_the_gate_tests_the_variable_the_mkdir_uses(self):
         block = _extract_claim_dir_gate()
-        assert 'case "$CLAIM_DIR"' in block, "the gate does not test the built path"
-        assert 'mkdir "$CLAIM_DIR"' in block, "the mkdir does not use the tested path"
+        assert 'if "<" in CLAIM_DIR or ">" in CLAIM_DIR:' in block, "the gate does not test the built path"
+        assert "d = Path(CLAIM_DIR)" in block, "the mkdir does not use the tested path"
 
     @pytest.mark.parametrize(
         "task_id,cycle,expect_created",
@@ -784,7 +786,7 @@ class TestTheClassificationDirGate:
         breaks it fails here rather than passing against a re-typed copy."""
         block = _extract_claim_dir_gate().replace("<TASK_ID>", task_id).replace("<CYCLE_TS>", cycle)
         script = tmp_path / "gate.sh"
-        script.write_text("set -u\n" + block + "\necho CREATED\n")
+        script.write_text("set -eu\n" + block + "\necho CREATED\n")
         r = subprocess.run(["bash", str(script)], cwd=str(tmp_path),
                            capture_output=True, text=True)
         made = (tmp_path / "sysop/runtime/claim").exists()

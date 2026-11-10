@@ -82,21 +82,28 @@ When you've hand-edited a managed script and committed, the next `bash sysop/scr
 ```
 ── preserved managed paths (Phase 24b) ──
 
-  ↻  sysop/scripts/archive_review_tasks.py   (consumer-modified; --accept-upstream to overwrite)
-  ↻  sysop/scripts/hooks/pre-commit          (consumer-modified; --accept-upstream to overwrite)
+  ↻  sysop/scripts/archive_review_tasks.py   (consumer-modified; UPSTREAM CHANGED it too; --accept-upstream to overwrite)
+  ↻  sysop/scripts/hooks/pre-commit   (consumer-modified; upstream unchanged; --accept-upstream to overwrite)
 
   preserved: 2 managed path(s) preserved due to consumer modification.
   Re-run with --accept-upstream <relpath> (repeatable) or --accept-upstream-list <file> to override.
+
+  ⚠ upstream changed 1 of them since 1652a44512f7. Each kept copy lacks
+    upstream's change, and the skills this update refreshed may rely on it. Read the
+    change, then take it (--accept-upstream, re-applying your edit if it is still
+    needed) or merge it by hand:
+      git -C /path/to/sysop diff 1652a44512f7 -- core/companion/scripts/archive_review_tasks.py
 ```
 
-The preserved files are NOT touched by the overwrite; the rest of the pipeline runs as normal. Two-pass workflow when you want some of them updated:
+The preserved files are NOT touched by the overwrite; the rest of the pipeline runs as normal. A file marked `upstream unchanged` needs no decision: keeping it loses nothing. A file marked `UPSTREAM CHANGED it too` is one where your copy now lacks upstream's change, and the skills the same update refreshed may call what it lacks. A modified copy that is already byte-identical to the new one is not kept: it reads `✓ matches upstream:` and is not listed. Two-pass workflow when you want some of them updated:
 
 ```bash
 # 1. First run: see what's preserved.
 bash sysop/scripts/sysop-update.sh
 
-# 2. Inspect the upstream-vs-consumer diff per preserved path:
-#    git -C $SYSOP_SRC log --oneline -p <old_commit>..HEAD -- core/companion/scripts/<file>
+# 2. For each file marked UPSTREAM CHANGED, run the `git -C … diff` line the
+#    summary printed (under --ref it names your clone and the pinned commit),
+#    and read your side with:
 #    git log --oneline -p -- sysop/scripts/<file>
 
 # 3. Take upstream for the subset you want (repeatable, or pass a list file):

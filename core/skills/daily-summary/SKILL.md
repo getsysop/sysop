@@ -9,7 +9,7 @@ disallowed-tools: Edit, Write, NotebookEdit
 
 Generate a standup-ready report: a detailed breakdown of the most recent working day plus a high-level retrospective of the past week. Driven by `git log`, cross-referenced against completed tasks in `tasks/index.yml`, and enriched from any changelog/status docs the project keeps. Useful for daily standups, async team updates, and personal journaling.
 
-> **Structural read-only guard:** the `disallowed-tools` frontmatter (Claude Code 2.1.152+) removes the file-write tools while this skill is active. Partial by design — `Bash` stays allowed for the read-only `git log` and `date` calls below, so the guard covers the dedicated write tools, not shell redirects. Non-Claude-Code harnesses ignore the key. This skill mutates nothing: it reads history and prints a report.
+> **Structural read-only guard:** the `disallowed-tools` frontmatter (Claude Code 2.1.152+) removes the file-write tools while this skill is active. Partial by design — `Bash` stays allowed for the read-only `git log` calls and Step 1's `python3 -` block below, so the guard covers the dedicated write tools, not shell redirects. Non-Claude-Code harnesses ignore the key. This skill mutates nothing: it reads history and prints a report.
 
 ## Not `/roadmap` or `/sitrep`
 
@@ -21,7 +21,7 @@ These three read the same project through three different time horizons; `/daily
 
 ## Pre-flight: Permission Guard
 
-**No new permission rules; no Step 0 guard.** Every operation this skill performs is read-only: `git log` (and read-only pipe tools like `wc` / `sort`), `date` arithmetic, and `Read` on `tasks/index.yml` and any changelog/status docs. Per `_shared/permission-guard.md` § Notes, read-only forms of `git` and the built-in read-only command set are auto-approved in **every** permission mode and are **not** listed as allow-rules. It runs no scripts and writes nothing. It is portable to any git-backed project on any agent.
+**One seeded rule; no Step 0 guard.** Step 1's date arithmetic is a `python3 -` heredoc, which `Bash(python3 -:*)` admits (the template seeds it). Every other operation is read-only: `git log` (and read-only pipe tools like `wc` / `sort`) and `Read` on `tasks/index.yml` and any changelog/status docs. Per `_shared/permission-guard.md` § Notes, read-only forms of `git` and the built-in read-only command set are auto-approved and are **not** listed as allow-rules; under `dontAsk` that set refuses some read-only forms, and this skill's `git log` lines were run there and admitted. It runs no shipped script and writes nothing. A missing rule does not stop the report: Step 1 says what to do when its block cannot run. It is portable to any git-backed project on any agent.
 
 ## Step 0 — Parse arguments
 
@@ -35,52 +35,59 @@ Parse `$ARGUMENTS` for flags:
 
 ## Step 1 — Determine the date range
 
-Sysop consumers run on both macOS (BSD `date`) and Linux (GNU `date`), which disagree on date arithmetic. Every `date` call below is written **BSD form first (`-v` / `-j -f`), GNU form as the `||` fallback (`-d`)** — the same BSD→GNU pattern `claim_task.sh` uses. Whole-day arithmetic is cleanly expressible in both, so no third (epoch) fallback is needed here.
+Sysop consumers run on both macOS (BSD `date`) and Linux (GNU `date`), which disagree on date arithmetic, so the dates are computed in Python, which is the same on both. Keep it one `python3 -` call: a `VAR=$(…)` assignment, `date -v`/`-j`, a `case` and an `exit` each bind no permission rule under `dontAsk`, and `Bash(python3 -:*)` admits this block.
 
 Substitute `<days>` with the `--days` value (default `7`). For `--date`, replace **the whole
-`TARGET_DATE=` line** — it is deliberately a single line so that is a safe instruction — with
-`TARGET_DATE=YYYY-MM-DD`. Run it as **one** block:
+`TARGET_DATE =` line** — it is deliberately a single line so that is a safe instruction — with
+`TARGET_DATE = "YYYY-MM-DD"`. Run it as **one** block:
 
 ```bash
-# All three values, computed inline. BSD form first, GNU form as the `||` fallback.
-# The placeholder is QUOTED so an unsubstituted run fails loudly here rather than as a
-# bare syntax error further down (the same shape Step 3c uses for APPROVED_BRANCHES).
-WEEK_DAYS='<days>'
-case "$WEEK_DAYS" in
-  *'<'*)
-    echo "ERROR: substitute <days> (the --days value, default 7) before running Step 1." >&2
-    exit 3 ;;
-esac
+python3 - '<days>' <<'PY'
+# All three values, computed in Python. The placeholder is QUOTED so an unsubstituted
+# run fails loudly here rather than as a bare syntax error.
+import datetime, sys
 
-# --date override: replace this ENTIRE line with  TARGET_DATE=YYYY-MM-DD
-TARGET_DATE=$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d '1 day ago' +%Y-%m-%d 2>/dev/null)
+WEEK_DAYS = sys.argv[1]
+if "<" in WEEK_DAYS:
+    print("ERROR: substitute <days> (the --days value, default 7) before running Step 1.", file=sys.stderr)
+    sys.exit(3)
 
-WEEK_START=$(date -j -v-"${WEEK_DAYS}"d -f %Y-%m-%d "$TARGET_DATE" +%Y-%m-%d 2>/dev/null \
-          || date -d "$TARGET_DATE -${WEEK_DAYS} days" +%Y-%m-%d 2>/dev/null)
-DAY_NAME=$(date -j -f %Y-%m-%d "$TARGET_DATE" +%A 2>/dev/null \
-        || date -d "$TARGET_DATE" +%A 2>/dev/null)
+# --date override: replace this ENTIRE line with  TARGET_DATE = "YYYY-MM-DD"
+TARGET_DATE = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
 
-echo "--- TARGET_DATE: $TARGET_DATE"
-echo "--- WEEK_START:  $WEEK_START"
-echo "--- DAY_NAME:    $DAY_NAME"
+try:
+    target = datetime.date.fromisoformat(TARGET_DATE)
+    if int(WEEK_DAYS) < 0:
+        raise ValueError("--days is negative")
+    week_start = target - datetime.timedelta(days=int(WEEK_DAYS))
+except (ValueError, OverflowError) as e:
+    print("ERROR: --days must be a whole number of days and --date a YYYY-MM-DD date: " + str(e), file=sys.stderr)
+    sys.exit(3)
+
+print("--- TARGET_DATE: " + target.isoformat())
+print("--- WEEK_START:  " + week_start.isoformat())
+print("--- DAY_NAME:    " + target.strftime("%A"))
+PY
 ```
 
-**Straight-line assignments, not shell functions — and that is a correctness requirement,
-not a style choice.** These were three helpers taking positional parameters (`local d="$<1>"
+**No shell functions and no positional parameters — and that is a correctness requirement,
+not a style choice.** These were three shell helpers taking positional parameters (`local d="$<1>"
 n="$<2>"`). The skill runner substitutes a bare `$<1>`/`$<2>` in this file with the invocation's
 argument words *before bash ever defines the function*. Indices are **0-based**, so
 `/daily-summary --date 2026-08-10` turned that line into `local d="2026-08-10" n="$<2>"` —
 `$<1>` is the *second* word, and `$<2>` is out of range so it stayed literal and the week
 window then computed from the string `$<2>` (internal tracker #360). Nothing in this file may read
-a positional parameter.
+a positional parameter; the block takes `<days>` as an argument and reads it from `sys.argv`,
+which has no `$` for the runner to substitute.
 
 It also removes the older hazard this section used to warn about: functions live only inside
 the fenced block that defines them, and nothing survives from one fenced block to the next
 (`WORKFLOW.md` § 8.2a *Persistence boundary*). With no functions there is nothing to carry.
 
-If a value comes back empty (neither `date` variant is present), note "date arithmetic
-unavailable on this system" at the top of the report and continue with the git sections using
-whatever ranges you can compute; do not fail the whole report.
+If the block cannot run (no `python3` on this system, or the call is denied), work the three
+values out from today's date yourself, note "date arithmetic unavailable on this system" at the
+top of the report and continue with the git sections using whatever ranges you can compute; do
+not fail the whole report.
 
 Read all three off stdout and write them out as literals at every later use — which is what
 every fenced block below already expects (`<TARGET_DATE>`, `<WEEK_START>`, `<DAY_NAME>`).

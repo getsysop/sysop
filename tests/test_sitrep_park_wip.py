@@ -626,7 +626,13 @@ def _cascade_state_sequence():
     body = src[a:src.index("\ndef _suggested_order(", a)]
     consts = _module_consts(src)
     out = []
-    for kind, tok in re.findall(r'\b(t|rb)\.state == ("[^"]+"|[A-Za-z_][A-Za-z0-9_]*)', body):
+    # A discrepancy-keyed arm (`d.kind == "…"`, P0d and 3d) is ranked too: its row names
+    # the kind in backticks, so moving the arm without its row reddens as a state would.
+    for kind, tok, dkind in re.findall(
+            r'\b(t|rb)\.state == ("[^"]+"|[A-Za-z_][A-Za-z0-9_]*)|\bd\.kind == "([^"]+)"', body):
+        if dkind:
+            out.append(("discrepancy", dkind))
+            continue
         val = tok.strip('"') if tok.startswith('"') else consts[tok]
         out.append(("review batch" if kind == "rb" else "task", val))
     return out
@@ -650,6 +656,8 @@ def test_the_routing_table_order_is_the_cascade_order():
     assert len(set(labels)) == len(labels), [l for l in labels if labels.count(l) > 1]
     # every cascade predicate on a classifier state has a row, in cascade order
     seq = [(k, v) for k, v in _cascade_state_sequence() if v]
+    assert {("discrepancy", "close stopped"),
+            ("discrepancy", "branch kept for a pending doc")} <= set(seq), seq
     # Two batch states the table describes in words rather than by the state
     # string: row 2 ("all tasks Doc-Work'd") and rows 4a–4d ("Pending unclaimed
     # batches"). Every other row names the state in backticks and its kind.
@@ -660,7 +668,9 @@ def test_the_routing_table_order_is_the_cascade_order():
     positions = []
     for kind, state in seq:
         phrase = described.get((kind, state))
-        if phrase:
+        if kind == "discrepancy":
+            hit = next((i for i, ln in enumerate(rows) if f"`{state}` discrepancy" in ln), None)
+        elif phrase:
             hit = next((i for i, ln in enumerate(rows) if phrase in ln), None)
         else:
             hit = next((i for i, ln in enumerate(rows) if f"`{state}`" in ln and

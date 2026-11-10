@@ -28,13 +28,15 @@ Subcommands (each prints one line per fact, and exits 0 unless it says otherwise
         `core.hooksPath`. Prints `RUN:`, `DIR:` and one `STATE <branch>: <path>`
         per branch. Exit 1: a branch does not exist, or an input could not be read.
 
-    finish <run-id>
+    finish <run-id> <close-id>
         At the end of Step 3c. Re-reads origin `<default-branch>` (Step 3c fetched
         it), copies `sysop/runtime/2b-conventions.md` and `2b-security.md` into
-        `2b/`, and marks the run finished. Prints `QUESTIONS: <n>` and one
+        `2b/`, records the commit the prepare's Step 2a read for each branch (the last
+        `reviewed` record in the prepare's own `close_arms.py` receipt, `<close-id>`), and
+        marks the run finished. Prints `QUESTIONS: <n>` and one
         `MOVED DURING PREPARE:` line per input that moved since `begin`.
         Exit 1, marking nothing: a branch has no state file, or `questions.md`
-        is missing.
+        is missing. Exit 2: the close id has no receipt.
 
     resumable [--agent <name>]
         Prints the newest prepare's run id, alone on stdout, when a resume can load it
@@ -50,6 +52,16 @@ Subcommands (each prints one line per fact, and exits 0 unless it says otherwise
         At resume, after Step 1. Same refusals as `load`, then one line per thing
         that must re-run (see `RERUN`/`GONE` below), `NOTE:` lines that re-run
         nothing, and `CURRENT` when nothing moved.
+
+    reviewed <run-id> <close-id>
+        At resume, right after the first `check`. Refuses a run `load` would, then records,
+        in this close's `close_arms.py` receipt, the commit the prepare's Step 2a read for each
+        branch, as `finish` carried it: the commit Step 4a's `close_arms.py tip` compares the
+        branch with. Not `begin`'s tip, which is taken before Step 2a: a branch that moved
+        after it and back reads `CURRENT` to `check`. A branch that Step 2a re-runs for records
+        its own tip again, and the later record wins. Prints `REVIEWED: <branch> <sha>` per
+        branch, and `NOT REVIEWED: <branch>` for one the prepare's Step 2a did not record,
+        which Step 4a's `tip` then reads `UNRECORDED:`. Exit 2: the close id has no receipt.
 
     consume <run-id> [--restore-2b]
         Before Step 3b at resume. Marks the run consumed, so it cannot be resumed
@@ -579,8 +591,14 @@ def cmd_begin(root: Path, default: str, branches: list[str], agent: str = "") ->
     return 0
 
 
-def cmd_finish(root: Path, run_id: str) -> int:
+def cmd_finish(root: Path, run_id: str, close_id: str) -> int:
     run, manifest = open_run(root, run_id)
+    import close_arms  # the receipt's owner; no PyYAML, so the import costs nothing
+    try:
+        recs = close_arms.records(close_arms.receipt(close_id, root=root))
+    except (close_arms.Refuse, close_arms.Vanished) as e:
+        raise Refuse(f"the prepare's receipt for {close_id!r}: {e}") from None
+    reviewed = {r[1]: r[2] for r in recs if r[0] == "reviewed" and r[1] in manifest["branches"]}
     missing = [b for b in sorted(manifest["branches"])
                if not state_path(run, b).is_file() or state_path(run, b).stat().st_size == 0]
     for b in missing:
@@ -599,6 +617,7 @@ def cmd_finish(root: Path, run_id: str) -> int:
             shutil.copy2(src, run / "2b" / name)
             print(f"COPIED: {name}")
     manifest["run"]["origin"] = ref_sha(root, "refs/remotes/origin/" + manifest["default_branch"])
+    manifest["reviewed"] = reviewed  # the last record per branch: a later one overwrote
     manifest["finished"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     write_json(run / "manifest.json", manifest)
     print(f"QUESTIONS: {count_questions(run / 'questions.md')}")
@@ -681,6 +700,27 @@ def cmd_check(root: Path, run_id: str, default: str) -> int:
         print(line)
     if not [l for l in lines if not l.startswith("NOTE:")]:
         print("CURRENT")
+    return 0
+
+
+def cmd_reviewed(root: Path, run_id: str, close_id: str) -> int:
+    run, manifest = open_run(root, run_id)
+    resumable(run, manifest)
+    done = manifest.get("reviewed")
+    if not isinstance(done, dict):
+        done = {}  # a run an older `finish` wrote: nothing recorded, so Step 4a asks
+    import close_arms  # the receipt's owner; no PyYAML, so the import costs nothing
+    try:
+        p = close_arms.receipt(close_id, root=root)
+        for b in sorted(manifest["branches"]):
+            sha = done.get(b)
+            if not isinstance(sha, str):
+                print(f"NOT REVIEWED: {b}")
+                continue
+            close_arms.record_reviewed(p, b, sha)
+            print(f"REVIEWED: {b} {sha}")
+    except close_arms.Refuse as e:
+        raise Refuse(str(e)) from None
     return 0
 
 
@@ -2473,9 +2513,9 @@ def main(argv: list[str]) -> int:
     # merge diverge (Phase 374's round 4, the client half of round 3's finding).
     os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
     usage = ("usage: close_run.py begin <default-branch> [--agent <name>] [<branch>...] | "
-             "finish <run-id> | resumable [--agent <name>] | awaiting [--agent <name>] | "
+             "finish <run-id> <close-id> | resumable [--agent <name>] | awaiting [--agent <name>] | "
              "load <run-id> <default-branch> | check <run-id> <default-branch> | "
-             "consume <run-id> [--restore-2b] | reader | class | "
+             "reviewed <run-id> <close-id> | consume <run-id> [--restore-2b] | reader | class | "
              "eligible <default-branch> <agent> [<branch>...] | "
              "hand-off <default-branch> <branch> <PR> <pushed-from-sha> [--keep-branch] "
              "[--agent <name>] | "
@@ -2498,10 +2538,12 @@ def main(argv: list[str]) -> int:
             return cmd_resumable(root, rest[1] if rest else "")
         if cmd == "awaiting" and (not rest or (len(rest) == 2 and rest[0] == "--agent")):
             return cmd_awaiting(root, rest[1] if rest else None)
-        if cmd == "finish" and len(rest) == 1:
-            return cmd_finish(root, rest[0])
+        if cmd == "finish" and len(rest) == 2:
+            return cmd_finish(root, rest[0], rest[1])
         if cmd in ("load", "check") and len(rest) == 2:
             return (cmd_load if cmd == "load" else cmd_check)(root, rest[0], rest[1])
+        if cmd == "reviewed" and len(rest) == 2:
+            return cmd_reviewed(root, rest[0], rest[1])
         if cmd == "consume" and len(rest) in (1, 2) and rest[1:] in ([], ["--restore-2b"]):
             return cmd_consume(root, rest[0], rest[1:] == ["--restore-2b"])
         if cmd == "reader" and not rest:

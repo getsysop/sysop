@@ -27,10 +27,22 @@ dispatch untouched. The residual is a set difference, disjoint from the mapped s
 construction, and it is **largest exactly when the map is least localized**, which is the
 case that was silently empty before.
 
+**The manifest is the skill's, passed as a file** (``--manifest-file``, required): the Step 1
+list ``/security-audit`` built — its scope, its exclusions, its always-include files — one
+repo-relative path per line. This script defines no manifest of its own; listing ``git
+ls-files`` here sized the residual over files Step 1 had excluded. The file is read as UTF-8
+(a BOM is dropped). Blank lines are skipped, a leading ``./`` is dropped, CRLF reads as LF,
+and a line git C-quoted (Step 1's recipes run with ``core.quotePath`` on) counts as the
+tracked name it decodes to: none of them names a different file. A path listed twice, or one ``git ls-files`` does not list (deleted,
+untracked, a directory, outside the repo), is refused — status ``bad-manifest``, nothing
+assessed — because counting it would change ``manifest`` or the residual. A file that cannot
+be read is ``unreadable-manifest``; one listing no path is ``empty``.
+
 Design stance — **advisory and honest, never a gate.** It reports; it does not block, and
 every degraded path (no map, no ``CLAUDE.md``, empty repo, not a git tree, a non-UTF-8
-tracked name) exits 0 with a
-stated reason rather than failing the round. Only an unexpected crash exits 2. Same stance
+tracked name, a manifest file it cannot read or will not count) exits 0 with a
+stated reason rather than failing the round. Only an unexpected crash, or a usage error such as
+a missing ``--manifest-file``, exits 2. Same stance
 as ``scope_overlap.py``, and for the same reason: a partial audit beats a refused one.
 
 **Assignment is not coverage, and this tool refuses to conflate them.** Packing a 486-file
@@ -44,13 +56,13 @@ reason this file exists in the shape it does: the first cut reported ``Full`` ov
 533-file repo it had reviewed a quarter of.
 
 Usage:
-    python3 sysop/scripts/security_partition.py                 # human report
-    python3 sysop/scripts/security_partition.py --json          # structured, for the skill
-    python3 sysop/scripts/security_partition.py --budget 6 --per-agent 30
+    python3 sysop/scripts/security_partition.py --manifest-file <path>          # human report
+    python3 sysop/scripts/security_partition.py --json --manifest-file <path>   # for the skill
+    python3 sysop/scripts/security_partition.py --manifest-file <path> --budget 6 --per-agent 30
 
 Exit codes:
     0   report produced (including every "could not assess" degrade path)
-    2   unexpected error
+    2   usage error (a missing --manifest-file, a flag value below 1) or an unexpected error
 """
 from __future__ import annotations
 
@@ -73,6 +85,12 @@ BOLD_LEAD = re.compile(r"^\s*-\s+\*\*(?P<label>[^*]+?)\*\*")
 OWASP_CODES = tuple(f"A{n:02d}" for n in range(1, 11))
 
 EXCLUSIONS_HEADING = "## Map coverage exclusions"
+
+# A section glob's brace list is expanded before git sees it (git has none), with the same
+# expansion and the same ceiling as `security_map_filter.py`'s `tokens()`, so the two readers of
+# one map agree on what a `*.{ts,tsx}` glob names. Past the ceiling a glob binds nothing here and
+# is named in the notes: binding it would mark files mapped that no category agent is sent.
+BRACE_EXPAND_LIMIT = 256
 
 DEFAULT_BUDGET = 4
 DEFAULT_PER_AGENT = 25
@@ -137,10 +155,20 @@ def parse_sections(text: str) -> list[dict]:
             # A section whose globs are ALL `<placeholder>` tokens binds no file until the
             # consumer localizes it. A section that MIXES concrete and placeholder globs
             # binds exactly what its concrete globs match — a "header contains `<…>`"
-            # predicate would wrongly condemn those, and the shipped maps have two.
-            "placeholder": bool(globs) and all("<" in g for g in globs),
+            # predicate would wrongly condemn those, and the shipped maps have two. The test is
+            # per expanded alternative: `{<api module>,lib}/*.py` binds `lib/*.py`.
+            "placeholder": bool(globs) and all(_all_placeholder(g) for g in globs),
         })
     return out
+
+
+def _all_placeholder(glob: str) -> bool:
+    """Whether every alternative ``glob`` names is still in ``<…>`` form. A glob past the brace
+    ceiling is not expanded, and reads as placeholder only if it carries a ``<`` at all."""
+    if brace_count(glob.strip()) > BRACE_EXPAND_LIMIT:
+        return "<" in glob
+    alts = glob_alternatives(glob)
+    return bool(alts) and all("<" in a for a in alts)
 
 
 def _strip_fences(text: str) -> str:
@@ -221,13 +249,19 @@ def _bash_operand(name: bytes) -> str:
     return "$'" + "".join(chr(b) if b in keep else f"\\x{b:02x}" for b in name) + "'"
 
 
-def _git(root: str, *args: str) -> str:
-    out = subprocess.run(["git", *args], cwd=root, capture_output=True).stdout
+def _git_run(root: str, *args: str) -> tuple[int, str, str]:
+    """``(returncode, stdout, first stderr line)``; a non-UTF-8 name in stdout raises."""
+    p = subprocess.run(["git", *args], cwd=root, capture_output=True)
+    err = p.stderr.decode("utf-8", "replace").strip().split("\n")[0]
     try:
-        return out.decode("utf-8")
+        return p.returncode, p.stdout.decode("utf-8"), err
     except UnicodeDecodeError:
-        bad = next(c for c in out.split(b"\0") if not _utf8(c))
+        bad = next(c for c in p.stdout.split(b"\0") if not _utf8(c))
         raise UndecodablePath(_bash_operand(bad)) from None
+
+
+def _git(root: str, *args: str) -> str:
+    return _git_run(root, *args)[1]
 
 
 def _utf8(chunk: bytes) -> bool:
@@ -246,22 +280,170 @@ def _is_git_tree(root: str) -> bool:
     ).returncode == 0
 
 
-def resolve_glob(root: str, glob: str) -> set[str]:
+def expand_braces(g: str) -> list[str]:
+    """``g`` with every ``{a,b}`` list expanded, innermost first: ``security_map_filter.py``'s
+    ``tokens()`` expansion, which imports it, so both readers expand a glob alike."""
+    m = re.search(r"\{([^{}]*)\}", g)
+    return [g] if not m else [x for alt in m.group(1).split(",")
+                              for x in expand_braces(g[:m.start()] + alt + g[m.end():])]
+
+
+def brace_count(g: str) -> int:
+    """How many globs ``expand_braces(g)`` would return, without building them."""
+    m = re.search(r"\{([^{}]*)\}", g)
+    return 1 if not m else (m.group(1).count(",") + 1) * brace_count(g[:m.start()] + "x" + g[m.end():])
+
+
+def glob_alternatives(glob: str) -> list[str]:
+    """The globs a map glob names: braces expanded, then each alternative's leading ``./``
+    (repeatedly) and ``/`` dropped, an empty one discarded — ``security_map_filter.py``'s
+    ``tokens()`` reading of one backticked glob. The caller checks ``brace_count`` first."""
+    out = []
+    for g in expand_braces(glob.strip()):
+        while g.startswith("./"):
+            g = g[2:]
+        g = g.lstrip("/")
+        if g:
+            out.append(g)
+    return out
+
+
+def resolve_glob(root: str, glob: str, notes: list | None = None) -> set[str]:
     """Tracked files a map glob matches.
 
     Uses git's ``:(glob)`` pathspec magic, which gives ``**`` its true meaning. The plain
     pathspec does not: ``git ls-files -- 'api/**/*.py'`` silently drops the direct child
     ``api/server.py``, and ``'api/routes/**/*.py'`` returns nothing at all because ``**``
     will not match an empty path segment. Both were reproduced before this was written.
+
+    A brace list is expanded first, since git has none: unexpanded, ``*.{ts,tsx}`` matched only
+    a file literally named with the braces, so its section bound nothing and its files fell to
+    the residual. Each alternative is read as ``security_map_filter.py`` reads it (a leading
+    ``./`` or ``/`` dropped: git refuses ``/x`` as outside the repository), and one still in
+    ``<…>`` form is dropped on its own.
+
+    A glob git refuses binds nothing, and is NAMED in ``notes`` rather than read as an empty
+    match. When the one batched call fails, each alternative is run alone, so a bad alternative
+    cannot void the siblings that resolve.
     """
-    if "<" in glob:          # unlocalized placeholder — matches nothing, by construction
+    def _note(text: str) -> None:
+        if notes is not None and text not in notes:
+            notes.append(text)
+
+    if brace_count(glob.strip()) > BRACE_EXPAND_LIMIT:
+        _note(f"map glob `{glob}` expands to more than {BRACE_EXPAND_LIMIT} globs, so it "
+              "binds nothing here and its files count as residual")
         return set()
-    out = _git(root, "ls-files", "-z", "--", f":(glob){glob}")
-    return {p for p in out.split("\0") if p}
+    # An unlocalized placeholder matches nothing, by construction.
+    globs = [g for g in glob_alternatives(glob) if "<" not in g]
+    if not globs:
+        return set()
+    rc, out, _ = _git_run(root, "ls-files", "-z", "--", *(f":(glob){g}" for g in globs))
+    if rc == 0:
+        return {p for p in out.split("\0") if p}
+    hit: set[str] = set()
+    for g in globs:
+        rc, out, err = _git_run(root, "ls-files", "-z", "--", f":(glob){g}")
+        if rc == 0:
+            hit |= {p for p in out.split("\0") if p}
+        else:
+            _note(f"map glob `{g}`" + (f" (from `{glob}`)" if g != glob else "")
+                  + f" could not be resolved by git ({err or f'exit {rc}'}), so it binds "
+                  "nothing here and its files count as residual")
+    return hit
 
 
-def manifest(root: str) -> list[str]:
-    return sorted(p for p in _git(root, "ls-files", "-z").split("\0") if p)
+def tracked(root: str) -> set[str]:
+    """Every path ``git ls-files`` lists: what a manifest line may name."""
+    return {p for p in _git(root, "ls-files", "-z").split("\0") if p}
+
+
+def _unquote(target: str) -> str:
+    """A path git C-quoted (``"caf\\303\\251.py"``, ``"tab\\tname.py"``), as written on disk.
+
+    ``ignored_refs.py``'s ``_unquote``, copied as it is: that script does not ship in a loop
+    install, and this one does. ``git ls-files`` and ``git log --name-only`` quote a name with a
+    non-ASCII byte, a control character, a ``"`` or a backslash unless ``core.quotePath`` is off,
+    and Step 1's recipes run with git's default.
+    """
+    if not (len(target) >= 2 and target[0] == target[-1] == '"'):
+        return target
+    body, out, i = target[1:-1], bytearray(), 0
+    simple = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+    while i < len(body):
+        ch = body[i]
+        if ch == "\\" and i + 1 < len(body):
+            nxt = body[i + 1]
+            if nxt in simple:
+                out.append(simple[nxt])
+                i += 2
+                continue
+            if body[i + 1:i + 4].isdigit() and len(body[i + 1:i + 4]) == 3:
+                out.append(int(body[i + 1:i + 4], 8))
+                i += 4
+                continue
+        out += ch.encode("utf-8", "surrogateescape")
+        i += 1
+    return os.fsdecode(bytes(out))
+
+
+def _drop_dot_slash(p: str) -> str:
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def read_manifest(path: str, known: set[str]) -> tuple[list[str], str, str]:
+    """The manifest file's paths, sorted, or a status and reason that refuse it.
+
+    Returns ``(paths, "", "")`` when every line is countable, else ``([], status, reason)``.
+    Read through, because they name no different file: a leading UTF-8 BOM, blank lines, a
+    leading ``./``, the ``\\r`` of a CRLF ending (universal newlines), and a line git C-quoted
+    whose decoded name is tracked (a line that is itself tracked is taken as written first).
+    Refused, because counting them would change a number this script reports: a path listed
+    twice after decoding (``manifest`` would count one file twice) and a path ``git ls-files``
+    does not list (it can never be mapped, so it would be residual whatever the map says, and
+    a deleted one is a file no agent can open).
+    """
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return [], "unreadable-manifest", f"could not read the manifest file {path}: {exc}"
+
+    seen: dict[str, int] = {}
+    for raw in text.split("\n"):
+        if not raw.strip():
+            continue
+        p = _drop_dot_slash(raw)
+        if p not in known:
+            decoded = _drop_dot_slash(_unquote(raw))
+            if decoded in known:
+                p = decoded
+        seen[p] = seen.get(p, 0) + 1
+
+    def _some(names: list[str]) -> str:
+        shown = ", ".join(repr(n) for n in names[:5])
+        return shown + (f", +{len(names) - 5} more" if len(names) > 5 else "")
+
+    problems = []
+    twice = sorted(p for p, n in seen.items() if n > 1)
+    if twice:
+        problems.append(f"{len(twice)} path(s) listed more than once: {_some(twice)}")
+    untracked = sorted(p for p in seen if p not in known)
+    if untracked:
+        spaced = [p for p in untracked if p != p.strip() and _drop_dot_slash(p.strip()) in known]
+        problems.append(f"{len(untracked)} path(s) `git ls-files` does not list — deleted, "
+                        f"untracked, a directory or outside the repo: {_some(untracked)}"
+                        + (f" ({len(spaced)} of them differ from a tracked path only by "
+                           f"surrounding whitespace: {_some(spaced)})" if spaced else ""))
+    if problems:
+        return [], "bad-manifest", (
+            f"the manifest file {path} was not counted: " + "; ".join(problems)
+            + ". List each tracked file once, correct Step 1's count with it, and re-run")
+    if not seen:
+        return [], "empty", f"the manifest file {path} lists no paths"
+    return sorted(seen), "", ""
 
 
 def read_vendor_paths(root: str, notes: list | None = None) -> set[str]:
@@ -438,8 +620,10 @@ def _budget_for_full(groups: dict[str, list[str]], per_agent: int, total: int,
     return lo
 
 
-def build(root: str, budget: int, per_agent: int, group_cap: int | None = None) -> dict:
-    """The whole derivation. Returns the report structure; raises nothing on a normal degrade."""
+def build(root: str, manifest_file: str, budget: int, per_agent: int,
+          group_cap: int | None = None) -> dict:
+    """The whole derivation over the manifest ``manifest_file`` lists. Returns the report
+    structure; raises nothing on a normal degrade."""
     notes: list[str] = []
 
     map_path = os.path.join(root, ".claude", "security_map.md")
@@ -472,9 +656,10 @@ def build(root: str, budget: int, per_agent: int, group_cap: int | None = None) 
 
     if not _is_git_tree(root):
         return {"status": "not-a-git-tree", "assignments": [], "notes": notes + [
-            f"{root} is not a git work tree — the manifest comes from `git ls-files`"]}
+            f"{root} is not a git work tree — the manifest's paths are checked against "
+            "`git ls-files`"]}
     try:
-        files = manifest(root)
+        known = tracked(root)
     except UndecodablePath as exc:
         # A partial partition would silently drop the file, and the partition promises
         # every tracked file an owner — so it names the file and assesses nothing.
@@ -482,10 +667,16 @@ def build(root: str, budget: int, per_agent: int, group_cap: int | None = None) 
             f"tracked path {exc} is not valid UTF-8, so the manifest cannot be "
             f"partitioned; rename it from {root} with `git mv -- {exc} <new UTF-8 name>` "
             "and re-run"]}
-    if not files:
+    if not known:
         return {"status": "empty", "notes": notes + ["no tracked files"], "assignments": []}
+    files, refused, reason = read_manifest(manifest_file, known)
+    if refused:
+        return {"status": refused, "notes": notes + [reason], "assignments": []}
+    in_manifest = set(files)
 
-    # mapped: matched by at least one non-placeholder section that carries a category
+    # mapped: matched by at least one non-placeholder section that carries a category. A
+    # section glob resolves over every tracked file, so each hit is cut to the manifest:
+    # `mapped + residual` partitions the manifest, never the repository.
     mapped: set[str] = set()
     bound_by_uncategorised: set[str] = set()
     for s in sections:
@@ -493,7 +684,8 @@ def build(root: str, budget: int, per_agent: int, group_cap: int | None = None) 
             continue
         hit: set[str] = set()
         for g in s["globs"]:
-            hit |= resolve_glob(root, g)
+            hit |= resolve_glob(root, g, notes)
+        hit &= in_manifest
         if s["cats"]:
             mapped |= hit
         else:
@@ -503,7 +695,7 @@ def build(root: str, budget: int, per_agent: int, group_cap: int | None = None) 
 
     excluded: set[str] = set()
     for g in exclusions:
-        excluded |= resolve_glob(root, g)
+        excluded |= resolve_glob(root, g, notes)
 
     vendor = read_vendor_paths(root, notes)
     # NOT `- excluded`. `CLAUDE.md § Map coverage exclusions` scopes the Step 2a map-coverage
@@ -518,7 +710,7 @@ def build(root: str, budget: int, per_agent: int, group_cap: int | None = None) 
     # a SQL route and the auth module from dispatch and reported `Full`. A coverage tool whose
     # worst failure is silently dropping the files a consumer called security-critical, while
     # certifying completeness, is worse than no tool. The list is now COUNTED, never subtracted.
-    residual = sorted(set(files) - mapped)
+    residual = sorted(in_manifest - mapped)
     groups = group_residual(residual, group_cap if group_cap is not None else per_agent)
     assignments = pack(groups, budget, vendor)
 
@@ -618,6 +810,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Residual assignment for /security-audit — the files no map section reaches.")
     ap.add_argument("--root", default=".", help="consumer repo root (default: cwd)")
+    ap.add_argument("--manifest-file", required=True, metavar="PATH",
+                    help="the round's manifest: one repo-relative path per line (required; "
+                         "a relative PATH is read from the current directory)")
     ap.add_argument("--budget", type=int, default=DEFAULT_BUDGET,
                     help=f"max residual agents (default {DEFAULT_BUDGET})")
     ap.add_argument("--per-agent", type=int, default=DEFAULT_PER_AGENT,
@@ -632,12 +827,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        report = build(args.root, args.budget, args.per_agent, args.group_cap)
+        report = build(args.root, args.manifest_file, args.budget, args.per_agent,
+                       args.group_cap)
     except Exception as exc:                                    # noqa: BLE001 — advisory tool
         # The last-resort net. A missing map, a map that is a directory, invalid UTF-8 in
         # either parsed file, every non-object lock shape, a non-git tree, an empty repo, a
-        # nonexistent --root and a tracked file whose NAME is not UTF-8 (`git ls-files -z`
-        # prints it raw) all exit 0 with a stated reason. Nothing known reaches this net.
+        # nonexistent --root, a tracked file whose NAME is not UTF-8 (`git ls-files -z`
+        # prints it raw) and a manifest file that cannot be read or is refused all exit 0
+        # with a stated reason. Nothing known reaches this net.
         print(f"security_partition: unexpected error: {exc}", file=sys.stderr)
         return 2
 

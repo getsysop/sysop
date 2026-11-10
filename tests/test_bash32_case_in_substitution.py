@@ -361,8 +361,11 @@ def test_no_shipped_fence_has_a_bare_pattern_inside_a_substitution():
     # 15 until Phase 421 (`Q-665`), which moved Step 1a's, Step 3c's, Rule A's pattern form's and
     # /auto-build's read-back `case` statements into scripts; 6 remain in fences. Phase 422
     # (`Q-665`) moved three more (Step 3b's strip, Step 4a's placeholder guard, 4d-pr's HEAD
-    # check): 3 remain.
-    assert cases - script_cases >= 3, f"only {cases - script_cases} `case` statements in fences"
+    # check): 3 remain. Phase 476 (`Q-665`) moved the last three (/claim-task's read-back,
+    # /auto-build's mint, /daily-summary Step 1): none remains, and `test_dontask_case_fences.py`
+    # holds fences at zero. That the scan still counts a `case` is held by `PRE_FIX`.
+    assert cases - script_cases == 0, f"{cases - script_cases} `case` statement(s) in fences"
+    assert scan(PRE_FIX)[1] >= 1, "the scan no longer counts a `case` statement"
     assert script_cases >= 50, f"only {script_cases} `case` statements in shipped scripts"
     # Step 1a's loop was the one shipped `case` inside `$(` until Phase 421 (`Q-665`) moved it
     # into `close_state.py`; none remains, so that the scan still reaches one is held by the

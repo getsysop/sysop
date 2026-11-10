@@ -62,7 +62,8 @@ import tempfile
 from pathlib import Path
 
 from gate_verdict import GIT_ENV, Refuse, ends, main_root, read_text, top_level
-from security_partition import SECTION_RE
+from security_partition import (BRACE_EXPAND_LIMIT, SECTION_RE, brace_count,
+                                glob_alternatives)
 
 MAPS = (".claude/security_map.project.md", ".claude/security_map.md")
 INLINE_LIMIT = 10_000
@@ -71,7 +72,7 @@ SETEXT = re.compile(r" {0,3}(=+|-+)[ \t]*$")
 # A heading inside a blockquote or a list item: read for the gate and for keeping its section,
 # never as a cut.
 NESTED = re.compile(r" {0,3}(?:>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)+#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$")
-EXPAND_LIMIT = 256
+EXPAND_LIMIT = BRACE_EXPAND_LIMIT
 
 
 def fence_mark(line: str):
@@ -143,26 +144,14 @@ def headings(lines: list, skip: list) -> list:
 
 
 def tokens(text: str) -> list:
-    """Every backticked token, braces expanded, a leading `/` or `./` dropped."""
-    def expand(g):
-        m = re.search(r"\{([^{}]*)\}", g)
-        return [g] if not m else [x for alt in m.group(1).split(",")
-                                  for x in expand(g[:m.start()] + alt + g[m.end():])]
-
-    def count(g):
-        m = re.search(r"\{([^{}]*)\}", g)
-        return 1 if not m else (m.group(1).count(",") + 1) * count(g[:m.start()] + "x" + g[m.end():])
+    """Every backticked token, braces expanded, a leading `/` or `./` dropped, read as
+    `security_partition.py` reads a map glob."""
     out = []
     for raw in re.findall(r"`([^`]+)`", text):
-        if count(raw.strip()) > EXPAND_LIMIT:
+        if brace_count(raw.strip()) > EXPAND_LIMIT:
             out.append("\0" + raw.strip())  # too many to match: `reaches` counts it as matching
             continue
-        for g in expand(raw.strip()):
-            while g.startswith("./"):
-                g = g[2:]
-            g = g.lstrip("/")
-            if g:
-                out.append(g)
+        out.extend(glob_alternatives(raw))
     return out
 
 

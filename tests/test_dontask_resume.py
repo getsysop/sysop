@@ -554,7 +554,7 @@ def _rule_b() -> str:
     return text[start:end]
 
 
-RESUME_ARMS = ("3b-collect-exit", "3b-rollback", "4-pre-pr", "4a-append", "4a-fix", "4a-post-failure",
+RESUME_ARMS = ("3b-collect-exit", "3b-rollback", "4-pre-pr", "4a-append", "4a-fix", "4a-moved", "4a-post-failure",
                "4a-post-prescan", "4a-published", "4b-batches", "4c-check-exit", "4c-unmerged", "4d-direct", "4d-pr", "6-direct",
                "6-pr-cleanup", "6-pr-gate")
 

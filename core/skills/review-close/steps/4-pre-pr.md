@@ -1,20 +1,21 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" 4-pre-pr bb6a73003a22b647 "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" 4-pre-pr db73047ee947b8d0 "<skill directory>"
 ```
 
 It prints `LOADED: 4-pre-pr`. **Exit 2**: stop and show its stderr.
 
 **`pr`:** two shapes. Almost every run assembles on a throwaway **integration branch** (the default, below). One narrow case instead **reuses the approved branch's own open PR** — probe for it first, because cutting an integration branch there opens a *second* PR for content that already has one, re-runs the whole required-check suite on identical content, and orphans the first PR.
 
-**PR-reuse probe (run first).** Reuse the existing PR when **all five** conditions hold:
+**PR-reuse probe (run first).** Reuse the existing PR when **all six** conditions hold:
 
 1. **exactly one** branch is still approved **after Step 3b** — not merely after Step 2a. Step 2d can demote an approved branch to rejected ("Hold for fix") and Step 3b downgrades a branch to SKIP when its worktree refuses to remove, so the Step 2a verdict is not final. Reusing a branch this run decided *not* to merge would squash-merge it to `main`;
 2. that branch has exactly one open, **non-draft, same-repository** PR whose base is `main`;
 3. there are **no local-only `main` commits that the branch does not already contain** (`git rev-list --count origin/<default branch>..<default branch> --not "refs/heads/<approved branch name>"` is `0`). Carrying local-only `main` commits is the integration branch's job, and it does that by being cut from local `<default branch>` rather than by a sweep; a commit the approved branch already carries as an ancestor needs no carrying either way, because merging the branch lands it. The unqualified form of this condition (`git rev-list origin/<default branch>..<default branch>` empty) rejected that case, and the rationale it gave — *"there is nowhere to put those commits on a feature branch"* — is void precisely when they are already on it. **Measured both ways** on a branch updated by `git merge <default branch>`: unqualified `1`, `--not` form `0`. **One case the widening does NOT reach, stated because a reader will otherwise assume it does:** a branch updated by `git rebase <default branch>` instead is then *behind its own remote* by the pre-rebase commits, so **condition 4** rejects it whatever this condition says — measured `1`. The widening is reachable for a merge-updated branch and inert for a rebase-updated one;
 4. the local branch is **not behind** its remote counterpart — otherwise the Step 4b/4c commits would land on a branch missing work someone else pushed to the PR, and the Step 4d push would be rejected as non-fast-forward;
 5. the branch is **not behind `origin/<default branch>`**. Step 4a is skipped under reuse, so nothing rebases the branch onto the live base. The integration-branch shape exists partly to run the required checks against *current* `origin/<default branch>`; this condition is what replaces that guarantee, and without it a branch-protection rule requiring up-to-date branches yields `mergeStateStatus: BEHIND` and a refused merge.
+6. the branch is **still the commit Step 2 reviewed**.
 
 **If anything other than exactly one branch is still approved, condition 1 already fails — skip the probe entirely and go to the integration-branch shape.** Otherwise:
 
@@ -51,7 +52,7 @@ Read both values off stdout and carry them forward as **literals**. The `echo` l
 
 **If the `gh pr list` output is empty, stop here — take the integration-branch shape.** That is the normal outcome, and it is also what an ambiguous result (two candidate PRs) deliberately produces. `/claim-task` feature branches are usually local-only under `pr` policy, so most runs have no PR to reuse. Do **not** run the remaining probes in that case — `git fetch origin refs/heads/<branch>` on a branch that was never pushed fails with `fatal: couldn't find remote ref <branch>`, which is alarming output on the *expected* path.
 
-Only when a PR exists are conditions 4 and 5 worth checking:
+Only when a PR exists are conditions 4, 5 and 6 worth checking:
 
 ```bash
 # Substitute the approved branch name — the same literal you wrote into the block above.
@@ -79,7 +80,15 @@ Label the counts too, for a second reason: when *no* remote-tracking ref exists 
 
 If a count **errors** or prints nothing, the conditions are unmet — take the integration-branch shape. That is the safe direction and it is intentional: this probe fails toward the flow that always works.
 
-If the local-only count from the first probe and **both** counts above are `0` (and conditions 1–2 held, which is why you got here), take the **PR-reuse shape**:
+Then condition 6, with the close id `begin` printed and the branch written out:
+
+```bash
+python3 sysop/scripts/close_arms.py tip "<close-id>" "<approved branch name>" --peek
+```
+
+**Exit 2**: stop and show its stderr. A `TIP:` line meets condition 6. Any other line leaves it unmet: take the integration-branch shape, where Step 4a item 1 runs the check again.
+
+If the local-only count from the first probe and **both** counts above are `0`, and condition 6's check printed `TIP:` (and conditions 1–2 held, which is why you got here), take the **PR-reuse shape**:
 
 ```bash
 # Substitute the approved branch name again. No `MERGE_TARGET=` assignment here: it

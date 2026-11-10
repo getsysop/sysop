@@ -7,6 +7,141 @@ a check that now runs. Each entry is dated by the snapshot's publication and nam
 private development phases it carries. The per-phase journal those phases were recorded in is the
 maintainer's working record and is not in the public tree.
 
+## 2026-11-09 — v0.2.6, private phases 476–481
+
+- **`v0.2.6`.** This snapshot is tagged `v0.2.6`, with a GitHub Release carrying this entry.
+  The next bullet is an instruction; the rest are what changed, each a fix to shipped behaviour.
+  `--ref` pins to it as it does to the earlier tags, once the tag is fetched into your clone.
+- **Run `install.sh --update` when the plugin updates to this snapshot.** Most of the fixes below
+  are in scripts under `sysop/scripts/`, and several change a skill's text together with the
+  script it calls. The plugin delivers the skills; only the bash installer's `--update` (or
+  `sysop/scripts/sysop-update.sh`) delivers the rest. Until you run it, every `/review-close`, in
+  every mode, stops before Step 1: `close_arms.py begin` exits 2 and says the skill and
+  `sysop/scripts/` are from different versions, with the update command (measured with
+  `v0.2.5`'s `close_arms.py` under this snapshot's `begin` line). `/security-audit` writes its
+  residual sweep as `not assessed` and names the update command, as its bullet below says.
+  `/sitrep`, `/claim-task`, `/auto-build`, `/codebase-review` and `/daily-summary` keep running
+  on the older scripts, without the script half of their fixes. If you patched a script under
+  `sysop/scripts/` yourself, read the last bullet before you update.
+- **A worktree holding only tooling links no longer reads as live work when a link's name needs
+  quoting.** `git status --porcelain` quotes a name with a space, a double quote, a backslash, a
+  control character or a non-ASCII byte (`?? "café"`), and five readers took the quoted string as
+  the path: `/sitrep`'s dirty and live-work checks, `/review-close`'s Step 1a worktree classes and
+  its clone sync, and Step 2a's landed check. A symlink to an ignored target (a linked `.venv`, say)
+  with such a name read as uncommitted work, so the worktree read dirty and a landed branch read
+  not landed. They now read `git status --porcelain -z`, which quotes nothing. The same readers also stopped
+  missing real work: a `status.showUntrackedFiles=no` in the worktree's config hid an untracked
+  file from four of them, and `/sitrep` read a worktree whose `.git` link is gone as clean. The
+  fixes are in `sysop/scripts/`, so they reach an install with `install.sh --update`.
+- **`/security-audit` and `/codebase-review` match a map glob exactly.** Their coverage checks
+  matched files to map sections by directory prefix and extension, so `src/*.py` also covered
+  `src/a/b.py`, and the stale-section sweep handed `api/routes/**/*.py` to `git ls-files` as a
+  plain pathspec, which has no `**` and flagged a section whose files sit directly in
+  `api/routes/` as stale. Both now resolve each glob with git's `:(glob)` magic, in one
+  `git ls-files` command that prints the unmatched files, the same resolution `/security-audit`'s
+  residual partition uses. A brace list (`*.{ts,tsx}`) is expanded first, and a literal `[id]`
+  directory in a map glob must be written `\[id\]`. Skill text only.
+- **`/claim-task`, `/auto-build` and `/daily-summary` lose three shell blocks Claude Code's
+  `dontAsk` mode refused.** Each guarded a placeholder with `case … esac` and `exit`, which
+  `dontAsk` denies whatever rule is seeded (measured on Claude Code 2.1.319). Each is now one
+  admitted call. `/claim-task`'s test-decision read-back is the
+  line `/auto-build` already ships: an unsubstituted path now stops with
+  `STOP: operand … is empty or not substituted` and exit 3, and a missing file with
+  `STOP: no such file`. Both read-backs now say to read the output, not the exit status: a
+  `grep` that finds no heading can come back as a success with only the `OK:` line. `/auto-build`'s artifact directory and `/daily-summary`'s dates are
+  computed in a `python3 -` call, so `/daily-summary` now needs the `Bash(python3 -:*)` rule the
+  template seeds. Skill text only. The read-back still cannot run headless when the claim's
+  worktree sits outside the project, as the default `../` placement does: `dontAsk` denies a
+  `grep` there. `/auto-build` as a whole stays unsupported under `dontAsk`: its executor edits
+  the project's code, and its orchestrator still runs other shapes `dontAsk` denies.
+- **`/review-close` merges a branch only at the commit it reviewed, or on your answer.** Step 4
+  merged whatever the branch pointed at when it got there, so a commit made to an approved branch
+  after Step 2 read it (by a session that still owned the branch, say) landed with no review.
+  Step 2a now records each branch's commit, a resume records the one its prepare reviewed, and
+  Step 4a compares before the merge. When the branch has moved, an attended close shows you the
+  new commits and asks whether to merge them, and lists them on Step 8's new
+  `Merged after review:` row if you do. Under `--headless` or `--unattended` it skips the branch
+  (4a-SKIP), which waits for the next close's review; when it was the only approved branch, the
+  close then stops at its merged-tree check, before anything is pushed, as after any skipped
+  branch. The PR-reuse shape checks the same thing
+  before it reuses a branch's PR. A `--resume` of a prepare made before the update has no record of
+  what that prepare reviewed, so it asks about (or, unattended, skips) every branch. The skill text needs this snapshot's `sysop/scripts/`: until
+  `install.sh --update` delivers them, every `/review-close` stops at `close_arms.py begin`, which says the skill and `sysop/scripts/` are from different versions
+  and names the update command.
+- **`/sitrep` reads a `Review Ready` batch's pending doc, and routes a batch a stopped close
+  merged.** A batch whose header reads `Review Ready` was sent to `/review-close` without its
+  pending doc being read, so a doc older than the branch's last commits met the close's
+  stale-doc refusal. `/sitrep` now measures that doc as it measures an in-progress batch's and
+  sends a stale one to `/document-work` first; `--json` gains a top-level `review_ready_stale`
+  list, and `review_batches` is unchanged. A batch whose branch a `direct` close merged before
+  stopping short of marking the batch `Merged` read as "continue work; 0 of N tasks…"; it now
+  reads `merged, close pending` and routes to `close_batch.sh <N>`, then `/review-close`, whether its
+  header reads `In Progress` or `Review Ready` (`--json` lists the latter in `review_ready_merged`);
+  without its lock, the remedy is that route rather than a re-claim or `--release`. After a
+  close that kept a batch branch for a pending doc, `/sitrep` advised `git branch -D` on that
+  branch and reported nothing to do; it now names the doc, and the `hold:` step when there is one.
+  The fixes are in `sysop/scripts/`, so they reach an install with `install.sh --update`.
+- **`/claim-task` keeps chaining to `/document-work` after a clean UI-verify skip.** Step 8 held
+  the chain back on "a UI-verify note flagging pending manual checking", which read a
+  dev-server-not-running skip the same as a skip that leaves a page for a person to check. It now
+  names the two catalogue rows that leave the check to a person (every changed path auth-gated
+  or deferred; Playwright unavailable), and says the other two do not stop the chain. The
+  executor now reports any UI-verify note verbatim, Step 8 prints it and says when it held the
+  chain back, and `/auto-build` copies it into the task's notes. Skill text only.
+- **`/security-audit`'s residual sweep covers Step 1's manifest, not the whole repository.**
+  `security_partition.py` built its own file list from `git ls-files`, so the residual agents
+  were sized and spent on files Step 1 excludes: in one consumer's measurement, 62 of the 100
+  files the default sample handed out were markdown. Step 1 now writes its manifest to
+  `sysop/runtime/audit-scope.txt`, Step 3-0c passes it as the required `--manifest-file`, and
+  Step 3c reuses it as written. The script refuses a path listed twice or one git does not
+  track, rather than counting it; a name git prints C-quoted (`"caf\303\251.py"`) counts as the
+  file it names. A map glob with a brace list (`*.{ts,tsx}`, or `{<api module>,lib}/*.py`, whose
+  real alternative bound nothing) or a leading `/` now binds its files, where before they fell
+  to the residual. Until `install.sh --update` delivers the new script, Step 3-0c's call fails on
+  the unknown flag, and the skill writes the residual as `not assessed` and names the update
+  command.
+- **`/review-close` no longer removes another session's worktree or branch.** Step 2b's leak
+  check, run after the review agents return, listed everything under `.claude/worktrees/` and
+  every change to the main checkout's branches and config as this close's leak, and its remedy
+  removed the worktree and deleted the branch. A worktree another session made on its own branch
+  during that window, with one unpushed commit, lost that commit: the worktree and branch both went
+  without complaint. A commit in a sibling claim worktree failed the check too, read as this
+  close's agents moving a branch, which the arm said to revert. The check
+  now sorts what it finds by whose it is. Ours is a `worktree-agent-*` branch or a worktree whose
+  path the runner recorded from an agent's completion notice, and only ours is removed, by a new
+  `review_pins.py reap`. It discards uncommitted files only in a recorded worktree, and lists
+  them first; it deletes only an agent's own `worktree-agent-*` branch made during the review,
+  never another branch an agent's worktree holds (a claim's, the default branch, or one another
+  session made). Anything else new is `FOREIGN:` and never removed: an attended close asks whether
+  to continue, and `--prepare`, `--headless` or `--unattended` reports it on Step 8's new
+  `Left by 2b:` row and continues. A worktree or agent branch there before the review is
+  `PREDATES:` and no longer reads as a leak, and a worktree a running agent's process has locked
+  is `LOCKED:` and left. The remedy had also prescribed `git worktree remove` on the usual leak,
+  an agent that wrote a scratch file, which git refuses without `--force`. Step 2a no longer
+  skips, without a word, a branch under `.claude/worktrees/` that has commits of its own: an
+  attended close asks whether to review it, and any other skips it and says so. It still skips
+  `worktree-agent-*` branches and empty ones. The fix is in the skill and `sysop/scripts/`
+  together, so it reaches an install with `install.sh --update`; until then
+  `close_arms.py begin` refuses, as the reviewed-commit entry above says.
+- **`install.sh --update` says when upstream changed a script it keeps for you.** An update keeps
+  a `sysop/scripts/` file you modified (unless `--accept-upstream` names it), and it printed the
+  same `⚠ preserved:` line whether upstream had left that file alone or rewritten it since your
+  last install. So a locally patched script could be kept through a release that changed it, and
+  the update exited 0 with a copy the refreshed skills no longer matched. Each kept file now
+  reads `upstream unchanged since then` or `upstream ALSO changed it since then, and your copy
+  lacks that change`; the summary marks each row, counts the changed ones, and prints a
+  `git diff` line per file that shows upstream's change (under `--ref`, against your source clone
+  and the pinned commit). A modified copy already identical to the new one reads
+  `✓ matches upstream:` and is no longer listed as kept (it is rewritten with the same bytes).
+  Otherwise the same files are kept, and the exit status is the same. The installer runs from your Sysop source clone, so
+  this applies on the update that delivers this release: if you patched `review_pins.py`
+  locally, that update marks it changed (`/review-close` rewrote it, above). A kept older copy
+  has neither `own` nor `reap`: Step 2b's `own` fails on every close that spawns a reviewer
+  (reported, and the close goes on, with nothing recorded as this close's), and a close whose
+  leak check fails stops in Step 2b's leak arm, which the older `check` fails for any worktree
+  under `.claude/worktrees/`, another session's included.
+  Take upstream's copy with `--accept-upstream sysop/scripts/review_pins.py`.
+
 ## 2026-11-07 — v0.2.5, private phases 469–475
 
 - **`v0.2.5`.** This snapshot is tagged `v0.2.5`, with a GitHub Release carrying this entry.

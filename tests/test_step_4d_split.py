@@ -129,6 +129,16 @@ def _pr(st: Path, **over) -> None:
     (st / "pr.json").write_text(json.dumps(pr), encoding="utf-8")
 
 
+def _prepare_close(root: Path) -> str:
+    """The prepare's own `close_arms.py` receipt, which `finish` reads its Step 2a records from."""
+    sys.path.insert(0, str(SCRIPT.parent))
+    import close_arms
+    r = subprocess.run([sys.executable, str(SCRIPT.parent / "close_arms.py"), "begin", "",
+                        *sorted(close_arms.ARMS)], cwd=root, capture_output=True, text=True, env=_ENV)
+    assert r.returncode == 0, r.stderr
+    return r.stdout.split()[1]
+
+
 def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
     env = dict(_ENV, FAKE_GH=str(_state(root)),
                PATH=f"{root.parent / 'bin'}{os.pathsep}{_ENV.get('PATH', '')}")
@@ -276,7 +286,7 @@ def test_a_prepared_run_cannot_be_resumed_while_a_hand_off_waits(repo: Path) -> 
     assert r.returncode == 0, r.stderr
     run_id, run = r.stdout.splitlines()[0].split(": ", 1)[1], Path(r.stdout.splitlines()[1].split(": ", 1)[1])
     (run / "questions.md").write_text("", encoding="utf-8")
-    assert _run(repo, "finish", run_id).returncode == 0
+    assert _run(repo, "finish", run_id, _prepare_close(repo)).returncode == 0
     assert _run(repo, "load", run_id, "main").returncode == 0  # the control
     assert _hand_off(repo).returncode == 0
     r = _run(repo, "load", run_id, "main")

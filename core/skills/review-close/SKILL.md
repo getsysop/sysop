@@ -76,7 +76,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and 
 - `Bash(git worktree list:*)` — the `--porcelain` worktree enumerations from Step 3b on (the one read-only `git` form Sysop ships a rule for — see `_shared/permission-guard.md` § Notes); Steps 1a and 3c read the worktrees through the two scripts below
 - `Bash(python3 sysop/scripts/close_state.py:*)` — Step 1a's worktree classes, Step 1b's `review_tasks.md` shape and Step 1c's archive-rotation pre-check.
 - `Bash(python3 sysop/scripts/git_ro.py:*)` — Step 2a step 1's commit list, and every Step 2b reviewer's git in its pinned checkout: read-only git in a worktree of this repository, where `git -C` binds no rule.
-- `Bash(python3 sysop/scripts/review_pins.py:*)` — Step 2b's conventions clear, baselines, pinned checkouts, their removal, the post-spawn check and the `core.hooksPath` restore.
+- `Bash(python3 sysop/scripts/review_pins.py:*)` — Step 2b's conventions clear, baselines, pinned checkouts, their removal, the post-spawn check, the removal of its agents' leaks and the `core.hooksPath` restore.
 - `Bash(python3 sysop/scripts/git_check.py:*)` — Steps 1b's and 3b's tracked-file check, Step 2b's check that reviewers can run their git, and Step 2d's lock read.
 - `Bash(git worktree remove:*)`
 - `Bash(git branch -d:*)`
@@ -146,7 +146,7 @@ If `$ARGUMENTS` contains `--skip-permission-guard`, print a one-line warning and
 Write `<flags>` below as the flags this invocation was given, each followed by its value, space-separated, or as an empty string when there are none: `--dry-run`, `--prepare`, `--resume <run-id>`, `--request-review`, `--land <run-id>`, `--agent <name>`, `--unattended`, `--headless`, `--skip-permission-guard`. Never paste the raw argument string: it is substituted into this file as text before bash parses it, so a `"` in it would rewrite the command. Then run, from the main checkout's top level, naming every arm this skill marks:
 
 ```bash
-python3 sysop/scripts/close_arms.py begin "<flags>" 1b-dirty-primary 2a-ignored-refs 2b-large-diff 2b-leak 2b-no-conventions 2b-twin-spawn 3b-collect-exit 3b-rollback 3c-signals 4-pre-pr 4a-append 4a-fix 4a-post-failure 4a-post-prescan 4a-published 4b-batches 4c-check-exit 4c-unmerged 4d-direct 4d-pr 6-direct 6-pr-cleanup 6-pr-gate prepare-resume request-review-land
+python3 sysop/scripts/close_arms.py begin "<flags>" 1b-dirty-primary 2a-ignored-refs 2b-large-diff 2b-leak 2b-no-conventions 2b-twin-spawn 3b-collect-exit 3b-rollback 3c-signals 4-pre-pr 4a-append 4a-fix 4a-moved 4a-post-failure 4a-post-prescan 4a-published 4b-batches 4c-check-exit 4c-unmerged 4d-direct 4d-pr 6-direct 6-pr-cleanup 6-pr-gate prepare-resume request-review-land
 ```
 
 It prints `CLOSE: <close-id>`, then `ARM: prepare-resume` when the flags hold `--prepare` or `--resume`, `ARM: request-review-land` when they hold `--request-review` or `--land`, `ARM: 4d-pr` as well under `--land`, or `ARM: none`. **Load every arm it printed before you act on any of them:** read each file its stub below names and run that file's first command, then follow them; a combined mode's steps are split across the files, and the `--request-review` and `--land` file changes the resume's. Write the close id out as a literal, inside the quotes, in Steps 1b, 2a, 2b, 3b, 3c, 4-pre, 4a, 4a-fix, 4a-post, 4b, 4c, 4d, 6 and 8 and in a step file's first command: nothing carries between fenced blocks. **Exit 2**: stop and show its stderr. It names a word that is not one of those flags, a flag given twice or without its value, a flag combination this skill does not run, `--request-review`, `--land` or `--agent` without `## Merge policy` `pr`, a version mismatch to update, or a `## Merge policy` to fix.
@@ -279,7 +279,7 @@ If the enumeration yields no branches (only unpushed main commits this cycle), S
 
 ### 2a. Feature Branches
 
-For every non-main local branch — excluding any **agent worktree branch** (a branch whose registered worktree lives under `.claude/worktrees/`; on Claude Code these are named `worktree-agent-<id>`). Those are review sub-agents' scratch checkouts, not anyone's feature work; Step 2b's HARD RULE covers removing leaked ones. Do not review, approve, reject, or merge them:
+For every non-main local branch — excluding any **agent worktree branch**: a `worktree-agent-*` branch, or one whose registered worktree lives under `.claude/worktrees/` with no commit of its own (`python3 sysop/scripts/git_ro.py . rev-list --count refs/heads/<default branch>..refs/heads/<branch>` prints `0`). Those are agents' scratch checkouts; Step 2b's HARD RULE covers leaked ones. A branch there with commits may be another session's live work: attended, ask with `AskUserQuestion` (`Review it` / `Skip it`); otherwise, or on `Skip it`, its verdict is **SKIP — in an agent worktree**, as for step 0. Do not review, approve, reject, or merge agent worktree branches:
 
 0. **Worktree-state pre-check (Step 1a result).** If Step 1a classified this branch's worktree as `dirty`, the verdict is **SKIP — paused work present**. Do NOT inspect the diff and do NOT propose approve/reject — uncommitted worktree changes mean the branch is mid-implementation, not in a reviewable state. Report the dirty file count and the recommendation: *"`<N>` pending changes in `<worktree-path>`. Commit-as-WIP, stash, or leave alone — re-run `/review-close` after the user decides. This branch is excluded from Step 3b (worktree removal), Step 4 (merge), and Step 6 (cleanup) for this run."* Then continue to the next branch. A SKIP'd branch is distinct from both `approve` and `reject`: it is not merged, but its worktree, lock, and branch are all preserved untouched.
 
@@ -297,7 +297,7 @@ For every non-main local branch — excluding any **agent worktree branch** (a b
    **`LANDED: PR #<N>`** means every commit on the branch was in PR #<N>, which a previous close squash-merged, and the doc that close held is still here. The verdict is **approve — landed by PR #<N>**: skip steps 1–3, and Step 2b and Step 2d do not target it. Every later step handles it as approved; Step 4a item 1 prints `REPLAY 0`, so it is not merged again. Carry it to Step 8's `Squash provenance:` line. **`LANDED: in <ref>`** means no recorded head contains the branch but its tip is already in `<ref>`, the local default branch, and a doc naming it carries `held_since:`, which Step 4c 1c writes when a close holds a doc whose branch `HEAD` already contains. The verdict is **approve — landed in `<ref>`**, handled as one landed by a PR is, except that Step 4a item 1 prints `RECORDED HEAD: none` for it and its Step 8 line is `Branches:`, not `Squash provenance:`. **`NOT LANDED — <reason>`**: review it as steps 1–4 say. **Exit 3**: a placeholder; write the branch and the default branch out.
    See `REFERENCE.md` § *A landed branch stays approved*.
 
-1. `python3 sysop/scripts/feature_branch.py base "<branch>" "<default branch>"` prints `BASE: <sha>`, the branch's **base**: write that sha as `<base>` in every Step 2 command for this branch. **Exit 2**: stop and show its stderr. Then `python3 sysop/scripts/git_ro.py . log <base>..refs/heads/<branch> --not --glob='refs/sysop/merged-pr-heads/*' --oneline` — what commits are on it (through the read-only wrapper, because Claude Code's own read-only set refuses `--glob`), without the claim flips a recorded PR head already landed
+1. `python3 sysop/scripts/feature_branch.py base "<branch>" "<default branch>"` prints `BASE: <sha>`, the branch's **base**: write that sha as `<base>` in every Step 2 command for this branch. **Exit 2**: stop and show its stderr. Then `python3 sysop/scripts/close_arms.py reviewed "<close-id>" "<branch>"`, with the close id `begin` printed, records the commit this review reads; Step 4a item 1 compares the branch with it. **Exit 2**: stop and show its stderr. Then `python3 sysop/scripts/git_ro.py . log <base>..refs/heads/<branch> --not --glob='refs/sysop/merged-pr-heads/*' --oneline` — what commits are on it (through the read-only wrapper, because Claude Code's own read-only set refuses `--glob`), without the claim flips a recorded PR head already landed
 2. `git diff <base> refs/heads/<branch> --stat` — scope of changes
 3. Read the diff. Check for correctness, security issues, and alignment with the task body — path from `tasks/index.yml`'s `body:` field for each task ID the branch claims (a claim does **not** move the body, and there is no `tasks/in_progress/` directory in any shipped layout, so it stays where it was written — normally the file `tasks/open/<TASK_ID>.md`, which `body:` records canonically as `open/<TASK_ID>.md`, relative to `tasks/` — until Step 4c's archive move). Read it **at the branch tip**, per Step 2d's revision note: a branch edits its own body, and the working tree is still `main`.
 
@@ -324,7 +324,7 @@ For every non-main local branch — excluding any **agent worktree branch** (a b
 
 ### 2b. Prevention Convention Check
 
-**Targets.** One agent per **approved-or-rejected** feature branch, plus **one for the unpushed-main commits as a group** if there are any. A branch Step 2a classified **SKIP** (paused work present, clone not brought across, or an ignored file unanswered) is *not* a target: it is not merging this run, and a `VERDICT: BLOCKED` on it would halt the close over work already declared out of scope. Nor is a branch Step 2a approved as landed (step 0b: **landed by PR #N** or **landed in `<ref>`**). These calls can be parallelized — launch one agent per target simultaneously.
+**Targets.** One agent per **approved-or-rejected** feature branch, plus **one for the unpushed-main commits as a group** if there are any. A branch Step 2a classified **SKIP** (paused work present, clone not brought across, an ignored file unanswered, or in an agent worktree) is *not* a target: it is not merging this run, and a `VERDICT: BLOCKED` on it would halt the close over work already declared out of scope. Nor is a branch Step 2a approved as landed (step 0b: **landed by PR #N** or **landed in `<ref>`**). These calls can be parallelized — launch one agent per target simultaneously.
 
 Each target has a **diff basis**, used identically by step 0's predicate and step 1's retrieval:
 
@@ -444,7 +444,7 @@ What the key covers: `REFERENCE.md` § *Step 2b — verdict reuse*.
    python3 sysop/scripts/review_pins.py baseline
    ```
 
-   It prints `BASELINE: <n> status line(s), <m> config line(s)`. **Exit 2: stop and show its output.**
+   It prints `BASELINE: <n> status line(s), <m> config line(s), <k> worktree or agent-branch line(s)`. **Exit 2: stop and show its output.**
 
    > **Two baselines, because a spawn writes to two places.** The tree snapshot catches an agent
    > that created or edited a file; the config snapshot catches the harness itself. Spawning with
@@ -701,7 +701,7 @@ What the key covers: `REFERENCE.md` § *Step 2b — verdict reuse*.
 
    **Under `--prepare`, a `VERDICT: BLOCKED` in item 4 below stops only its branch, and on the unpushed-main group halts the prepare** (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 3).
 
-4. Collect all verdicts **and every `NOTES:` line**, **from both fleets**. Keep the notes with their target: Step 4 `4a-fix` acts on them once the approved branches have merged, and a note on a target that does not merge this run is reported, not acted on. If **any** subagent returns `VERDICT: BLOCKED`, first record the approvals as the paragraph below says, then list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user. A target skipped at step 0 has **no verdict** — report it as `skipped (doc-only)`, never as `APPROVED`; an agent that was never spawned has approved nothing. **The same rule binds step 3b's gate**: a target with no security-map glob match has no security verdict, and reporting it as approved would claim a review that never ran. A `REUSE` verdict is not that case: an agent reviewed the same key in the run its line dates.
+4. Collect all verdicts **and every `NOTES:` line**, **from both fleets**, and **record the worktree each agent's completion notice names** (Claude Code: its `worktreePath` field, never a path from the agent's reply): `python3 sysop/scripts/review_pins.py own "<path>"`. Only a recorded worktree's uncommitted files are removed later; exit 2 records nothing, so report it and continue. Keep the notes with their target: Step 4 `4a-fix` acts on them once the approved branches have merged, and a note on a target that does not merge this run is reported, not acted on. If **any** subagent returns `VERDICT: BLOCKED`, first record the approvals as the paragraph below says, then list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user. A target skipped at step 0 has **no verdict** — report it as `skipped (doc-only)`, never as `APPROVED`; an agent that was never spawned has approved nothing. **The same rule binds step 3b's gate**: a target with no security-map glob match has no security verdict, and reporting it as approved would claim a review that never ran. A `REUSE` verdict is not that case: an agent reviewed the same key in the run its line dates.
 
    **Record each `VERDICT: APPROVED` whose `NOTES:` is `none`**, from both fleets, unless it was reused, with the SHA its agent echoed first, the 64 characters its lookup printed after `KEY:` and, for the convention gate, the lookup's sections. A target whose lookup printed no `KEY:` is not recorded. Under `--dry-run` too: the verdict is a real one.
 
@@ -717,7 +717,7 @@ What the key covers: `REFERENCE.md` § *Step 2b — verdict reuse*.
 
 > **HARD RULE — the agents' worktrees must be gone before Step 3b of the close** (that is **Step 3b of the *skill*, `## Step 3b: Prepare Worktrees for Merge`** — not step 3b of *this* step, which spawns the second fleet). **The assertion below covers BOTH fleets** — it enumerates whatever exists rather than counting what was spawned, so it needs no adjustment for the security twin, and it must run after step 4 has collected from both. Worktree isolation is not free of side effects: on Claude Code it materializes a **real worktree and a real branch** in this repository's shared namespace (observed shape: a worktree under `.claude/worktrees/` on a branch named `worktree-agent-<id>`). The harness removes them when an agent finishes and left its checkout unchanged — but an agent that wrote a scratch file, or a run that was interrupted, leaks both.
 >
-> **It must be a delta, not an absolute cleanliness test — that is why step 2 above captures a baseline.** Nothing in this skill establishes that the primary worktree is clean when the agents run: Step 1b's `tracked-clean` reads tracked files once, before them, and Step 1a excludes it by construction (it skips the **primary checkout**, matched by path identity, as Step 6's `pr` re-sync note also states in its own words — until this phase both sites said *the worktree whose branch is `main`*, which is the same worktree only while the primary happens to be on `main`). A bare `git diff --quiet HEAD --` here would fire on any ordinary uncommitted work and SKIP a close that is fine — a false-FAIL on the dominant path, which is how a gate gets disabled by the first operator who hits it.
+> **It is a delta against step 2's baseline, not a cleanliness test**: ordinary uncommitted work in the primary checkout is not a leak. See `REFERENCE.md` § *Step 2b — provenance*.
 >
 > **Remove step 3's pinned checkouts FIRST — they are yours, and the assertion below is not
 > the place to discover them.** The orchestrator created one per agent and nothing else
@@ -746,7 +746,7 @@ What the key covers: `REFERENCE.md` § *Step 2b — verdict reuse*.
 > It runs the five in order, printing each one's clean line or what it found, and exits 1 when any is not clean.
 >
 
-**If any of the five printed anything but its clean line** (`no agent worktrees`, `no agent branches`, `primary tree unchanged by 2b`, `local config unchanged by 2b`, `no pinned checkouts`, each alone), what each one means is an arm. Run, from the main checkout's top level, with the close id `begin` printed:
+On exit 0, carry each `LOCKED:` and `PREDATES:` line after the five to Step 8's `Left by 2b:` row (under `--prepare`, to `<DIR>/close.md`). **Exit 2**: stop and show its output. **On exit 1**, what each line means is an arm. Run, from the main checkout's top level, with the close id `begin` printed:
 
 ```bash
 python3 sysop/scripts/close_arms.py exited "<close-id>" 2b-leak 1
@@ -1199,6 +1199,16 @@ For each approved feature branch (oldest first), merge it into the **merge targe
    - **Any `CLOSED TASK EDITED:` or `RE-ADDED:` line**, on a branch item 2 will merge — the merge target closed or removed a task body the branch edited, or closed one it adds, or holds it in the other of `open/` and `deferred/`. **Under `--headless`, STOP.** Otherwise show the person each `show:` diff. On a `moved it to` line, ask: merge it, and list it on Step 8's `Closed-task edits:`; or 4a-SKIP the branch. On a `deleted it` or `RE-ADDED:` line, 4a-SKIP it. A skipped branch's line returns at every close until a person merges it or reverts the edit on the branch.
    See `REFERENCE.md` § *Squash provenance: why each `pr` close records its PR head*.
 
+   **Then, for a branch item 2 will merge, ask whether it is still the commit Step 2 reviewed**, from the main checkout's top level, with the close id `begin` printed and the branch written out:
+   ```bash
+   python3 sysop/scripts/close_arms.py tip "<close-id>" "<branch>"
+   ```
+   `TIP:` then `ARM: none`: go on to item 2. **Exit 2**: stop and show its stderr.
+
+   **Load this arm when it printed `ARM: 4a-moved`**, once per close: a later branch's line follows the arm already loaded. Read `${CLAUDE_SKILL_DIR}/steps/4a-moved.md`, the `steps/` directory beside this `SKILL.md`, with your file tool and follow it in full. Where its first command says `<skill directory>`, write `${CLAUDE_SKILL_DIR}`.
+
+<!-- sysop:arm=4a-moved -->
+
 2. **Merge — rebase-then-ff when the branch is local-only, `--no-ff` when it is published.** **If either path below conflicts, go to item 4 before running anything else** — item 4 routes the conflict and nothing between here and there knows one happened. Stated at the command rather than only at item 4: in written order an operator meets the merge first, which is the shape an earlier round caught one step over, where the rule sat 81 lines past the command it governed.
    - **Local-only** (the common case: `/claim-task` branches are usually never pushed under `pr` policy) — rebase, then fast-forward, exactly as before:
      `git checkout <branch> && git rebase "<merge target>"`, then
@@ -1289,7 +1299,7 @@ It prints `ARM: 4a-fix` when the count is above 0, and `ARM: none` at 0, which i
 
    **An empty list here is not automatically a pass and not automatically a contradiction — the discriminator is how many branches are still approved after Step 3b, so read that count first.** Do not count a branch Step 4a item 1 recorded `merged — PR #<N>` or `merged — already in <ref>`: it merged nothing this run. Unlike at Step 3, an empty list at this point *can* mean something did not land; whether it does depends on whether anything was owed. **Take the count after Step 3b, not after Step 2a** — Step 2d can demote an approved branch to rejected and Step 3b can downgrade one to SKIP, which is the same stage Step 4-pre condition 1 insists on and for the same reason. A branch Step 4a aborted-and-skipped is **still approved**, and still stops.
 
-   - **One or more still approved after Step 3b**, including the Step 4-pre PR-reuse shape where the merge target *is* the one approved branch: **stop.** An empty list says the merge target holds nothing `origin/<default branch>` does not already have, while this close approved work that should be in it. Something did not land: a rebase left the branch a no-op, a `--ff-only` merge was skipped after a conflict, or `HEAD` is not the merge target you think it is. Report it and reconcile before Step 4b — do not let a gate that executed nothing report green over a close that merged nothing.
+   - **One or more still approved after Step 3b**, including the Step 4-pre PR-reuse shape where the merge target *is* the one approved branch: **stop.** An empty list says the merge target holds nothing `origin/<default branch>` does not already have, while this close approved work that should be in it. Something did not land: Step 4a skipped it (Step 8's 4a-SKIP item says why), a rebase left the branch a no-op, a `--ff-only` merge was skipped after a conflict, or `HEAD` is not the merge target you think it is. Report it and reconcile before Step 4b — do not let a gate that executed nothing report green over a close that merged nothing.
    - **Zero still approved after Step 3b** — the docs-consolidation cycle: **expected, and not a contradiction.** Step 4a's loop ran over an empty set, so nothing was owed. Continue to item 3, which still runs the consumer's declared `### Always` list. Record `changed-file list empty — zero approved branches` on Step 8's `Verification:` line beside whatever item 3 reports; **that note is not `ran nothing`**, which is reserved for a run that executed zero commands.
 
 3. **Run the list**, applying item 3's surface gate to *this* list. **Item 4's doc-only skip does not apply here.** It belongs to Step 3, which is allowed it because its green is not a verdict; this gate's green *is* the verdict, and "no file in the assembled diff carries a code extension" is not evidence that the consumer's declared list is unaffected — the same extension test calls build and lint configuration, dependency manifests, CI workflows and rule files documentation, and a full test suite can assert on prose. A consumer who wrote `### Always` wrote *always*, and `docs/getting-started.md` tells them a suite listed there runs "on the merged tree on every merge". So a doc-only assembled diff **still runs a consumer-declared list** (items 1–2). What it does not run is a command item 3's surface gate left unarmed — that gate still decides the auto-detected ones — or a `### Ratchet` snippet whose own filter comes back empty.
@@ -1852,6 +1862,9 @@ Superseded PRs: <branch #PR, …> (or "none") — published branches whose own P
                MERGED once Step 4d's push lands; list any Step 6 item 0 found still OPEN.
 Closed-task edits: <each `<branch>: <path>` a person chose to merge at Step 4a item 1, and each
                `Rule B: <path>` at Step 4d's push> (or "none")
+Left by 2b:    <each `LOCKED:`, `PREDATES:`, `FOREIGN:`, `KEPT:` and `DISCARDING:` line Step 2b printed> (or "none")
+Merged after review: <each branch a person chose to merge at Step 4a's `4a-moved` ask, with
+               `tip`'s line and the commits it listed> (or "none")
 Squash provenance: <`pr` only: "recorded PR #N" | "not recorded — <error>"; each branch
                Step 2a approved as landed (`<branch> — PR #N`); each branch Step 4a
                printed `SKIP` lines for, rebased with `--onto` or merged on the published
@@ -1977,7 +1990,7 @@ Held-back docs: <N> (or "none")
 Remaining:
   - <any SKIP'd branches — paused work; include file count + worktree path + recommendation,
      or, for step 0a's clone pre-check, the Step 1-pre line + its remedy>
-  - <any 4a-SKIP'd branches — approved but did NOT merge; name the conflicting file or `CLOSED TASK` line's path, and say
+  - <any 4a-SKIP'd branches — approved but did NOT merge; name the conflicting file, the `CLOSED TASK` line's path or `tip`'s line, and say
      the branch + lock are intact, its pending-doc was held back from consolidation, and its
      task was NOT flipped to done>
   - <any rejected branches with reasons>

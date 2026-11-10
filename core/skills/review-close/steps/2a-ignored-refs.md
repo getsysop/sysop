@@ -1,7 +1,7 @@
    - **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
       ```bash
-      python3 sysop/scripts/close_arms.py loaded "<close-id>" 2a-ignored-refs 728e4449b3e10d90 "<skill directory>"
+      python3 sysop/scripts/close_arms.py loaded "<close-id>" 2a-ignored-refs 1901369ed1e7560a "<skill directory>"
       ```
 
       It prints `LOADED: 2a-ignored-refs`. **Exit 2**: stop and show its stderr.
@@ -20,6 +20,12 @@
 
    ```bash
    python3 sysop/scripts/feature_branch.py keep-ignored "<workspace>" "<path>" "<commit or copy>"
+   ```
+
+   After each `commit` that exited 0, record the branch's new commit, with the close id `begin` printed. **Exit 0** or **exit 1** (`NOT RECORDED:`, which Step 4a's tip check then shows): go on. **Exit 2**: stop and show its stderr.
+
+   ```bash
+   python3 sysop/scripts/close_arms.py reviewed "<close-id>" "<branch>" --own-commit
    ```
 
    Looping over the paths? Name the loop variable `entry`, never `path`: in zsh `path` is tied to `$PATH`.
