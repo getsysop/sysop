@@ -7,6 +7,54 @@ a check that now runs. Each entry is dated by the snapshot's publication and nam
 private development phases it carries. The per-phase journal those phases were recorded in is the
 maintainer's working record and is not in the public tree.
 
+## 2026-11-13 — v0.2.8, private phases 487–490
+
+- **`v0.2.8`.** This snapshot is tagged `v0.2.8`, with a GitHub Release carrying this entry.
+  The next bullet is an instruction; the rest are what changed, each a fix to shipped behaviour.
+  `--ref` pins to it as it does to the earlier tags, once the tag is fetched into your clone.
+- **The plugin update carries every fix here; `install.sh --update` refreshes only a doc.** No
+  script under `sysop/scripts/` and nothing in the installer changed since `v0.2.7`, so a close on
+  the older scripts runs the new skill text in full (measured: `v0.2.7`'s `close_arms.py` accepts
+  the three changed `/review-close` step files' `loaded` lines). `install.sh --update` (or
+  `sysop/scripts/sysop-update.sh`) brings `sysop/docs/WORKFLOW.md`'s restatements of the first two
+  fixes in line with the skill.
+- **`/review-close` stops reading staging as verified when the merge never deployed.** Step 5
+  waited for the deploy build and checked a healthcheck URL, but nothing tied the two together: when
+  the merge's deploy build failed, the platform kept serving the previous revision, the healthcheck
+  answered 200, and a close could report staging verified for code that never shipped. Every item
+  is now keyed to the merge commit's full SHA (the SHA a `direct` close pushed, or the `pr` close's
+  squash). Step 5 lists the deploy builds for that SHA twice, the second time after the platform's
+  usual start delay, and waits for every one: a failed build, or none at all, makes staging
+  `broken` whatever the healthcheck says, and the smoke command and the healthcheck count only once
+  every build succeeded. Where the platform shows which revision each deployed service is serving,
+  a shown commit must be the merge commit or a later one containing it; without a commit, the image
+  digest must come from a build of one of those, or else the revision must be created after the
+  merge build started, which is marked `(by time)`. Step 8's `Staging:` row names the merge SHA and each service's revision (or `not
+  shown`), and a `skipped` or `broken` row gives its reason. The step is skipped when no build
+  appears and no deploy trigger covers the files the close brought in, which replaces the old
+  "docs/config only" rule: a config file under a trigger's path filter now gets verified. The skill
+  text arrives with the plugin update; `WORKFLOW.md`'s restatement of it arrives with
+  `install.sh --update`.
+- **`/review-close` no longer closes a published branch's own PR without a word.** Under the
+  `pr` policy, a branch that was already pushed with its own PR open reaches `main` through the
+  close's integration PR, and Step 6's remote branch delete then closes the branch's own PR as
+  unmerged. Step 4a told the runner to comment on that PR first, but gave no command for it, and the
+  integration PR the comment should point at did not exist until Step 4d. Step 6 now does it before
+  each remote delete. It lists the open PRs in this repository whose head is the branch (drafts
+  included), posts `Superseded by #<PR>: …` on each one that lacks it (the PR that carried the
+  branch's commits), and reads the PR again. If any of that fails or is denied, or the comment is
+  not there, the branch is kept and listed under Step 8's `Remaining:`. Step 8's `Superseded PRs:`
+  row lists each PR that carries the comment. The post uses the `gh api` rule and the body file's
+  `Edit` rule that every release tag seeds, so there is no new permission.
+  This is skill text and arrives with the plugin update.
+- **`/review-close` stops writing `[` and `]` into your changelog.** Step 4c's templates for the
+  `PROJECT_STATUS.md` §6 line, the rotation into `CHANGELOG.md` and the bugfix bullet marked the
+  task ids as optional with square brackets inside a literal template, and closes copied the
+  brackets: `- [TASK-ID: ]summary`. Each template now spells out both shapes, with ids
+  (`- <ID(s)>: <summary> (<original date>)`) and without (`- <summary> (<original date>)`).
+  Lines already written that way are left as they are. This is skill text and arrives with the
+  plugin update.
+
 ## 2026-11-12 — v0.2.7, private phases 482–486
 
 - **`v0.2.7`.** This snapshot is tagged `v0.2.7`, with a GitHub Release carrying this entry.

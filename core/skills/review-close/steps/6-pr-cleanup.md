@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" 6-pr-cleanup 1b51a95c58ab9470 "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" 6-pr-cleanup 221589119fee542f "<skill directory>"
 ```
 
 It prints `LOADED: 6-pr-cleanup`. **Exit 2**: stop and show its stderr.
@@ -12,7 +12,25 @@ It prints `LOADED: 6-pr-cleanup`. **Exit 2**: stop and show its stderr.
 >
 > **Key this on the 4a-SKIP verdict Step 4a recorded, and do NOT re-derive containment here.** Iterate the branches Step 4a actually merged; a 4a-SKIP'd branch is handled by its own block below and never reaches this list. An earlier draft of this step instead prescribed `git rev-list --count <branch> ^origin/<default branch>` as a containment re-check, and **that check can never return its pass value.** `rev-list ^origin/<default branch>` *is* an ancestry test, and the paragraph above says in its own words that a squash-merged branch is "**not** an ancestor of it" — so it scores non-zero for a correctly merged branch and non-zero for a 4a-SKIP'd one alike: zero discriminating power, a permanently inert cleanup, and every clean close reported as suspect. Verified against a real squash rather than reasoned: `git branch -d` refuses, `rev-list --count` returns non-zero, `merge-base --is-ancestor` is false, and `git cherry` prints `+` on each commit whose patch-id does not match the squash's. **After a squash there is no ancestry-shaped containment test** — that is exactly what makes safe `-d` "meaningless" here, so a check built from ancestry cannot be the fix. (Step 4c's sibling filter is sound because it runs *pre-squash* against `^HEAD`, where ff-merge preserves ancestry; the equivalence an earlier draft asserted between the two sites does not hold. That clause is load-bearing and narrow: it licenses the filter **only** where an ff-merge happened. A cherry-pick is not an ff-merge and breaks the filter the same way a squash would — see Step 4c step 1b, which now carries a `git cherry` fallback for it. This sentence was never wrong about that case; it was silent about it, which read as an exemption.)
 
+0. **Comment on each open PR whose head is a branch item 2 will delete, before item 2 runs.** For each branch item 2 will delete remotely, with its name written out:
+
+   ```bash
+   gh pr list --head "<branch>" --state open --json number,isCrossRepository --jq '.[] | select(.isCrossRepository == false) | .number'
+   ```
+
+   Nothing printed and exit 0: go on to item 1. A non-zero exit is the last arm below. For each number printed, run this with that number written out for `<N>` and, for `<PR>`, the PR that carried the branch's commits to `<default branch>`: `#<N>` for a branch Step 2a approved as landed by PR #<N> (Step 8's `Squash provenance:` row names it, under `--land` too), otherwise this close's merged PR (Step 4d's, or `PR:` under `--land`):
+
+   ```bash
+   gh pr view <N> --json state,comments --jq '"\(.state) \([.comments[].body | select(contains("Superseded by #<PR>:"))] | length)"'
+   ```
+
+   - **`OPEN 0` on the first read**: write `sysop/runtime/review-close-pr-body.md` fresh with your file tool (Read it first if it exists: the tool will not overwrite a file it has not read), reading `Superseded by #<PR>: <branch>'s commits reached <default branch> through #<PR>, a squash merge, so GitHub will not mark this PR merged. Deleting the branch closes this PR unmerged.` If the write fails or is denied, post nothing and take the last arm. Post it with `gh api "repos/{owner}/{repo}/issues/<N>/comments" -F body=@sysop/runtime/review-close-pr-body.md`, then run the `gh pr view` line again.
+   - **`OPEN` with a count of 1 or more**: the comment is on; go on.
+   - **`CLOSED` or `MERGED`**: this delete does not close it; go on.
+   - **Any command or write in this item that fails or is denied, or a count still `0` after the post**: run neither item 1 nor item 2 for that branch, and put `<branch>: #<N> not commented — <error>` (no `#<N>` when the lookup failed) on Step 8's `Remaining:` remote-branch row.
+
+   Put each `<branch> #<N>` whose count reads 1 or more on Step 8's `Superseded PRs:` row. A branch the last arm kept goes on `Remaining:` only.
 1. Delete the **local** branch: `git branch -D <branch>` (the safe `-d` check is meaningless against a squash — the branch's commits are in the merged PR).
 2. Delete the **remote** branch **only if it was pushed and still exists**: `git push origin --delete refs/heads/<branch>`. Feature branches created by `/claim-task` are usually local-only under `pr` policy (the integration branch is the only thing pushed), so skip this when the branch has no remote tracking ref. **Record every deletion that does not succeed, here, as it happens** — branch name and the error — and carry the list to Step 8's `Remaining:` remote-branch row. That row once had no producer at all, so it was answered from intent or left blank, and a branch left behind on the remote is exactly the thing nobody notices without a row naming it.
 
-**Under the PR-reuse shape both of the above are usually already done for you.** The reused branch *was* the PR's head, so `gh pr merge --delete-branch` deleted it remotely, and it deletes the local branch too once `gh` has switched HEAD off it. The exception is a reused branch a held doc names: Step 4d merged without `--delete-branch`, and the HARD RULE above keeps it, so delete neither copy. Verify rather than assume — `git branch --list <branch>` for the local one — and run only the deletions that are still outstanding. For the remote one, run the delete: against an already-deleted remote branch it fails with `remote ref does not exist`, which says it is done; that is cleanup noise, not an error worth halting on.
+**Under the PR-reuse shape items 1 and 2 are usually already done for you.** The reused branch *was* the PR's head, so `gh pr merge --delete-branch` deleted it remotely, and it deletes the local branch too once `gh` has switched HEAD off it. The exception is a reused branch a held doc names: Step 4d merged without `--delete-branch`, and the HARD RULE above keeps it, so delete neither copy. Verify rather than assume — `git branch --list <branch>` for the local one — and run only the deletions that are still outstanding. For the remote one, run the delete: against an already-deleted remote branch it fails with `remote ref does not exist`, which says it is done; that is cleanup noise, not an error worth halting on.

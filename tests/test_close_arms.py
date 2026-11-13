@@ -191,7 +191,34 @@ MARKER = re.compile(r"^<!-- sysop:arm=(\S+) -->[ \t]*$")
 #: (lenses B and A), exit 2 stops rather than voids (both), a void keeps its violations, only an
 #: agent that returned a verdict is checked, Step 8's re-check row names VOID, and the permission
 #: bullet names the check. The why is in `REFERENCE.md` § *Step 2b — provenance*.
-CORE_BUDGET_BYTES = 292_394
+#: Phase 487 (`Q-746`, Wade's rulings of 2026-11-13: build gate plus a serving-revision check
+#: where the platform shows one, `broken` with its reason) raised it to 293_838 (+1,444): Step 5
+#: names the merge commit and how to read it under each policy, keys item 1 to that SHA with its
+#: failed-or-absent arm (absence read only after the platform's usual listing delay), gates items
+#: 2 and 3 on it, adds item 3's revision check and the skip for a trigger the merge did not fire,
+#: and Step 8's `Staging:` row names the SHA and the revision. The why is in `REFERENCE.md`
+#: § *Step 5 — provenance*. Its round set it to 294_193 (+355): item 1 derives its builds from the
+#: triggers the merge's files fire and lists again before reading absence (both lenses), item 3
+#: checks each service those builds deployed, a shown commit or image deciding over creation time
+#: and a time read marked `(by time)` (lens A), the SHA is written in full (lens B), and the broken
+#: example names the build observed to fail. Before its second round, 294_333 (+140): item 1's files
+#: are the push's, the whole pushed range under `direct`, not the merge commit's own diff. Its second
+#: round disqualified that shape (no base for the range under `direct`), and Wade ruled the
+#: list-by-SHA shape (2026-11-13): 294_301 (-32): item 1 lists the merge commit's builds twice,
+#: item 3 accepts a commit that contains the merge and reads any failed revision read as broken,
+#: the row lists each service, and the skip needs an empty second listing. Its third round set it to
+#: 294_426 (+125): the digest and time reads state their pass conditions, the digest accepts a later
+#: build containing the merge, and the skip names the files Step 2 reviewed.
+#: Phase 488 (`Q-750`) raised it to 294_455 (+29): Step 8's `Superseded PRs:` row names Step 6
+#: item 0's comment, and its `Remaining:` remote-branch slot takes a branch item 0 withheld. Its
+#: round set it to 294_506 (+51): the `gh api` rule's line names Step 6 item 0's comment (both
+#: lenses: the rule's stated uses omitted it), and the `Remaining:` clause was reworded (lens B).
+#: Phase 489 (`Q-751`) raised it to 294_673 (+167): Step 4c's §6, rotation and bugfix templates spell
+#: out the with-ids and no-ids shapes in place of square-bracket optional segments.
+#: Its round set it to 294_772 (+99): the MOVE rule's restatement of the §6 shape lost its brackets,
+#: and the changelog contract quotes the no-ids bugfix shape too.
+#: Its second round: 294_782 (+10), the contract's "the first carrying".
+CORE_BUDGET_BYTES = 294_782
 
 GIT_ENV = {k: v for k, v in os.environ.items()
            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
@@ -1232,7 +1259,9 @@ def test_the_close_runs_each_receipt_command():
         "  **Then check for commits made after Step 4d's push**", "> **Lock-as-real-time-signal",
         "**HARD RULE — do not delete a branch whose pending-doc",
         'close_arms.py loaded "<close-id>" 6-direct ', "**Why this order matters (BeanRider ISSUE-0021).**",
-        'close_arms.py loaded "<close-id>" 6-pr-cleanup ', "**Under the PR-reuse shape both of the above",
+        'close_arms.py loaded "<close-id>" 6-pr-cleanup ',
+            # Phase 488 (`Q-750`): item 0 comments on an open PR before item 2's delete closes it.
+            "0. **Comment on each open PR whose head is a branch item 2 will delete", "**Under the PR-reuse shape items 1 and 2",
         "For each **SKIP'd** branch", "## Step 7: Friction Capture",
         "## Step 8: Report", 'close_arms.py check "<close-id>"')]
     assert order == sorted(order), "the receipt commands are out of step order"

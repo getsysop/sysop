@@ -30,7 +30,7 @@ def test_the_superseded_row_states_the_end_state_by_policy() -> None:
     assert "Under `pr`" in row and "Under `direct`" in row, row
     assert "MERGED" in row and "closed as unmerged" in row, row
     assert "a human does" not in row, "the Q-335 falsehood is back"
-    assert "item 3" in row and "item 4" not in row, "the citation must read item 3"
+    assert "Step 6 item 0's comment" in row and "item 3" not in row, "the comment is posted at Step 6 item 0, where the integration PR exists (Q-750)"
     assert "Step 4d's push" in row and "Step 6 item 0" in row, "the row must name the push that lands main and the check that reads the state"
 
 

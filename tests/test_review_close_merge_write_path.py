@@ -420,7 +420,7 @@ def test_the_superseded_pr_end_state_is_stated_accurately(flat: str):
     honest end state is a closed-not-merged PR for work that shipped, which is worse than
     an open one and is why the comment has to go on before Step 6 runs."""
     assert "closes that PR as unmerged" in flat
-    assert "comment on that PR" in flat
+    assert "comments on that PR before it deletes the branch" in flat
     # Scoped to Step 8. A whole-file search passes on the Step 4a prose that merely
     # MENTIONS the row, which is how battery D11 walked through: renaming it to
     # `Superseded PRs (optional):` left the mention intact. Same shape as D16.
