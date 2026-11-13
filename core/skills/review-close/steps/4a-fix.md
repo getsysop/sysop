@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" 4a-fix a3d25daf886b0c27 "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" 4a-fix 6b4a921543ba1abe "<skill directory>"
 ```
 
 It prints `LOADED: 4a-fix`. **Exit 2**: stop and show its stderr.
@@ -58,9 +58,9 @@ It prints `LOADED: 4a-fix`. **Exit 2**: stop and show its stderr.
      - a `## Notes being fixed` block after `## Diff`, listing verbatim each note the commit claims to fix.
      - the `NOTES:` block and its paragraph are removed. The re-check raises no notes, so fixing at close is one pass.
 
-   `## Project conventions` is what Step 2b sent: the same paste, or the same `sysop/runtime/2b-conventions.md`. Spawn no security twin. Record the worktree its result names, as Step 2b step 4 does (`python3 sysop/scripts/review_pins.py own "<path>"`). After the verdict, apply Step 2b's HARD RULE: `python3 sysop/scripts/review_pins.py clean`, then `python3 sysop/scripts/review_pins.py check`.
+   `## Project conventions` is what Step 2b sent: the same paste, or the same `sysop/runtime/2b-conventions.md`, whose `READ:` line you check with `review_pins.py receipt` as Step 2b step 4 does; item 5 says what its exit decides here. Spawn no security twin. Record the worktree its result names, as Step 2b step 4 does (`python3 sysop/scripts/review_pins.py own "<path>"`). After the verdict, apply Step 2b's HARD RULE: `python3 sysop/scripts/review_pins.py clean`, then `python3 sysop/scripts/review_pins.py check`.
 
-5. **Act on the verdict.** `APPROVED` keeps the commit. `BLOCKED`, a mismatched echo, or no verdict at all drops the whole commit, and every note it carried goes to item 6. Check first, in its own call:
+5. **Act on the verdict.** `APPROVED` keeps the commit. `BLOCKED`, a mismatched echo, a void or unchecked receipt (its exit 1 or 2), or no verdict at all drops the whole commit, and every note it carried goes to item 6. Check first, in its own call:
 
    ```bash
    git rev-parse HEAD

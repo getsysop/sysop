@@ -92,13 +92,13 @@ if _SUBCOMMAND == 'landed':
     else:
         containers = [f"refs/heads/{default}"]
         via, past = f"in {default}", f"past {default}"
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import _ignored_link
+
     def noise(where, entry):
-        """An untracked symlink whose target this repository ignores, as Step 1-pre reads it."""
-        p = os.path.join(where, entry)
-        if not os.path.islink(p):
-            return False
-        target = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
-        return git("check-ignore", "-q", target)[0] == 0
+        """An untracked symlink whose target is ignored, as Step 1a and 1-pre read it
+        (`_ignored_link.py`): inside the workspace by its own rules, else by this repository's."""
+        return _ignored_link.ignored_link(where, entry, ".")
     tips = []
     for lk in sorted(Path("sysop/runtime/locks").glob("*.lock")):
         if not lk.is_file():

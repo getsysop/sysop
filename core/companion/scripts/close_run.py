@@ -117,10 +117,12 @@ abandoned. The second reader is read from CLAUDE.md `## Second reader`.
         Half B. Prints the record (`PR:`, `BRANCH:`, `SHAPE:`, `HEAD:`, `PUSHED FROM:`,
         `KEEP BRANCH:`, `REPORT:`), the reviewer's reading (`READER:` lines) and a
         `VERDICT:`. Exit 0: MERGE, or ALREADY MERGED. Exit 4: PARK. Exit 5: WAIT.
+        A park that is a timeout, on a hand-off with no `PARKED` record, also prints
+        a `RE-REQUEST:` line naming the `re-request` below.
 
     re-request <run-id> <default-branch>
-        After a park is fixed on the branch and pushed: records the branch's new
-        head and posts the request again, checking the PR as `hand-off` does (the
+        After a park is fixed on the branch and pushed, or after a timeout with
+        nothing to fix: records the branch's head and posts the request again, checking the PR as `hand-off` does (the
         same wait for a push). For a hand-off whose request failed or was cut off,
         on the head it was made for, an identical comment posted since the hand-off
         opened is taken as that request instead of posting a second
@@ -816,6 +818,8 @@ def section_pairs(root: Path, title: str, keys: tuple, repeatable: tuple = (),
     lines, found, inside, fence = [], False, False, None
     for line in text.lstrip(BOM).splitlines():
         m = re.match(r"[ ]{0,3}(`{3,}|~{3,})", line)
+        if m and m.group(1)[0] == "`" and "`" in line[m.end():]:
+            m = None  # a backtick in a backtick run's info string: inline code, not a fence
         if m:
             if fence is None:
                 fence = m.group(1)
@@ -957,7 +961,7 @@ def open_handoff(root: Path, run_id: str, default: str = "") -> tuple[Path, dict
             or not isinstance(rec.get("kept_locks"), list) \
             or not all(isinstance(t, str) and TASK_ID.fullmatch(t) for t in rec["kept_locks"]):
         raise Refuse(f"hand-off {run_id}: handoff.json is not a hand-off record")
-    if rec["format"] not in READER_FORMATS or (rec["format"] == "codex" and not str(rec.get("blocking", "")).split()):
+    if rec["format"] not in READER_FORMATS or (rec["format"] == "codex" and not (isinstance(rec.get("blocking"), str) and rec["blocking"].split())):
         raise Refuse(f"hand-off {run_id}: handoff.json names no usable reader format or blocking list")
     if default and rec["default_branch"] != default:
         raise Refuse(f"hand-off {run_id} targets {rec['default_branch']!r}, and the default "
@@ -1207,28 +1211,19 @@ def reader_verdict(rec: dict, reviews: list, review_comments: list, comments: li
                  default=None)
     summaries = [str(newest.get("body", ""))] if newest else []
     rows = _codex_summary_rows(summaries[0]) if summaries else []
-    if rec["format"] == "codex" and summaries and not rows:
-        return "park", [f"cannot read {who}'s review summary: no row names a status and a commit"]
-    if rec["format"] == "codex" and any(st == "running" for st, _ in rows):
-        return waiting("a Codex review is running")
-
-    if rec["format"] == "approval":
-        if not on_head:
-            return waiting(f"no review by {who} on {head[:10]}")
-        last = max(on_head, key=lambda r: parse_time(r.get("submitted_at")) or asked)
-        state = last.get("state")
-        if state == "APPROVED":
-            return "merge", [f"{who} approved {head[:10]}"]
-        if state == "CHANGES_REQUESTED":
-            return "park", [f"{who} requested changes on {head[:10]}"]
-        return waiting(f"{who}'s latest review on {head[:10]} is {state}, not APPROVED")
-
-    blocking = set(rec.get("blocking", "").split())
-    if on_head:
+    # The head's own reviews are read before the summary is acted on. A blocking finding, a
+    # CHANGES_REQUESTED review or a finding with no badge on the head can never merge at that
+    # head, whatever a later review adds, so no summary row outranks it (`final`): read after
+    # the running-row wait, a P1 on the head read `wait` and then `timed out: a Codex review is
+    # running`, and was never named. Every other result waits on a running row, because that
+    # review may yet add a finding: a head that would merge, and a head review with no inline
+    # finding, which a later review of the same head turns into a merge. That last one is
+    # listed with the wait, so a timeout does not read as nothing to look at.
+    head_read, final = None, False
+    if rec["format"] == "codex" and on_head:
+        blocking = set(rec.get("blocking", "").split())
         ids = {r.get("id") for r in on_head}
         found = [c for c in review_comments if mine(c) and c.get("pull_request_review_id") in ids]
-        if not found:
-            return "park", [f"{who} reviewed {head[:10]} but left no inline finding to read"]
         block, note, unread = [], [], []
         for c in found:
             body = str(c.get("body", ""))
@@ -1241,11 +1236,42 @@ def reader_verdict(rec: dict, reviews: list, review_comments: list, comments: li
                 block.append(f"{m.group(1)} {where} — {title}")
             else:
                 note.append(f"{m.group(1)} {where} — {title}")
-        if unread:
-            return "park", ["cannot read a finding: " + u for u in unread] + block + note
-        if block or any(r.get("state") == "CHANGES_REQUESTED" for r in on_head):
-            return "park", block + [f"(non-blocking) {n}" for n in note]
-        return "merge", [f"(non-blocking) {n}" for n in note] or [f"{who} reviewed {head[:10]}"]
+        changes = [f"{who} requested changes on {head[:10]}"] \
+            if any(r.get("state") == "CHANGES_REQUESTED" for r in on_head) else []
+        if not found:
+            head_read = "park", changes or [f"{who} reviewed {head[:10]} but left no inline finding to read"]
+        elif unread:
+            head_read = "park", ["cannot read a finding: " + u for u in unread] + block + note + changes
+        elif block or changes:
+            head_read = "park", block + [f"(non-blocking) {n}" for n in note] + changes
+        else:
+            head_read = "merge", [f"(non-blocking) {n}" for n in note] or [f"{who} reviewed {head[:10]}"]
+        final = bool(unread or block or changes)
+    bare = [] if head_read is None or final or head_read[0] == "merge" else head_read[1]
+
+    if rec["format"] == "codex" and summaries and not rows:
+        return "park", [f"cannot read {who}'s review summary: no row names a status and a commit"] \
+            + (head_read[1] if final else [])
+    if rec["format"] == "codex" and any(st == "running" for st, _ in rows):
+        if final:
+            return "park", head_read[1] + [f"a Codex review is also running; it cannot change what "
+                                           f"{who}'s review of {head[:10]} already says"]
+        verdict, lines = waiting("a Codex review is running")
+        return verdict, lines + bare
+
+    if rec["format"] == "approval":
+        if not on_head:
+            return waiting(f"no review by {who} on {head[:10]}")
+        last = max(on_head, key=lambda r: parse_time(r.get("submitted_at")) or asked)
+        state = last.get("state")
+        if state == "APPROVED":
+            return "merge", [f"{who} approved {head[:10]}"]
+        if state == "CHANGES_REQUESTED":
+            return "park", [f"{who} requested changes on {head[:10]}"]
+        return waiting(f"{who}'s latest review on {head[:10]} is {state}, not APPROVED")
+
+    if head_read:
+        return head_read
 
     if any(mine(c) and USAGE_LIMIT in str(c.get("body", "")) and after(c, "created_at")
            for c in comments):
@@ -1316,6 +1342,10 @@ def cmd_land_check(root: Path, run_id: str, default: str) -> int:
         utcnow())
     for line in lines:
         print(f"READER: {line}")
+    if verdict == "park" and lines and lines[0].startswith("timed out: ") and not parked:
+        print(f"RE-REQUEST: the reviewer gave no verdict the reader can use in time; with nothing to fix, "
+              f"`python3 sysop/scripts/close_run.py re-request {run_id} {default}` posts the request "
+              "again for the same head and restarts the timeout")
     print(f"VERDICT: {verdict.upper()}")
     return {"merge": 0, "park": 4, "wait": 5}[verdict]
 

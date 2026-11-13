@@ -14,6 +14,8 @@ until Phase 386 (`Q-409` P3), moved verbatim.
 """
 import os, subprocess, sys
 from pathlib import Path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _ignored_link  # noqa: E402
 default, mode = sys.argv[1], sys.argv[2]
 if not default.strip() or default.startswith("<") or mode not in ("apply", "dry-run"):
     print("ERROR: substitute the default branch, and apply or dry-run"); sys.exit(3)
@@ -125,12 +127,9 @@ def holders(ws, b, theirs):
     return out
 
 def noise(where, entry):
-    """An untracked symlink whose target this repository ignores."""
-    p = os.path.join(where, entry)
-    if not os.path.islink(p):
-        return False
-    target = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
-    return git("check-ignore", "-q", target)[0] == 0
+    """An untracked symlink whose target is ignored: a target inside the clone by the clone's
+    own rules, any other by this repository's (`_ignored_link.py`, Step 1a's rule)."""
+    return _ignored_link.ignored_link(where, entry, ".")
 
 def entries(where):
     """`git status --porcelain -z` in <where>: (exit, one `XY <path>` per entry, stderr). Read

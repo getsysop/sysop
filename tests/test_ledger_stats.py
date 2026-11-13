@@ -228,14 +228,32 @@ def test_the_registers_population_line_is_derived():
     )
 
 
+SHIPPED_EVERY_TIME = (
+    "every time an author's battery reported every mutation killed and an independent "
+    "reviewer's battery then ran, the independent one found survivors"
+)
+
+
 def test_the_claim_that_none_survived_is_still_true():
     """The register states flatly that no author battery survived an independent
     one. That is the strongest sentence in the file and the first that would go
-    stale — a single intact row falsifies it."""
+    stale — a single intact row falsifies it.
+
+    The shipped author-side pass (`core/skills/_shared/adversarial-review.md` rule 1)
+    states the same claim to consumers, with no count, so this guard is what keeps it
+    true (`Q-496`, Phase 484: its earlier "33 to 99 survivors" quoted five phases'
+    counts, and later batteries found 4 to 19)."""
+    rule = _flat((REPO_ROOT / "core/skills/_shared/adversarial-review.md")
+                 .read_text(encoding="utf-8"))
+    assert SHIPPED_EVERY_TIME in rule, (
+        "the shipped author-pass sentence this guard keeps true has moved or changed; "
+        "re-point SHIPPED_EVERY_TIME, or drop it if the rule no longer claims 'every time'"
+    )
     a = _mod().all_killed_audit()
     assert a["intact"] == 0, (
         f"these all-killed batteries were NOT falsified: {a['intact_phases']} — "
-        f"the register's 'Not one survived' must be corrected, not left standing"
+        f"the register's 'Not one survived' and the shipped author-pass rule's "
+        f"'every time … found survivors' must be corrected, not left standing"
     )
     assert a["claims"] == a["falsified"] + a["unknown"] + a["intact"]
 
@@ -324,3 +342,49 @@ def test_the_falsification_detector_reads_the_phrasings_the_ledger_uses():
     # And it must not fire on a row that genuinely records no independent battery.
     for clean in ("unrecorded", "not run", "n/a — a publication cut defines no mutation battery"):
         assert not m._FOUND.search(clean), f"detector false-fires on {clean!r}"
+
+
+# Phase 484's round (lens B): `_FOUND`'s bare "surviv" and "N of M killed" also matched cells that
+# report NOTHING found, so an intact independent zero scored falsified and the guard above could
+# never fire. These are the phrasings that round fed it.
+ZERO_FOUND_CELLS = [
+    "14 mutations, 0 survived",
+    "0 survivors, 20/20 killed",
+    "no survivors (20 killed)",
+    "20 of 20 killed",
+    "none survived",
+    # Round 2 (lens C): the gap words, `zero`, and the phrasings the first pattern missed.
+    "0 mutations survived",
+    "zero survived",
+    "none of the 12 survived",
+    "0 / 12 survived",
+    "zero of 14 mutants survived",
+    "0 of the 12 mutations survived",
+    "survivors: 0",
+    "nothing survived",
+    "0 bypasses",
+]
+
+
+def test_a_cell_that_found_nothing_does_not_read_as_falsified():
+    m = _mod()
+    wrong = [c for c in ZERO_FOUND_CELLS if m._found(c)]
+    assert not wrong, f"cells reporting zero survivors read as falsified: {wrong}"
+    still = ["40 killed, 0 survived, 3 bypasses found", "0 survivors here; 2 of 9 killed elsewhere"]
+    assert all(m._found(c) for c in still), "a zero phrase hid another survivor signal in its cell"
+
+
+@pytest.mark.parametrize("cell", ZERO_FOUND_CELLS)
+def test_an_intact_author_zero_is_counted_intact(cell):
+    """End to end: one real ledger row, its author cell an all-killed claim and its independent
+    cell a zero. `all_killed_audit` must report it intact, which is what turns
+    `test_the_claim_that_none_survived_is_still_true` red when a real one is written."""
+    m = _mod()
+    line = next(ln for ln in _ledger_md().splitlines()
+                if ln.strip().startswith("|") and len(m._split(ln)) == m._ROW_WIDTH
+                and re.fullmatch(r"\d+", m._split(ln)[m.PHASE]))
+    cells = m._split(line)
+    cells[m.AUTHOR], cells[m.INDEPENDENT] = "9/9 killed", cell
+    synthetic = "| " + " | ".join(cells[1:-1]) + " |"
+    a = m.all_killed_audit(synthetic)
+    assert (a["claims"], a["intact"]) == (1, 1), (cell, a)

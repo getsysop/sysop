@@ -415,7 +415,11 @@ def parse_review_tasks(path=None):
 # that matters. The close pattern requires nothing but whitespace after the
 # run (CommonMark), so a nested ```` ```python ```` opener does not close the
 # block it is inside.
-_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")
+# A backtick run with another backtick later on its line is an inline code
+# span, not an opener: a backtick fence's info string may not hold a backtick
+# (CommonMark), a tilde fence's may. The lookahead holds at every run length,
+# so a run of four cannot match as three by giving one backtick back.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}(?!.*`)|~{3,})")
 _FENCE_CLOSE_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})[ \t]*$")
 
 
@@ -469,7 +473,7 @@ def _unterminated_fence(lines):
     new detector would have re-opened the same gap a third time.
 
     Both halves of the close rule are data-reachable and are guarded in
-    ``tests/test_fence_close_predicate.py``: a 4-backtick opener is NOT closed
+    ``tests/test_batch_parser_invariants.py``: a 4-backtick opener is NOT closed
     by 3 backticks (length), and a ``~~~`` opener is NOT closed by ``` (char).
     """
     start = -1
@@ -713,7 +717,7 @@ def duplicate_batch_numbers(lines):
 # Widening the boundary twin to every near-miss shape was the other option and
 # it is the wrong lever, for the reason `near_miss_batch_headers` states below:
 # promoting `## Batch 4` to a boundary MOVES where the previous batch ends on
-# consumer trackers nobody can migrate. `archive_review_tasks.py:595` is the
+# consumer trackers nobody can migrate. `archive_review_tasks.py:599` is the
 # evidence that the twin does not move alone — a literal `startswith("### ")`
 # let `###\tBatch 8` slip past the arm that CLOSES an open batch, so the counter
 # below was never reached, `all_merged` held True for a round with an OPEN

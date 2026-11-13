@@ -1319,6 +1319,16 @@ def test_four_space_indent_is_a_code_block_not_a_fence():
     assert pse._fenced_blocks("    ```\nx\n    ```\n") == []
 
 
+def test_a_backtick_in_a_backtick_info_string_is_not_a_fence():
+    """CommonMark: the line is an inline code span, so the bare closer after it
+    opens a fence nobody closes rather than closing a phantom one."""
+    assert pse._fenced_blocks("```a`b``` is inline\nprose\n```\n") == []
+
+
+def test_a_backtick_in_a_tilde_info_string_is_a_fence():
+    assert pse._fenced_blocks("~~~a`b\nbody\n~~~\n") == ["body"]
+
+
 def test_adjacent_blocks_stay_separate():
     """The reason this returns bodies rather than a boolean mask."""
     assert pse._fenced_blocks("```\na\n```\n```\nb\n```\n") == ["a", "b"]
@@ -1332,7 +1342,7 @@ def test_review_report_reads_through_the_same_scanner():
 
 # The one shipped script allowed to keep a fence-pair regex, and the reason it
 # is load-bearing rather than decorative: emptying this set reddens the check on
-# `sitrep_survey.py:865`, which the round confirmed.
+# `sitrep_survey.py:1993`, which the round confirmed.
 _NAIVE_FENCE_EXEMPT = {"sitrep_survey.py"}
 
 
@@ -1444,7 +1454,7 @@ def test_the_naive_fence_check_can_actually_see_these(shape):
 
 
 @pytest.mark.parametrize("shape", [
-    '_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")',
+    '_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}(?!.*`)|~{3,})")',
     'x = "a ``` fence in prose, with no lazy group"',
     'y = re.compile(r"^\\s*(```|~~~)")',
 ])

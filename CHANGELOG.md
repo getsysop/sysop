@@ -7,6 +7,125 @@ a check that now runs. Each entry is dated by the snapshot's publication and nam
 private development phases it carries. The per-phase journal those phases were recorded in is the
 maintainer's working record and is not in the public tree.
 
+## 2026-11-12 — v0.2.7, private phases 482–486
+
+- **`v0.2.7`.** This snapshot is tagged `v0.2.7`, with a GitHub Release carrying this entry.
+  The next bullet is an instruction; the rest are what changed, each a fix to shipped behaviour.
+  `--ref` pins to it as it does to the earlier tags, once the tag is fetched into your clone.
+- **Run `install.sh --update` when the plugin updates to this snapshot, and do not wait for a
+  close to tell you.** Most of the fixes below are in scripts under `sysop/scripts/`; the plugin
+  delivers the skills, and only the bash installer's `--update` (or
+  `sysop/scripts/sysop-update.sh`) delivers the rest. Unlike the last two snapshots, nothing stops
+  `/review-close` at `begin`: `v0.2.6`'s `close_arms.py` accepts this snapshot's `begin` line
+  (measured, exit 0), so a close runs on the older scripts without saying so. Until you update,
+  its merge-policy reader is the old one, and a declared `pr` that a code-fence line hides still
+  reads `direct`, which pushes the default branch (measured: with a ```` ```a`b``` ```` line above
+  the section, `v0.2.6`'s `close_arms.py read-policy` printed `direct` and this snapshot's `pr`).
+  The one stop is Step 2b's receipt check, which an older `review_pins.py` cannot run: a close
+  whose conventions copy is above 10,000 characters stops there with `STOP: usage:` after both
+  reviewer fleets have run, naming the update; a smaller copy is pasted and takes no receipt.
+  `/sitrep`, `/claim-task` and `/auto-build` keep running on the older scripts, without the script
+  half of their fixes. The update delivers the new `_ignored_link.py` beside the four scripts that
+  import it (measured: an `install.sh --update` from `v0.2.6` to this snapshot). If you patched a
+  script under `sysop/scripts/` yourself, `v0.2.6`'s last bullet says what the update does with
+  your copy.
+- **`/review-close` checks that a convention reviewer read the whole conventions copy.** Above
+  10,000 characters, Step 2b writes the conventions once to `sysop/runtime/2b-conventions.md` and
+  hands each reviewer the path (the security reviewer gets its map copy the same way). A copy can
+  outgrow one file read, and a reviewer that read 30 lines of it, or only a read that failed for
+  size, could still return `APPROVED`. The reviewer is now told to read the copy in pages and to
+  give `READ: <N> lines, last: <the copy's last non-blank line>` with its verdict; the new
+  `review_pins.py receipt` compares that line with the copy before anything is recorded. A missing
+  or wrong receipt makes the verdict void: nothing is recorded for reuse, the close reports
+  `VOID: <target> — …` with any violations the reviewer listed, and stops as a `BLOCKED` verdict
+  does (under `--prepare`, it stops just that branch). A pasted copy, at or below 10,000 characters, needs no
+  receipt. The fix-at-close re-check takes the same receipt, and a void one drops the fix commit.
+  **The check lives in a script, so run `install.sh --update` with the plugin update:** with an
+  older `review_pins.py`, the call prints `STOP: usage: …` and exits 2 (measured with `v0.2.6`'s
+  script), and Step 2b stops there after both reviewer fleets have run, naming the update.
+- **`/review-close --land` names a blocking finding even while a Codex review is running.** With
+  `format: codex`, the reader acted on the summary comment before it read the reviews of the
+  recorded head. A `P1` on that head beside a `Running` row read `VERDICT: WAIT`, then parked as
+  `timed out: a Codex review is running`, and the finding was never listed. A blocking badge, a
+  `CHANGES_REQUESTED` review or a finding with no badge on the head now parks at once and is
+  listed, followed by a line saying a review is also running; under a summary the reader cannot
+  parse, the same lines follow that park's own. A `CHANGES_REQUESTED` review is named in the
+  lines. The gate app's `sysop/close-gate` check fails on such a head where it stayed pending,
+  so an unattended land parks without waiting out the timeout. Every other head still waits on a
+  `Running` row, and any `Running` row still holds the head; a head review with no inline
+  finding is listed with that wait.
+- **After a timeout, an attended `--land` prints the way on.** `land-check` prints a
+  `RE-REQUEST:` line naming `python3 sysop/scripts/close_run.py re-request <run-id> <default
+  branch>`, which posts the request again for the same head and restarts the timeout (none when
+  the hand-off already holds a park record); the land's instructions and
+  `WORKFLOW.md` say so. `re-request` itself is unchanged. Both bullets are in `close_run.py`, so
+  they arrive with `install.sh --update`; with an older script the new instructions find no
+  `RE-REQUEST:` line and change nothing. A hand-off record whose `blocking` list is not a string
+  is refused.
+- **A line like ```` ```a`b``` ```` no longer opens a fence for `/claim-task`'s `## Test
+  decision` check.** CommonMark does not treat a backtick run followed by another backtick on the
+  same line as a fence, but Step 8's reader, `/auto-build`'s copy of it, Step 8b's `questions.md`
+  parser and `claim_record.py` did. The real section after such a line was hidden, so a compliant
+  body read `MISSING` (the task `FAILED` under `/auto-build`), and replacing the section in place,
+  as Step 8 says to, could not clear it. A tilde fence may still carry a backtick. The readers are
+  skill text and arrive with the plugin update; the writer is `claim_record.py`, so run
+  `install.sh --update` too: with the older script, a repair appends a second section below the
+  hidden one, and the new reader grades that first, stale section.
+- **`/review-close` no longer reads a declared `pr` merge policy as `direct` because of a code
+  fence.** Its `CLAUDE.md` reader flipped a fence on and off at any line starting with ```` ``` ````
+  or `~~~`, so a ```` ``` ```` inside a `~~~` block, a shorter run inside a longer fence, or an
+  inline-code line such as ```` ```a`b``` ```` above the section hid a declared `pr` and read
+  `direct`, which pushes the default branch. It now answers only when the file is unambiguous: it
+  reads every `## Merge policy` line once with code fences taken into account and once ignoring
+  them, and answers when the readings agree (or when a fence that never closes leaves the first one
+  undecided). When they disagree, `/review-close` stops at `begin` (exit 2) and `close_batch.sh`
+  asks for `--merge-target`, naming each line: a fenced `## Merge policy` is an example, not the
+  setting, so keep one section outside any code block. **This can stop a close that ran before:**
+  a quoted `pr` template with no real section, or one beside a real `direct` section, now refuses;
+  so does a fenced `direct` example above or below a real `pr` section, and so does a comment in a
+  code block that starts with `# Merge policy` (reword it). A file whose only line starting with
+  `#` and the words `Merge policy` is one section outside every code block reads as it did. The same opener rule reaches `close_run.py`'s
+  reader of the `## Second reader` and `## Unattended close class` sections, which refused a
+  present section as missing. Both are scripts: with an older `close_arms.py` the old reader runs,
+  so run `install.sh --update`.
+- **The same inline-code line no longer opens a fence in six more readers.** The four identical
+  copies of `review_tasks.md`'s batch parser (`/review-close`'s batch close, `/sitrep`,
+  `/next-task` and the archive step) read the headings after such a line as fenced; the sub-agent envelope parser saw a phantom
+  block and could lose a real envelope after it; `/security-audit`'s partition hid the map's
+  sections after it, and its fence check, a plain toggle, now also requires the closer's
+  character, length and indent. These are scripts: they arrive with `install.sh --update`.
+- **`/document-work` finds a branch's `Doc-Work:` trailer on any of its commits, not the tip
+  alone.** With nothing left to commit, Step 2 read the newest commit only. A commit made after the
+  close-out commit, such as the one `/review-close` Step 2a makes for an ignored file the branch
+  reads, then hid the trailer, and a re-run after Step 3b's stale-doc stop amended that commit or
+  added a second, empty trailer commit. Step 2 now runs a short `python3` probe over the commits
+  the branch adds to the default branch (the set `/sitrep` reads) and prints `CARRIED:`,
+  `NOT CARRIED:` or `NO COMMITS:`. On `NO COMMITS:` it stops, and under `--non-interactive` the
+  run fails, where it used to amend the default branch's tip. The probe is skill text, so the
+  plugin update alone delivers it.
+- **`/document-work` says where a condition that must hold before the merge goes.** Authors put
+  one in the pending doc's `hold:`, which nothing reads until the merge is done. Step 3 now says
+  to write it under a `## Before merge` heading or set `manual_smoke: true`, either of which makes
+  `/review-close` Step 3c ask before merging.
+- **The author-side pass no longer quotes a stale survivor range.** Its evidence that an author's
+  all-killed battery means little said an independent battery then found "33 to 99 survivors";
+  that was five early phases' counts. It now states the claim without a count: every time an
+  independent battery ran after an author's all-killed one, it found survivors.
+- **`/review-close` and `/sitrep` read a worktree's link to its own file as work.** An untracked
+  symlink whose target is gitignored is tooling (a `.venv` link), not a pending change, and the
+  main checkout answered that question for every worktree. It ignores `.claude/worktrees/` whole,
+  so in a worktree there a link to the worktree's own tracked or new file read as tooling: Step 1a
+  could classify the worktree merged, `/sitrep` read it clean, and Step 3b's link removal kept the
+  link as work. A target inside the worktree, or inside a `--clone` claim's clone, is now asked of
+  that workspace, and any other target of the main checkout; the five readers share one rule. A
+  link to anything the workspace itself ignores (its own `.venv/` or `build/`) now reads as
+  tooling, where a worktree outside the main checkout or a clone read it as a pending change, and
+  Step 3b removes the link, never its target, before the unforced `git worktree remove`. A target
+  is judged where it resolves, so in any workspace, the main checkout included, a link chained
+  through another link into an ignored directory now reads as tooling too, where it read as a
+  pending change. These are scripts, with a new
+  `_ignored_link.py` beside them: they arrive with `install.sh --update`.
+
 ## 2026-11-09 — v0.2.6, private phases 476–481
 
 - **`v0.2.6`.** This snapshot is tagged `v0.2.6`, with a GitHub Release carrying this entry.

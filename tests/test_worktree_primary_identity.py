@@ -163,6 +163,8 @@ def _mutant(tmp_path: Path, old: str, new: str) -> Path:
     assert text.count(old) == 1, f"stale mutation anchor ({text.count(old)} hits): {old!r}"
     out = tmp_path / "close_state_mutant.py"
     out.write_text(text.replace(old, new), encoding="utf-8")
+    # Phase 485: the link rule it imports sits beside it, as the installer puts it.
+    (tmp_path / "_ignored_link.py").write_bytes((SCRIPTS / "_ignored_link.py").read_bytes())
     return out
 
 
@@ -584,8 +586,10 @@ def test_both_gitignore_owners_resolve_the_primary_not_the_callers_worktree():
     script = CLOSE_STATE.read_text(encoding="utf-8")
     assert "must('rev-parse', '--path-format=absolute', '--git-common-dir')" in script
     assert "'--show-toplevel'" not in script
-    assert "git('check-ignore', '-q', target, cwd=root)" in script, (
-        "close_state.py's symlink downgrade must consult the primary's .gitignore")
+    # Phase 485 (`Q-775`): the rule moved into `_ignored_link.py`, which asks the primary passed
+    # here about a target outside the worktree, and the worktree about one inside it.
+    assert "return _ignored_link.ignored_link(wt, entry, root)" in script, (
+        "close_state.py's symlink downgrade must pass the primary to the shared rule")
     strip = script[script.index("def cmd_strip_links"):script.index("def main(")]
     assert "root, removed, failed = main_root(), 0, []" in strip and "ignored_link(wt, entry, root)" in strip, (
         "strip-links must judge each link against the primary's .gitignore")

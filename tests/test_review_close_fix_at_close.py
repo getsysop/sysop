@@ -284,8 +284,11 @@ def recheck_problems(text: str) -> list[str]:
         p.append("the re-check prompt may now drop parts of Step 2b's (its echo, its rules)")
     if not states(live, "The re-check raises no notes, so fixing at close is one pass."):
         p.append("the re-check may raise notes, which makes fixing at close a loop")
+    # Phase 482 (`Q-735`): the file arm's receipt is checked as Step 2b step 4 checks it.
     if not states(live, "`## Project conventions` is what Step 2b sent: the same paste, or the "
-                        "same `sysop/runtime/2b-conventions.md`."):
+                        "same `sysop/runtime/2b-conventions.md`, whose `READ:` line you check with "
+                        "`review_pins.py receipt` as Step 2b step 4 does; item 5 says what its "
+                        "exit decides here."):
         p.append("the re-check no longer routes against the conventions Step 2b sent")
     if "Spawn no security twin." not in live:
         p.append("the re-check may now spawn a security twin the scope rule made unnecessary")
@@ -317,8 +320,8 @@ def verdict_problems(text: str) -> list[str]:
         p.append("the drop is no longer gated on the check's output, between the two calls")
     for need, why in (
         ("`APPROVED` keeps the commit.", "something other than APPROVED may now keep the fix"),
-        ("`BLOCKED`, a mismatched echo, or no verdict at all drops the whole commit, and every "
-         "note it carried goes to item 6.", "a failure shape no longer drops the fix and files its notes"),
+        ("`BLOCKED`, a mismatched echo, a void or unchecked receipt (its exit 1 or 2), or no verdict "
+         "at all drops the whole commit, and every note it carried goes to item 6.", "a failure shape no longer drops the fix and files its notes"),
         ("If the check printed anything else, or the drop fails, stop: report that the fix commit is "
          "still on the merge target, with the re-check's verdict.",
          "a drop that cannot run has no disposition"),
@@ -380,7 +383,7 @@ def report_problems(text: str) -> list[str]:
                                                "Step 8's template"), flags=re.S)
     if not re.search(r"^Close notes: ", fence, re.M):
         return ["Step 8 has no `Close notes:` line, so the close's fixes and filings are invisible"]
-    if "re-check <APPROVED | BLOCKED — dropped | not run: nothing fixed>" not in fence:
+    if "re-check <APPROVED | BLOCKED — dropped | VOID — dropped | not run: nothing fixed>" not in fence:
         return ["Step 8 no longer reports the re-check's outcome"]
     live = _flat(fence)
     return [f"Step 8's `Close notes:` line lost {w!r}" for w in (
@@ -509,7 +512,7 @@ CONTROLS = [
     ("verdict", "   git rev-parse HEAD\n   ```\n", "   git rev-parse HEAD\n   git rebase --onto <fix-sha>~1 <fix-sha>\n   ```\n", VERDICT),
     ("verdict", "   The commit is unpushed and is `HEAD`", "   ```bash\n   git reset --hard HEAD~1\n   ```\n\n   The commit is unpushed and is `HEAD`"),
     ("verdict", "`APPROVED` keeps the commit.", "`APPROVED` or a mismatched echo keeps the commit."),
-    ("verdict", "`BLOCKED`, a mismatched echo, or no verdict at all drops", "`BLOCKED` drops"),
+    ("verdict", "`BLOCKED`, a mismatched echo, a void or unchecked receipt (its exit 1 or 2), or no verdict at all drops", "`BLOCKED` drops"),
     ("verdict", "Only when that printed `<fix-sha>`, drop it:", "Then drop it:"),
     ("verdict", "If the check printed anything else, or the drop fails, stop:", "If the drop fails, carry on:"),
     ("verdict", "   git rebase --onto <fix-sha>~1 <fix-sha>\n", "   git rebase --onto <fix-sha>~1 <fix-sha>\n   git status\n", VERDICT),
@@ -531,7 +534,7 @@ CONTROLS = [
     ("filing", _scoped("6. **File the notes", "7. **Record for Step 8**",
                        "   python3 sysop/scripts/git_check.py head-is \"<merge target>\" && git add -- tasks/index.yml", "   git add -- tasks/index.yml")),
     ("report", "Close notes:   <N collected", "Notes seen:    <N collected"),
-    ("report", "re-check <APPROVED | BLOCKED — dropped | not run: nothing fixed>", "re-check <APPROVED>"),
+    ("report", "re-check <APPROVED | BLOCKED — dropped | VOID — dropped | not run: nothing fixed>", "re-check <APPROVED>"),
     ("report", "Close notes:   <N collected", "<!-- Close notes: --> <N collected"),
     ("report", "N filed (<ids>), ", ""),
     ("report", "A note listed for the human to file is not filed: say so.", "Unfiled notes need no mention."),

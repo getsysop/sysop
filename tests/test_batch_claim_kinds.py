@@ -1,7 +1,7 @@
 """Phase 156 — a review-batch claim is a real claim: `BATCH-<N>.lock`.
 
 **The defect this pins is a write that never existed under five readers that
-assumed it did.** `next_task.py:558` skips a batch whose
+assumed it did.** `next_task.py:789` skips a batch whose
 `sysop/runtime/locks/BATCH-<N>.lock` is present; `sitrep_survey.py` keys its
 batch classifier on `has_lock` and treats a worktree with no matching lock as
 an *orphan*; `scope_overlap.py` builds its in-flight set from the same
@@ -544,7 +544,7 @@ class TestClaimTaskRefusesBatches:
 # ---------------------------------------------------------------------------
 class TestReadersSeeTheLock:
     def test_next_task_skips_a_locked_batch(self, tmp_path):
-        """next_task.py:558's in-flight filter, dead until this phase."""
+        """next_task.py:789's in-flight filter, dead until this phase."""
         repo = _repo(tmp_path / "repo")
         _claim(repo, 7)
         locks = next_task.list_locks(repo)

@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" prepare-resume 37a76228e53f7a0d "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" prepare-resume 9695c9fa1c78ac9e "<skill directory>"
 ```
 
 It prints `LOADED: prepare-resume`. **Exit 2**: stop and show its stderr.
@@ -44,7 +44,7 @@ A prepare runs Steps 1, 2, 3 and 3c for real, asks the human nothing, records th
    - **Step 3:** item 5's ask, or a silently denied command, records no question. Write why in `<DIR>/close.md` and leave Step 3 not run; the resume runs it attended.
    - **Step 3c:** record each signal as its own question, with its `SOURCE:`, `READ:`, `KEY:`, `BRANCH:` and `NOT MERGING:` lines and its four options. Record nothing with the recorder, and drive nothing.
 
-3. **A `VERDICT: BLOCKED` from Step 2b on a branch stops that branch, not the prepare.** Write its violations, with their `file:line` citations, into the branch's state, keep the branch out of Steps 2d, 3 and 3c, and go on with the others. A `VERDICT: BLOCKED` on the unpushed-main group halts the prepare (item 4). **With `--agent <name>`**, also hold the branch, with the first violation as the reason:
+3. **A `VERDICT: BLOCKED` from Step 2b on a branch stops that branch, not the prepare.** Write its violations, with their `file:line` citations, into the branch's state, keep the branch out of Steps 2d, 3 and 3c, and go on with the others. A `VERDICT: BLOCKED` on the unpushed-main group halts the prepare (item 4). A void verdict (Step 2b step 4's receipt) is handled as a `VERDICT: BLOCKED` is, on a branch and on the group, with its `VOID:` line written before any violations it listed. **With `--agent <name>`**, also hold the branch, with the first violation as the reason (for a void verdict, its `VOID:` line is the body instead):
 
    ```bash
    python3 sysop/scripts/close_run.py hold "<run-id>" "<branch>" - <<'SYSOP_REASON_EOF'
@@ -137,7 +137,7 @@ Run the default-branch resolve and the permission guard above first. Then, in th
 
    If anything re-ran from Step 2a or Step 2b, run Steps 3 and 3c too. Run Step 3 as well when the prepare left it not run. **A question a re-run raises that `answers.md` already answers** (the same step, branch and text, or for Step 3c the same `KEY:`) **takes that answer's outcome: never apply or drive it twice.** Ask any new question live. A re-run Step 2b's `VERDICT: BLOCKED` stops the close, as in an attended close. A branch that re-ran nothing keeps its recorded verdict, `NOTES:`, tally and report, changed only by the answers item 5 applied.
 
-7. **Run Step 3b onward as an attended close**, on the recorded and re-run state: the approved set without held, rejected, BLOCKED, SKIP and gone branches; Step 2b's `NOTES:` for `4a-fix`; Step 3c's tally for Step 8. If a Step 3c question without a `BRANCH:` line is still unanswered, halt here. Immediately before Step 3b, run:
+7. **Run Step 3b onward as an attended close**, on the recorded and re-run state: the approved set without held, rejected, BLOCKED, void, SKIP and gone branches; Step 2b's `NOTES:` for `4a-fix`; Step 3c's tally for Step 8. If a Step 3c question without a `BRANCH:` line is still unanswered, halt here. Immediately before Step 3b, run:
 
    ```bash
    python3 sysop/scripts/close_run.py consume "<run-id>" --restore-2b

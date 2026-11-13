@@ -459,8 +459,8 @@ def test_close_warns_when_the_range_came_from_the_fallback(tmp_path):
     # `test_the_fence_blind_claim_is_made_only_on_the_arm_where_it_is_true`
     # asserts it there -- and asserts its ABSENCE here.
     # Every fragment must be UNIQUE to this block. Round finding (MEDIUM, guards
-    # lens): `readers disagree` also appears in `review_index.py:812`'s near-miss
-    # advisory, which prints on the same run -- so the mid-block fragment resolved
+    # lens): `readers disagree` also appears in a near-miss advisory (not
+    # `review_index.py`'s, which an earlier line citation named), which prints on the same run -- so the mid-block fragment resolved
     # OUTSIDE the block, and deleting close_batch.sh's own line left this green.
     # A fragment with two referents cannot span anything. Replaced with
     # `refuses to claim it`, which the sweep below asserts is unique.
@@ -1152,7 +1152,7 @@ def test_the_stdout_fragments_are_unique_to_close_batchs_own_message(tmp_path):
     `test_close_warns_when_the_range_came_from_the_fallback` asserts a list of
     fragments "spanning the block top-to-bottom so a mid-block `>&2` is caught".
     That only works if each fragment has ONE referent. `readers disagree` had two
-    -- `review_index.py:812`'s near-miss advisory prints it on the same run -- so
+    -- a near-miss advisory prints it on the same run -- so
     deleting `close_batch.sh`'s own line left the guard green.
 
     This asserts the property directly against the shipped scripts, so the next

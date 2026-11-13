@@ -183,7 +183,15 @@ MARKER = re.compile(r"^<!-- sysop:arm=(\S+) -->[ \t]*$")
 #: step 4 records only the notice's `worktreePath`, the stub's exit 2 and `--prepare` destination,
 #: and `DISCARDING:` on Step 8's row. Each is an instruction the round found missing. After round 2,
 #: 290_602 (+22): Step 2b's list of SKIPs that are not targets names the new one.
-CORE_BUDGET_BYTES = 290_602
+#: Phase 482 (`Q-735`, Wade's rulings of 2026-11-09) raised it to 291_984 (+1,382): the prompt's
+#: file arm tells the reviewer to read in pages and give `READ: <N> lines, last: <line>` (+509,
+#: in the prompt template, which stays whole in the core), and Step 2b step 4 checks it with
+#: `review_pins.py receipt` before it records, voiding a verdict that fails (+873). Its round set it
+#: to 292_394 (+410): the format block lists the line and the arm says the reviewer fills it
+#: (lenses B and A), exit 2 stops rather than voids (both), a void keeps its violations, only an
+#: agent that returned a verdict is checked, Step 8's re-check row names VOID, and the permission
+#: bullet names the check. The why is in `REFERENCE.md` § *Step 2b — provenance*.
+CORE_BUDGET_BYTES = 292_394
 
 GIT_ENV = {k: v for k, v in os.environ.items()
            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}
@@ -825,13 +833,16 @@ POLICY_CASES = [
     ("## Merge policy   \n\n   direct   trailing\n", "direct"),
     ("## Merge policy\r\n\r\npr\r\n", "pr"),
     ("## Merge policy\r\rpr\r", "pr"),
-    ("```markdown\n## Merge policy\n\npr\n```\n", "direct"),
-    ("~~~\n## Merge policy\n\npr\n~~~\n\n## Merge policy\n\ndirect\n", "direct"),
-    ("## Merge policy\n\n```\npr\n```\n\ndirect\n", "direct"),
+    # Phase 484 (Wade's rule): a merge-policy line inside a fence that disagrees with the
+    # fenced read refuses. These three rows and the two indented-fence rows below read
+    # `direct` until then.
+    ("```markdown\n## Merge policy\n\npr\n```\n", ""),
+    ("~~~\n## Merge policy\n\npr\n~~~\n\n## Merge policy\n\ndirect\n", ""),
+    ("## Merge policy\n\n```\npr\n```\n\ndirect\n", ""),
     ("## Merge policy\n", "direct"),
     ("## Merge policy\n\n## Next\n", "direct"),
-    ("  ```\n## Merge policy\n\npr\n  ```\n", "direct"),
-    ("\t~~~\n## Merge policy\n\npr\n\t~~~\n## Merge policy\n\ndirect\n", "direct"),
+    ("  ```\n## Merge policy\n\npr\n  ```\n", ""),
+    ("\t~~~\n## Merge policy\n\npr\n\t~~~\n## Merge policy\n\ndirect\n", ""),
     # A consumer's real section (Phase 388): the word in backticks, then prose.
     ("## Merge policy\n\n`pr`\n\nThis project merges through squash PRs.\n", "pr"),
     ("## Merge policy\n\n**direct**\n", "direct"),
@@ -870,7 +881,7 @@ def test_the_policy_cases_cannot_lose_a_row_unseen():
     """Round 2 (lens D): a row deleted from the list left the module green."""
     import hashlib
     got = hashlib.sha256(repr(POLICY_CASES).encode()).hexdigest()[:16]
-    assert got == "eb608e9078fc6fc0", f"POLICY_CASES changed: re-pin {got} on purpose"
+    assert got == "5d392bf55c760b22", f"POLICY_CASES changed: re-pin {got} on purpose"
 
 
 @pytest.mark.parametrize("text,want", POLICY_CASES)

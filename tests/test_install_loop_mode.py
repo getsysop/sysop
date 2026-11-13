@@ -100,6 +100,9 @@ EXCLUDED_SCRIPTS = {
     "_closed_tasks.py",
     # Phase 469 (`Q-738`): the staleness measure pending_doc_collect.py and sitrep_survey.py import.
     "_doc_drift.py",
+    # Phase 485 (`Q-775`): the tooling-link rule close_state, clone_sync, feature_branch and
+    # sitrep_survey import.
+    "_ignored_link.py",
     "backfill_completed_dates.py", "batch_work.sh", "claim_task.sh",
     # Phase 237: a `tasks/index.yml` writer, so it is lifecycle. Loop mode
     # installs no task queue at all, which is what makes this a classification

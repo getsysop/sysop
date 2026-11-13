@@ -1,7 +1,7 @@
    - **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
       ```bash
-      python3 sysop/scripts/close_arms.py loaded "<close-id>" 2b-twin-spawn ccb3252a38b3d00f "<skill directory>"
+      python3 sysop/scripts/close_arms.py loaded "<close-id>" 2b-twin-spawn 44203823a370b37e "<skill directory>"
       ```
 
       It prints `LOADED: 2b-twin-spawn`. **Exit 2**: stop and show its stderr.
@@ -11,7 +11,7 @@
    > **The placement is not optional here either, and this fleet is the easier one to forget.** Step 3's checkouts belong to step 3's agents; these are different agents and need their own, for the same reason step 3 gives one to each lens rather than sharing. A security lens spawned with `isolation` alone reads the default branch — so it reviews a tree with none of the target's new endpoints, handlers or dependencies in it, returns no violations, and its `VERDICT` is carried into step 4 as a clean security gate that can *block* a close but in this state can never raise one. `_shared/adversarial-review.md` § *Running more than one reviewer* governs both fleets; the assertion below counts pinned checkouts from both.
 
    - the opening line names the security map as the taxonomy: *"Review the diff below for violations of the project's security conventions — the OWASP-category rules in the security map."*
-   - `## Project conventions` becomes `## Security map`, carrying the copy (its text, or its `COPY:` path) under the same missing-or-empty STOP rule, then: *"Left out of this copy because every glob in their headings misses this diff: <each `OMITTED:` heading, or none>. The whole map is at <the `FULL:` path>; read a left-out section there if this diff reaches its subject anyway."*
+   - `## Project conventions` becomes `## Security map`, carrying the copy (its text, or its `COPY:` path) under the same missing-or-empty STOP rule — and, for a path, the same paging rule and `READ:` line, verbatim — then: *"Left out of this copy because every glob in their headings misses this diff: <each `OMITTED:` heading, or none>. The whole map is at <the `FULL:` path>; read a left-out section there if this diff reaches its subject anyway."*
    - the routing example lines become security-shaped (`api/routes/*.py → A01 Broken Access Control`, `<upload handler> → A03 Injection + A08 Data Integrity`), and the `ROUTING:` block reports `<file path> → <map section> (<OWASP categories>)`.
    - the violation line becomes `- <rule> (<map section> › <OWASP category>) — <file>:<line> — <one-line explanation>`.
 

@@ -240,6 +240,29 @@ of a hit.
 version omitted it while telling the executor to inspect that text, which its own output could
 never show.
 
+## Steps 7f, 8 and 8b — a backtick run with a backtick in its info string opens no fence
+
+Every `fence_mark` on the `## Test decision` chain applies CommonMark's opener rule: a backtick
+fence's info string may not contain a backtick, so a column-0 line such as ```` ```a`b``` is
+inline ```` is a paragraph with a code span. A tilde fence's info string may hold one. The copies
+are Step 7f's writer (`claim_record.py`), Step 8's read-back, Step 8b's `questions.md` parser and
+`/auto-build`'s byte-identical port of Step 8.
+
+**What its loss changes.** Read as an opener, the phantom fence hides what follows it. The closer
+refuses an info string, so a later fenced block's opener cannot close the phantom, and its bare
+closer does. The walk then ends balanced, so the unbalanced-fence fallback never engages, and a
+legal body with a real record reads `MISSING`. The repair Step 8 prescribes, replacing the section
+in place, cannot clear it, because the section is still behind the phantom. Only appending a
+second section clears it, and that is the double-section state the replace rule forbids. On the
+writer, the strip cannot see the existing section, so the rewrite appends a second one below the
+stale one. On Step 8b, the rest of `questions.md` is read as fenced and its entries go unasked.
+
+**What was deliberately not ported.** `security_map_filter.py`'s `fence_mark` also refuses a
+marker indented four or more spaces, as CommonMark does at the top level. These readers do not: a
+fence inside a list item is indented that far, and there it is a fence. The writer's strip matches
+a heading after `strip()`, so with that rule the heading a list item quotes inside its fence would
+be stripped as the body's own section, taking the quoted text with it.
+
 ## Step 7e item 5b — the ignored-file check reports and files nothing
 
 A gate that reads the working tree passes on an ignored file the commit will not carry. The

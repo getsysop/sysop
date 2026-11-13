@@ -1650,9 +1650,9 @@ def fence_mark(line):
     s = line.lstrip()
     for ch in ("`", "~"):
         if s.startswith(ch * 3):
-            n = 0
-            while n < len(s) and s[n] == ch:
-                n += 1
+            n = len(s) - len(s.lstrip(ch))
+            if ch == "`" and "`" in s[n:]:  # an inline code span, not a fence (CommonMark)
+                return None
             return ch, n
     return None
 
@@ -1807,13 +1807,14 @@ def read(p):
 def fence_mark(line):
     """`(char, length)` if this line is a fence marker, else None. Step 8's function,
     copied, not re-derived: ``` or ~~~, closed by the same character at the same length
-    or longer, and a closer carries no info string."""
+    or longer, a closer carries no info string, and a backtick opener's info string holds
+    no backtick."""
     s = line.lstrip()
     for ch in ("`", "~"):
         if s.startswith(ch * 3):
-            n = 0
-            while n < len(s) and s[n] == ch:
-                n += 1
+            n = len(s) - len(s.lstrip(ch))
+            if ch == "`" and "`" in s[n:]:  # an inline code span, not a fence (CommonMark)
+                return None
             return ch, n
     return None
 

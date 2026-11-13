@@ -2,6 +2,7 @@
 """review_pins.py — `/review-close` Step 2b's baselines, pinned checkouts and post-spawn check.
 
     python3 sysop/scripts/review_pins.py clear-conventions
+    python3 sysop/scripts/review_pins.py receipt "<copy path>"   # the READ: line on stdin
     python3 sysop/scripts/review_pins.py baseline
     python3 sysop/scripts/review_pins.py add "<revision>"
     python3 sysop/scripts/review_pins.py own "<worktree path>"
@@ -17,7 +18,18 @@ are those commands, as one each.
 
 `clear-conventions` removes `sysop/runtime/2b-conventions.md` before a close writes its own copy,
 so a close that skips the write cannot hand every agent the previous close's conventions; it
-prints `CLEARED:` or `ABSENT:`. `baseline` writes `sysop/runtime/2b-baseline.txt` (`git status --porcelain -uall`) and
+prints `CLEARED:` or `ABSENT:`. `receipt` checks the line a reviewer handed a copy by path gave
+before its verdict, `READ: <N> lines, last: <the copy's last non-blank line>`, read from stdin,
+against the copy: `sysop/runtime/2b-conventions.md` or a `2b-security*.md` (`Q-735`). A reviewer
+that read 30 lines of a copy, or only a `Read` that failed for size, has not seen its end, which the
+receipt asks for. `N` may be
+the copy's line count, its newline count, the number of its last non-blank line, or one past a
+final newline (Claude Code's `Read` shows a blank line there); the line compares with whitespace runs as one space,
+and may sit in one pair of backticks or double quotes; a count may carry thousands commas, and
+the whole line may sit in backticks. It prints `RECEIPT OK: <path> (<n> lines)`
+or `MISMATCH: <path> — <why>` (exit 1), for no `READ:` line, more than one, or either value
+wrong; `/review-close` voids that verdict. Its `STOP:` (exit 2: a path that is not a Step 2b copy,
+an empty or missing copy, stdin a terminal) is a check that could not run, and stops the close. `baseline` writes `sysop/runtime/2b-baseline.txt` (`git status --porcelain -uall`) and
 `sysop/runtime/2b-config-baseline.txt` (`git config --local --list`, sorted) and
 `sysop/runtime/2b-agents-baseline.txt` (every linked worktree with its branch, and every
 `worktree-agent-*` tip), replacing any earlier copy and `own`'s list: all are removed first, then
@@ -57,7 +69,7 @@ the config baseline recorded and prints `RESTORED: core.hooksPath <value> (was <
 `UNCHANGED: …` when there is nothing to put back; a value the baseline did not record is reported
 and left alone, since the harness only rewrites one that exists.
 
-Exit: 0 done (`check`: all five clean); 1 `clean` kept a dirty or moved checkout, `check` found
+Exit: 0 done (`check`: all five clean); 1 `receipt` printed `MISMATCH:`, `clean` kept a dirty or moved checkout, `check` found
 something, `reap` kept something, or `restore-hooks-path` found a value the baseline does not have; 2 `STOP: …` usage,
 a refused path, a missing baseline, or a git command that failed.
 """
@@ -65,6 +77,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -72,7 +85,7 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
-SUBCOMMANDS = ('clear-conventions', 'baseline', 'own', 'add', 'clean', 'check', 'reap',
+SUBCOMMANDS = ('clear-conventions', 'receipt', 'baseline', 'own', 'add', 'clean', 'check', 'reap',
                'restore-hooks-path')
 RUNTIME = Path('sysop/runtime')
 PINS = RUNTIME / 'pins'
@@ -262,6 +275,83 @@ def cmd_clear_conventions() -> None:
         print(f'ABSENT: {CONVENTIONS}')
     except OSError as e:
         stop(f'cannot remove {CONVENTIONS}: {e}')
+
+
+RECEIPT_LINE = re.compile(r'^\s*(?:>\s*)?(?:[-*]\s+)?(?:\*\*)?READ:(?:\*\*)?\s*(\d{1,3}(?:,\d{3})+|\d+)\s+lines?\s*[,;]\s*'
+                          r'(?:\*\*)?last(?: line)?:(?:\*\*)?[ \t]?(.*)$')
+
+
+def _receipt_lines(text: str) -> list[re.Match]:
+    """Each line of the reviewer's text that is a receipt. A line set whole in backticks is read
+    inside them; a receipt anywhere but a line's start is not one."""
+    found = []
+    for line in text.split('\n'):
+        s = line.strip()
+        if len(s) >= 2 and s[0] == s[-1] == '`' and s[1:].lstrip('*').startswith('READ:'):
+            s = s[1:-1]
+        m = RECEIPT_LINE.match(s)
+        if m:
+            found.append(m)
+    return found
+
+
+def _same_line(given: str, last: str) -> bool:
+    """`given` is the copy's last non-blank line. Whitespace runs compare as one space, and one
+    pair of backticks or double quotes around the whole value is allowed: a reviewer that set
+    the line in code still copied it."""
+    want = ' '.join(last.split())
+    got = ' '.join(given.split())
+    if got == want:
+        return True
+    return len(got) >= 2 and got[0] == got[-1] and got[0] in '`"' and ' '.join(got[1:-1].split()) == want
+
+
+def cmd_receipt(path: str) -> None:
+    # The copy and the receipt are UTF-8 whatever the locale, and so is what this prints.
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if not path.strip() or '<' in path:
+        stop(f'path {path!r} is empty or not substituted; write it out')
+    real = Path(os.path.realpath(os.path.expanduser(path)))
+    name = real.name
+    if (real.parent != Path(os.path.realpath(RUNTIME))
+            or not (name == CONVENTIONS.name or (name.startswith('2b-security') and name.endswith('.md')))):
+        stop(f'{path} is not a copy Step 2b wrote: only sysop/runtime/2b-conventions.md and '
+             'sysop/runtime/2b-security*.md take a receipt')
+    if sys.stdin is None or sys.stdin.isatty():
+        stop("the reviewer's READ: line goes on stdin, through a quoted heredoc")
+    try:
+        # Bytes, not `read_text()`: its universal newlines turn a lone `\r` into a line end.
+        body = real.read_bytes().decode('utf-8', 'replace')
+        given = _receipt_lines(sys.stdin.buffer.read().decode('utf-8', 'replace'))
+    except OSError as e:
+        stop(f'cannot read {real} or stdin: {e}')
+    # Lines end at `\n` only, as `Read` and `wc -l` count them: `str.splitlines()` also splits at
+    # U+2028, a form feed or a lone `\r`, which neither tool does.
+    shown = [line[:-1] if line.endswith('\r') else line for line in body.split('\n')]
+    lines = shown[:-1] if body.endswith('\n') else shown
+    filled = [line for line in lines if line.strip()]
+    if not filled:
+        stop(f'{real} is empty; the prompt told its reviewer to stop on that')
+    # `wc -l` counts newlines, a file tool numbers lines; they differ by one only when the copy
+    # does not end in a newline. Claude Code's `Read` shows one more, blank, line after a final
+    # newline (measured on a 190-line copy: line 191). A copy that ends in blank lines may be
+    # counted to its last non-blank one, the line the receipt quotes. Each reached the end.
+    tail = max(i for i, line in enumerate(lines) if line.strip()) + 1
+    counts = {len(lines), body.count('\n'), tail, len(shown)}
+    if len(given) != 1:
+        print(f'MISMATCH: {real} — {len(given) or "no"} READ: line{"s" if len(given) > 1 else ""}; '
+              'a receipt is exactly one `READ: <N> lines, last: <line>`')
+        sys.exit(1)
+    n, last = int(given[0].group(1).replace(',', '')), given[0].group(2)
+    wrong = []
+    if n not in counts:
+        wrong.append(f'it says {n} lines and the copy has {len(lines)}')
+    if not _same_line(last, filled[-1]):
+        wrong.append(f'its last line is not the copy\'s, which reads: {filled[-1].strip()[:200]}')
+    if wrong:
+        print(f'MISMATCH: {real} — ' + '; '.join(wrong))
+        sys.exit(1)
+    print(f'RECEIPT OK: {real} ({len(lines)} lines)')
 
 
 def cmd_baseline() -> None:
@@ -574,7 +664,7 @@ def main(argv: list[str]) -> None:
     if len(argv) < 2 or argv[1] not in SUBCOMMANDS:
         stop('usage: review_pins.py {' + '|'.join(SUBCOMMANDS) + '} [<revision> | <path> | <default branch>]')
     sub, ops = argv[1], argv[2:]
-    takes = 1 if sub in ('add', 'own', 'reap') else 0
+    takes = 1 if sub in ('add', 'own', 'reap', 'receipt') else 0
     if len(ops) != takes:
         stop(f'{sub} takes {"one operand" if takes else "no operand"}')
     # The main checkout, not a linked worktree's top level (lens A): there the baseline would
@@ -588,6 +678,7 @@ def main(argv: list[str]) -> None:
     {'clear-conventions': cmd_clear_conventions, 'baseline': cmd_baseline, 'clean': cmd_clean,
      'check': cmd_check, 'restore-hooks-path': cmd_restore_hooks_path,
      'own': lambda: cmd_own(ops[0]), 'reap': lambda: cmd_reap(ops[0]),
+     'receipt': lambda: cmd_receipt(ops[0]),
      }.get(sub, lambda: cmd_add(ops[0]))()
 
 

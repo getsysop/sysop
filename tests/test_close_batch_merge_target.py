@@ -425,12 +425,10 @@ def test_a_branch_already_on_main_verifies_without_a_target(tmp_path):
     ("# P\n\n## Merge policy\n\nPR\n", "merge target: UNRESOLVED (§ Merge policy: pr)"),
     ("# P\n\n## Merge policy\n\npr — main is protected\n",
      "merge target: UNRESOLVED (§ Merge policy: pr)"),
-    # A fenced template is an ILLUSTRATION, not the setting. `WORKFLOW.md` ships
-    # this exact block, so a consumer quoting it must not thereby configure `pr`.
-    ("# P\n\n```markdown\n## Merge policy\n\npr\n```\n",
-     "merge target: 'main' (§ Merge policy: direct)"),
-    # ...and a real section AFTER a fenced example still wins.
-    ("# P\n\n```markdown\n## Merge policy\n\npr\n```\n\n## Merge policy\n\ndirect\n",
+    # A fenced template is an ILLUSTRATION, not the setting. `WORKFLOW.md` ships this exact
+    # block, so a consumer quoting it must not thereby configure `pr`; since Phase 484 a fenced
+    # `pr` with no section that agrees refuses (below), and a fenced `direct` reads `direct`.
+    ("# P\n\n```markdown\n## Merge policy\n\ndirect\n```\n",
      "merge target: 'main' (§ Merge policy: direct)"),
 ])
 def test_the_policy_reader_resolves_the_target(tmp_path, claude_md, expected):
@@ -448,6 +446,13 @@ def test_the_policy_reader_resolves_the_target(tmp_path, claude_md, expected):
 @pytest.mark.parametrize("claude_md", [
     "# P\n\n## Merge policy\n\nsquash\n",
     "# P\n\n## Merge policy: pr\n",
+    # Phase 484: a merge-policy line in a code block that the fenced read does not agree with.
+    # Until then each read `direct` here: a quoted template, a real section after one, and the
+    # round's tilde and indented fences.
+    "# P\n\n```markdown\n## Merge policy\n\npr\n```\n",
+    "# P\n\n```markdown\n## Merge policy\n\npr\n```\n\n## Merge policy\n\ndirect\n",
+    "# P\n\n~~~markdown\n## Merge policy\n\npr\n~~~\n",
+    "# P\n\n  ```markdown\n  ## Merge policy\n\n  pr\n  ```\n",
 ])
 def test_a_policy_the_reader_refuses_stops_the_run_without_a_target(tmp_path, claude_md):
     """Phase 388: the policy is read by `close_arms.py read-policy`, the reader `/review-close`
@@ -852,10 +857,6 @@ def test_the_target_survives_every_batch_in_a_multi_batch_run(tmp_path):
     ("# P\r\n\r\n## Merge policy\r\n\r\npr\r\n", "UNRESOLVED",
      "a CRLF-authored CLAUDE.md failed the end-anchored heading match and read "
      "`direct` for every setting"),
-    ("# P\n\n~~~markdown\n## Merge policy\n\npr\n~~~\n", "'main'",
-     "a tilde-fenced illustration was read as the setting"),
-    ("# P\n\n  ```markdown\n  ## Merge policy\n\n  pr\n  ```\n", "'main'",
-     "an indented fence was read as the setting"),
 ])
 def test_the_policy_reader_handles_the_shapes_the_round_found(tmp_path, claude_md, expected, why):
     """**Round findings (execute lens).** The fence skip claimed more than it did
