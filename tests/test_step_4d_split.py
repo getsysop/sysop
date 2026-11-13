@@ -26,6 +26,7 @@ REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "core/companion/scripts/close_run.py"
 SKILL = REPO / "core/skills/review-close/SKILL.md"
 sys.path.insert(0, str(SCRIPT.parent))
+import close_gate  # noqa: E402
 import close_run  # noqa: E402
 
 BOT = "chatgpt-codex-connector[bot]"
@@ -432,6 +433,244 @@ def test_the_codex_verdict_lists_the_blocking_finding() -> None:
     assert got == "park"
     assert "P1 a.js:20 — Revoke admin access" in lines, lines
     assert any(l.startswith("(non-blocking) P2") for l in lines), lines
+
+
+_BROKEN_SUMMARY = {"user": {"login": BOT}, "created_at": "2026-10-08T13:31:00Z",
+                   "body": "<!-- codex-pull-request-review-summary -->\n| a | 🔄 **Running** | [`c512852`](u) | x |"}
+
+
+@pytest.mark.parametrize("name,reviews,rcomments,summary,now", [
+    ("before the timeout", [_review(HEAD)], [_finding("P1", title="Revoke admin access")],
+     _summary("running", HEAD), 5),
+    ("after the timeout", [_review(HEAD)], [_finding("P1", title="Revoke admin access")],
+     _summary("running", HEAD), 31),
+    ("with the running row on another commit", [_review(HEAD)],
+     [_finding("P1", title="Revoke admin access")], _summary("running", OTHER), 31),
+    ("beside a finding with no badge", [_review(HEAD)],
+     [_finding("P1", title="Revoke admin access"), {**_finding("P2"), "body": "**Something** unbadged"}],
+     _summary("running", HEAD), 31),
+    ("under a summary with no readable row", [_review(HEAD)],
+     [_finding("P1", title="Revoke admin access")], _BROKEN_SUMMARY, 31),
+])
+def test_a_blocking_finding_on_the_head_is_named_whatever_the_summary_says(
+        name, reviews, rcomments, summary, now) -> None:
+    """`Q-753`: the running-row wait ran before the head's findings were read, so a P1 on the
+    recorded head read `wait`, then `timed out: a Codex review is running`, and was never named."""
+    got, lines = close_run.reader_verdict(_rec(), reviews, rcomments, [summary], [], _t(now))
+    assert got == "park", (name, lines)
+    assert "P1 a.js:20 — Revoke admin access" in lines, (name, lines)
+    assert not any(l.startswith("timed out") for l in lines), (name, lines)
+
+
+def _two_rows(first: tuple[str, str], second: tuple[str, str]) -> dict:
+    """A summary with two rows. No real one has been seen: 113 sampled comments held one each."""
+    a, b = _summary(*first), _summary(*second)
+    return {**a, "body": a["body"] + b["body"].splitlines()[-1] + "\n"}
+
+
+@pytest.mark.parametrize("name,reviews,rcomments,now,want", [
+    # The declined merge (round, lens A): rows are not matched to the head.
+    ("a clean summary row on the head", [], [], 6, "wait"),
+    ("…and at the timeout", [], [], 21, "park"),
+    ("a P2-only review of the head", [_review(HEAD)], [_finding("P2")], 6, "wait"),
+    ("…and at the timeout", [_review(HEAD)], [_finding("P2")], 21, "park"),
+])
+def test_a_running_row_on_another_commit_still_holds_the_head(name, reviews, rcomments, now, want) -> None:
+    for rows in ((("completed", HEAD), ("running", OTHER)), (("running", OTHER), ("completed", HEAD))):
+        got, lines = close_run.reader_verdict(_rec(), reviews, rcomments, [_two_rows(*rows)], [], _t(now))
+        assert got == want and lines, (name, rows, lines)
+
+
+def test_a_completed_row_on_another_commit_still_holds_the_head() -> None:
+    both = _two_rows(("completed", HEAD), ("completed", OTHER))
+    assert close_run.reader_verdict(_rec(), [], [], [both], [], _t(6))[0] == "wait"
+
+
+def test_changes_requested_is_named_wherever_it_parks() -> None:
+    said = f"{BOT} requested changes on {HEAD[:10]}"
+    cr = [_review(HEAD, state="CHANGES_REQUESTED")]
+    for rcomments, summary in (([], []), ([_finding("P2")], []), ([], [_summary("running", HEAD)]),
+                               ([_finding("P2")], [_summary("running", HEAD)]), ([], [_BROKEN_SUMMARY])):
+        got, lines = close_run.reader_verdict(_rec(), cr, rcomments, summary, [], _t(5))
+        assert got == "park" and said in lines, (rcomments, summary, lines)
+        assert not any("left no inline finding" in l for l in lines), lines
+    # Any CHANGES_REQUESTED review of the head counts, not only the latest.
+    later = [*cr, _review(HEAD, at="2026-10-08T13:34:00Z", rid=2)]
+    got, lines = close_run.reader_verdict(_rec(), later, [_finding("P2", rid=2)], [], [], _t(5))
+    assert got == "park" and said in lines, lines
+
+
+def test_a_finding_counts_only_on_a_review_of_the_head() -> None:
+    reviews = [_review(HEAD, rid=1), _review(OTHER, rid=2)]
+    got, lines = close_run.reader_verdict(
+        _rec(), reviews, [_finding("P2", rid=1), _finding("P1", rid=2)], [], [], _t(5))
+    assert got == "merge" and not any(l.startswith("P1") for l in lines), lines
+
+
+def test_an_unreadable_summary_adds_lines_only_for_a_blocked_head() -> None:
+    first = f"cannot read {BOT}'s review summary: no row names a status and a commit"
+    got, lines = close_run.reader_verdict(
+        _rec(), [_review(HEAD)], [_finding("P2")], [_BROKEN_SUMMARY], [], _t(5))
+    assert got == "park" and lines == [first], lines
+    got, lines = close_run.reader_verdict(
+        _rec(), [_review(HEAD)], [_finding("P1", title="Revoke admin access"), _finding("P2")],
+        [_BROKEN_SUMMARY], [], _t(5))
+    assert lines == [first, "P1 a.js:20 — Revoke admin access", "(non-blocking) P2 a.js:20 — Record this feature"], lines
+
+
+def test_a_usable_head_review_outranks_a_usage_limit_comment() -> None:
+    limit = {"user": {"login": BOT}, "created_at": "2026-10-08T13:31:00Z",
+             "body": "You have reached your Codex usage limits for code reviews."}
+    got, _ = close_run.reader_verdict(_rec(), [_review(HEAD)], [_finding("P2")], [limit], [], _t(6))
+    assert got == "merge"
+
+
+def test_a_record_whose_blocking_list_is_not_a_string_is_refused(repo: Path) -> None:
+    """Round, lens A: `str()` let a hand-edited `null` or list through, and with the blocking
+    list now parsed only beside a head review, a clean summary then merged."""
+    run_id, run = _sealed(repo)
+    rec = json.loads((run / "handoff.json").read_text())
+    for bad in (None, ["P0", "P1"]):  # written as JSON `null`: `_set` would drop the key
+        (run / "handoff.json").write_text(json.dumps({**rec, "blocking": bad}))
+        assert ('"blocking": null' in (run / "handoff.json").read_text()) == (bad is None)
+        r = _run(repo, "land-check", run_id, "main")
+        assert r.returncode == 2 and "blocking list" in r.stderr, (bad, r.stdout, r.stderr)
+
+
+def test_a_blocked_head_under_a_running_row_reads_as_it_does_without_the_row() -> None:
+    args = ([_review(HEAD)], [_finding("P1", title="Revoke admin access"), _finding("P2")])
+    _, bare = close_run.reader_verdict(_rec(), *args, [], [], _t(5))
+    _, running = close_run.reader_verdict(_rec(), *args, [_summary("running", HEAD)], [], _t(5))
+    assert running[:len(bare)] == bare and len(running) == len(bare) + 1, running
+    assert running[-1] == (f"a Codex review is also running; it cannot change what {BOT}'s review of "
+                           f"{HEAD[:10]} already says"), running
+
+
+@pytest.mark.parametrize("now,want", [(5, "park"), (31, "park")])
+def test_changes_requested_on_the_head_parks_under_a_running_row(now: int, want: str) -> None:
+    got, lines = close_run.reader_verdict(
+        _rec(), [_review(HEAD, state="CHANGES_REQUESTED")], [_finding("P2")],
+        [_summary("running", HEAD)], [], _t(now))
+    assert got == want and not any(l.startswith("timed out") for l in lines), lines
+
+
+@pytest.mark.parametrize("name,rcomments,now,want", [
+    # Phase 365's ruling stands: a review of the head that would merge waits on a running row.
+    ("a P2-only review", [_finding("P2")], 5, "wait"),
+    ("a P2-only review, at the timeout", [_finding("P2")], 31, "park"),
+])
+def test_a_head_that_would_merge_still_waits_on_a_running_row(name, rcomments, now, want) -> None:
+    got, lines = close_run.reader_verdict(
+        _rec(), [_review(HEAD)], rcomments, [_summary("running", HEAD)], [], _t(now))
+    assert got == want, (name, lines)
+    assert len(lines) == 1 and lines[0].startswith(
+        "timed out: a Codex review is running" if now > 20 else "a Codex review is running; times out"), lines
+
+
+def test_an_unbadged_finding_on_the_head_parks_under_a_running_row() -> None:
+    """Round 1, both lenses: no later review of the head removes it, so the row must not turn
+    it into a `timed out:` that reads as nothing to fix."""
+    says = "cannot read a finding: no severity badge at a.js:20"
+    unbadged = {**_finding("P2"), "body": "**Something** unbadged"}
+    for now in (5, 31):
+        got, lines = close_run.reader_verdict(
+            _rec(), [_review(HEAD)], [unbadged], [_summary("running", HEAD)], [], _t(now))
+        assert got == "park" and lines[0] == says and len(lines) == 2 and "also running" in lines[1], lines
+    # Beside a blocking finding and requested changes, each is still listed, in this order.
+    got, lines = close_run.reader_verdict(
+        _rec(), [_review(HEAD, state="CHANGES_REQUESTED")],
+        [unbadged, _finding("P1", title="Revoke admin access")], [], [], _t(5))
+    assert lines == [says, "P1 a.js:20 — Revoke admin access", f"{BOT} requested changes on {HEAD[:10]}"], lines
+
+
+def test_a_head_review_with_no_inline_finding_waits_on_a_running_row_and_is_listed() -> None:
+    """Round 2: it is not final. A later review of the same head that carries a finding merges,
+    so parking it at once failed the gate on a head the old reader went on to merge."""
+    says = f"{BOT} reviewed {HEAD[:10]} but left no inline finding to read"
+    for now, got_want, first in ((5, "wait", "a Codex review is running; times out"),
+                                 (31, "park", "timed out: a Codex review is running")):
+        got, lines = close_run.reader_verdict(
+            _rec(), [_review(HEAD)], [], [_summary("running", HEAD)], [], _t(now))
+        assert got == got_want and lines[0].startswith(first) and lines[1:] == [says], lines
+    cfg = {"reviewer": BOT, "request": "@codex review", "timeout": "20m", "format": "codex", "blocking": "P0 P1"}
+    ask = {"user": {"login": "someone"}, "body": "@codex review", "created_at": ASKED}
+    reader = close_gate.reader_state(cfg, HEAD, [_review(HEAD)], [], [ask, _summary("running", HEAD)], [], _t(5))
+    assert close_gate.verdict([], [], reader, False)[0] == "pending"
+    # The recovery: a second review of the head with a finding, and the summary completed.
+    both = [_review(HEAD), _review(HEAD, at="2026-10-08T13:36:00Z", rid=2)]
+    got, lines = close_run.reader_verdict(
+        _rec(), both, [_finding("P2", rid=2)], [_summary("completed", HEAD)], [], _t(8))
+    assert got == "merge", lines
+    # Under a summary the reader cannot parse, it is not listed: that park has its own reason.
+    _, lines = close_run.reader_verdict(_rec(), [_review(HEAD)], [], [_BROKEN_SUMMARY], [], _t(5))
+    assert len(lines) == 1, lines
+
+
+def test_a_timeout_prints_the_re_request_and_the_command_it_names_works(repo: Path) -> None:
+    """`wade-cms/sysop` #910: nothing told the operator that one `re-request` asks again."""
+    run_id, run = _sealed(repo)
+    _set(run, requested_at="2020-01-01T00:00:00Z")
+    r = _run(repo, "land-check", run_id, "main")
+    out = r.stdout.splitlines()
+    assert r.returncode == 4 and any(l.startswith("READER: timed out: ") for l in out), r.stdout
+    hint = [l for l in out if l.startswith("RE-REQUEST: ")]
+    assert len(hint) == 1, r.stdout
+    assert f"`python3 sysop/scripts/close_run.py re-request {run_id} main`" in hint[0], r.stdout
+    assert out.index(hint[0]) < out.index("VERDICT: PARK")
+    # With a `PARKED` record it prints none: `re-request` would clear that park, whatever wrote it.
+    (run / "PARKED").write_text(json.dumps({"code": "gate-red", "at": "20200101T000000Z"}))
+    r = _run(repo, "land-check", run_id, "main")
+    assert r.returncode == 4 and "PARKED:" in r.stdout and "RE-REQUEST:" not in r.stdout, r.stdout
+    (run / "PARKED").unlink()
+    # The approval format times out the same way.
+    _set(run, format="approval", blocking="")
+    r = _run(repo, "land-check", run_id, "main")
+    assert r.returncode == 4 and "RE-REQUEST:" in r.stdout, r.stdout + r.stderr
+    _set(run, format="codex", blocking="P0 P1")
+    assert _run(repo, "re-request", run_id, "main").returncode == 0
+    r = _run(repo, "land-check", run_id, "main")
+    assert r.returncode == 5 and "RE-REQUEST:" not in r.stdout, r.stdout
+    # A park that is not a timeout prints none.
+    head = _g(repo, "rev-parse", BRANCH)
+    (_state(repo) / "reviews.json").write_text(json.dumps([_review(head)]))
+    (_state(repo) / "review_comments.json").write_text(json.dumps([_finding("P0")]))
+    r = _run(repo, "land-check", run_id, "main")
+    assert r.returncode == 4 and "RE-REQUEST:" not in r.stdout, r.stdout
+
+
+def test_the_attended_park_alone_says_a_timeout_is_asked_again() -> None:
+    """`Q-753`'s text half. The sentence is compared whole: a predicate over its phrases passed
+    a sentence saying the opposite (round, lens B)."""
+    steps = (REPO / "core/skills/review-close/steps/request-review-land.md").read_text(encoding="utf-8")
+    parks = [l for l in steps.splitlines() if l.lstrip().startswith("- **Exit 4, `VERDICT: PARK`**")]
+    assert len(parks) == 2, len(parks)
+    attended, unattended = parks
+    assert ("run `--land` again later. **When it printed a `RE-REQUEST:` line**, the park is a timeout "
+            "and there may be nothing to fix: report that line with the `READER:` "
+            "lines. The way on is then the command it names, alone, with no checkout, fix, verification "
+            "run or push. Run it only on the person's word, once for that timeout, never on your own at "
+            "each timed-out `--land`; run `--land` again later. To give up instead,") in attended
+    assert "RE-REQUEST" not in unattended and "do not fix the branch, `re-request`" in unattended
+    assert "a `RE-REQUEST:` line when the park is a timeout" in steps
+    flow = (REPO / "core/companion/docs/WORKFLOW.md").read_text(encoding="utf-8")
+    flat = " ".join(l.lstrip("> ") for l in flow.splitlines())
+    assert ("With `format: codex`, a blocking or unreadable finding on the head parks at once, even while "
+            "another review is running. After a timeout an attended `--land` prints a `RE-REQUEST:` line: with "
+            "nothing to fix, `close_run.py re-request` asks again for the same head and restarts the "
+            "clock. An unattended land's park stays a human's to clear.") in flat
+
+
+@pytest.mark.parametrize("now", [5, 31])
+def test_the_gate_names_a_blocking_finding_under_a_running_row(now: int) -> None:
+    """The gate app reads the same function, with the request time taken from the PR's comments."""
+    cfg = {"reviewer": BOT, "request": "@codex review", "timeout": "20m", "format": "codex",
+           "blocking": "P0 P1"}
+    ask = {"user": {"login": "someone"}, "body": "@codex review", "created_at": ASKED}
+    got, lines = close_gate.reader_state(
+        cfg, HEAD, [_review(HEAD)], [_finding("P1", title="Revoke admin access")],
+        [ask, _summary("running", HEAD)], [], _t(now))
+    assert got == "park" and "P1 a.js:20 — Revoke admin access" in lines, lines
+    assert close_gate.verdict([], [], (got, lines), False)[0] == "failure"
 
 
 @pytest.mark.parametrize("state,now,want", [

@@ -77,13 +77,25 @@ def fence_mark(line):
 
     Reports only that the line IS a marker. Whether it *closes* an open fence is
     `fence_closes`' question -- an opener may carry an info string (this writer
-    emits `fence + "markdown"` below), a closer may not."""
+    emits `fence + "markdown"` below), a closer may not.
+
+    A backtick run whose info string holds a backtick is an inline code span, not a
+    fence (CommonMark; a tilde fence's info string may hold one). Read as an opener,
+    it hides the section after it from the strip, and the rewrite appends a second
+    `## Test decision` below the stale one (`Q-477`).
+
+    Leading whitespace is stripped without CommonMark's four-space limit on purpose:
+    a fence inside a list item is indented that far, and the strip matches a heading
+    after `strip()`, so reading that fence as indented code would strip the quoted
+    heading inside it as a section."""
     s = line.lstrip()
     for ch in ("`", "~"):
         if s.startswith(ch * 3):
             n = 0
             while n < len(s) and s[n] == ch:
                 n += 1
+            if ch == "`" and "`" in s[n:]:
+                return None
             return ch, n
     return None
 

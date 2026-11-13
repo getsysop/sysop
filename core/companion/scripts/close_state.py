@@ -20,8 +20,9 @@ part of another checkout (its `.git` link gone) and a detached one in the middle
 named by the branch it is rebasing; one whose commits cannot be counted is `AHEAD` with the
 error. None of these may read as `MERGED`, the class Step 6 removes. Untracked files are listed
 whatever `status.showUntrackedFiles` says.
-An untracked symlink whose target the main checkout ignores (a `.venv` link) is not a pending
-change (BeanRider ISSUE-0043). Commits a recorded PR head holds
+An untracked symlink whose target is gitignored (a `.venv` link) is not a pending change
+(BeanRider ISSUE-0043): a target inside the worktree by the worktree's own rules, any other by
+the main checkout's (`_ignored_link.py`). Commits a recorded PR head holds
 (`refs/sysop/merged-pr-heads/*`) are not counted ahead.
 
 `review-tasks` (Step 1b) prints `REVIEW_TASKS: clean`, `REVIEW_TASKS: save (+<a> -<d>)` or
@@ -34,8 +35,8 @@ three `WARN:` lines for each one cut before `review_tasks_archive.md` changed on
 branch.
 
 `strip-links` (Step 3b item b) deletes each untracked symlink in a linked worktree `git worktree
-list` names whose target the main checkout ignores and lies outside the worktree (Step 1a's
-downgrade rule above), and prints `REMOVED LINK: <path>` for each, then
+list` names whose target is gitignored (Step 1a's downgrade rule above, so a link to a file
+the worktree tracks is kept), and prints `REMOVED LINK: <path>` for each, then
 `STRIP-LINKS: <n> removed`. Only the pointer is deleted,
 never its target, and any real untracked file is left for the unforced `git worktree remove`
 that follows to refuse. It was a `git -C … | while read` loop with a `case` and an `rm -f`, each
@@ -52,6 +53,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import NoReturn
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _ignored_link  # noqa: E402  the link rule Step 1-pre, 2a and /sitrep read too
 
 SUBCOMMANDS = ('worktrees', 'review-tasks', 'archive-rotation', 'strip-links')
 _ENV = {k: v for k, v in os.environ.items()
@@ -147,18 +151,8 @@ def status_entries(raw: str) -> list[str]:
 
 
 def ignored_link(wt: str, entry: str, root: str) -> bool:
-    """An untracked symlink whose target the main checkout ignores — tooling, not work."""
-    link = os.path.join(wt, entry)
-    if not os.path.islink(link):
-        return False
-    target = os.readlink(link)
-    if not os.path.isabs(target):
-        here = os.path.join(wt, os.path.dirname(entry))
-        there = os.path.normpath(os.path.join(here, os.path.dirname(target)))
-        if not (os.path.isdir(here) and os.path.isdir(there)):
-            return False          # a broken link is kept: classified dirty, never removed
-        target = os.path.join(there, os.path.basename(target))
-    return git('check-ignore', '-q', target, cwd=root).returncode == 0
+    """An untracked symlink whose target is ignored — tooling, not work (`_ignored_link.py`)."""
+    return _ignored_link.ignored_link(wt, entry, root)
 
 
 def cmd_worktrees(default: str) -> None:
@@ -279,11 +273,8 @@ def cmd_strip_links(wt: str) -> None:
             continue
         entry = field[3:]
         link = os.path.join(wt, entry)
-        # A link into the worktree itself is the work, not tooling, even when the primary ignores
-        # the directory the worktree sits in (`.claude/worktrees/<x>`).
-        target = os.path.realpath(link)
-        if os.path.commonpath([target, real]) == real:
-            continue
+        # Step 1a's own rule, so a link it downgrades is one this removes (`Q-775`): a target
+        # inside the worktree is asked of the worktree, which ignores no tracked file.
         if ignored_link(wt, entry, root):
             try:
                 os.unlink(link)

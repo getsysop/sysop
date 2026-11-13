@@ -176,6 +176,26 @@ class TestThePortedBlockActuallyRuns:
         rc, out = _run(repo, b)
         assert rc == 1 and out.startswith("MISSING"), (rc, out)
 
+    def test_the_port_carries_the_opener_info_string_rule(self, repo):
+        """`Q-477`: a backtick run whose info string holds a backtick is an inline span, not
+        a fence (CommonMark). Read as an opener, it swallows this legal body's real record,
+        the `bash` block's bare closer balances the walk, and the task is marked `FAILED`."""
+        body = ("# T\n\n## Requirements\n```a`b``` is inline code, not a fence.\n\n"
+                "## Test decision\ntest tests/x.py proves y\n\n"
+                "## Notes\n```bash\necho hi\n```\n")
+        b = _on_branch(repo, "opener-backtick-info", body)
+        rc, out = _run(repo, b)
+        assert rc == 0 and out.startswith("test-decision record present"), (rc, out)
+        assert "unbalanced" not in out, out
+
+    def test_the_port_still_reads_a_tilde_fence_whose_info_string_holds_a_backtick(self, repo):
+        """The rule is backtick-only: a `~~~` opener's info string may hold a backtick."""
+        body = ("# T\n\n## Plan\n~~~markdown `quoted`\n## Test decision\n"
+                "test only inside a tilde fence\n~~~\n")
+        b = _on_branch(repo, "tilde-backtick-info", body)
+        rc, out = _run(repo, b)
+        assert rc == 1 and out.startswith("MISSING"), (rc, out)
+
 
 def _refill_step() -> str:
     """The `1‑record` step's prose, sliced out of `/auto-build`'s refill section.

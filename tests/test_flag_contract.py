@@ -974,6 +974,11 @@ def test_structural_reader_population_is_derived():
         (["    ```", "x", "    ```"], [False, False, False]),
         (["``", "x", "``"], [False, False, False]),
         (["text ```", "x"], [False, False]),
+        # a backtick in a backtick run's info string makes it an inline span,
+        # not an opener (CommonMark), so the bare closer below opens nothing...
+        (["```a`b``` is inline", "## Deferred", "```", "x"], [False, False, False, False]),
+        # ...and a tilde fence's info string may hold one
+        (["~~~a`b", "## Deferred", "~~~"], [True, True, True]),
         (["## Deferred", "x"], [False, False]),
         # UNTERMINATED — deliberately not masked. Honouring it would disable
         # structural parsing to EOF, which is worse than having no fence rule:

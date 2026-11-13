@@ -162,7 +162,11 @@ _OVERLAP_RANK = {"none": 0, "possible": 1, "unknown": 2, "likely": 3}
 # Fenced-block detection. A task's remediation text routinely quotes the
 # tracker's own shapes, and outside a fence those are structure while inside
 # one they are an example.
-_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")
+# A backtick run with another backtick later on its line is an inline code
+# span, not an opener: a backtick fence's info string may not hold a backtick
+# (CommonMark), a tilde fence's may. The lookahead holds at every run length,
+# so a run of four cannot match as three by giving one backtick back.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}(?!.*`)|~{3,})")
 _FENCE_CLOSE_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})[ \t]*$")
 
 

@@ -184,7 +184,11 @@ _HANDBACK_ENVELOPE_TAIL_MAX = 200
 # 3-backtick run, for a `~~~` fence, and for an indented one. The repo already
 # owns a scanner that gets all of those right, with a grammar table behind it,
 # so this borrows it rather than minting a fifth dialect.
-_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")
+# A backtick run with another backtick later on its line is an inline code
+# span, not an opener: a backtick fence's info string may not hold a backtick
+# (CommonMark), a tilde fence's may. The lookahead holds at every run length,
+# so a run of four cannot match as three by giving one backtick back.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}(?!.*`)|~{3,})")
 _FENCE_CLOSE_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})[ \t]*$")
 
 # Within a fenced block, the envelope must carry both TASK: and STATUS: to

@@ -182,15 +182,66 @@ def _strip_fences(text: str) -> str:
 
     An unterminated fence blanks to end-of-text, which is the safe direction: content inside
     an unclosed fence is ignored rather than half-read.
+
+    A fence closes only on its own character, at least as long, with no info string: the
+    toggle this replaced flipped on any marker, so a ```` ```python ```` line inside a block
+    ended it and a backtick run with a backtick after it (an inline span) opened one. A closer
+    indented more than three columns past its opener is content: a list item's ``` inside a
+    column-0 example block is not its end.
     """
-    out, fenced = [], False
+    out, fence, at = [], None, 0
     for ln in text.split("\n"):
-        if re.match(r"^\s*(```|~~~)", ln):
-            fenced = not fenced
+        if fence:
+            if fence_closes(ln, fence, at):
+                fence = None
             out.append("")
-            continue
-        out.append("" if fenced else ln)
+        elif fence_mark(ln):
+            fence, at = fence_mark(ln), indent_of(ln)
+            out.append("")
+        else:
+            out.append(ln)
     return "\n".join(out)
+
+
+# `security_map_filter.py`'s `fence_mark` / `fence_closes`, copied rather than imported (that
+# module imports this one), less one leg: a marker indented four or more spaces still counts
+# here. `parse_exclusions` matches its list items and headings at any indent, and a fence
+# inside a list item sits four spaces in, where CommonMark reads it as a fence.
+# `tests/test_fence_opener_shared_readers.py` holds the two to the same verdicts up to three
+# spaces.
+def fence_mark(line: str):
+    """`(char, length)` if the line is a fence marker, else None. A backtick run followed by
+    another backtick is an inline span, not a fence (CommonMark); a tilde run may be."""
+    s = line.lstrip()
+    for ch in ("`", "~"):
+        if s.startswith(ch * 3):
+            n = len(s) - len(s.lstrip(ch))
+            if ch == "`" and "`" in s[n:]:
+                return None
+            return ch, n
+    return None
+
+
+def indent_of(line: str) -> int:
+    """Columns of leading whitespace, a tab to the next multiple of four."""
+    col = 0
+    for ch in line:
+        if ch == "\t":
+            col += 4 - col % 4
+        elif ch.isspace():
+            col += 1
+        else:
+            break
+    return col
+
+
+def fence_closes(line: str, open_mark, open_indent: int = 0) -> bool:
+    """Same character, at least as long, no info string (an opener may carry one, a closer may
+    not), and indented at most three columns past the opener: a list item's four-space ```
+    inside a column-0 block is content, not its closer."""
+    mark = fence_mark(line)
+    return (bool(mark) and mark[0] == open_mark[0] and mark[1] >= open_mark[1]
+            and not line.strip().strip(mark[0]) and indent_of(line) <= open_indent + 3)
 
 
 def parse_exclusions(text: str) -> list[str]:

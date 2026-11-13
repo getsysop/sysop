@@ -387,7 +387,8 @@ _read_merge_policy() {
   # reader `/review-close` Step 4-pre also uses (Phase 388). Until then this was an
   # `awk` copy, and two review rounds found the copies disagreeing on inputs no test
   # held, under `awk` flavours and locales no test pinned. Prints the policy; on a
-  # refusal (a word other than `direct`/`pr`, a heading written another way) or with
+  # refusal (a word other than `direct`/`pr`, a heading written another way, or
+  # merge-policy lines that read differently once code fences are read) or with
   # no `python3`, prints nothing and puts the reason on stderr.
   local here
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

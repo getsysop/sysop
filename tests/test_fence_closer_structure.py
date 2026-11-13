@@ -37,7 +37,14 @@ SKILLS = (
     REPO_ROOT / "core" / "skills" / "claim-task" / "SKILL.md",
     REPO_ROOT / "core" / "skills" / "auto-build" / "SKILL.md",
 )
-EXPECTED_BLOCKS = 5  # Step 7f's writer, Step 8's verifier, Step 8b's questions reader (Phase 345), /auto-build item 1-record, review-close Step 2b's security_map_filter.py (Phase 395)
+EXPECTED_BLOCKS = 7  # Step 7f's writer, Step 8's verifier, Step 8b's questions reader (Phase 345), /auto-build item 1-record, review-close Step 2b's security_map_filter.py (Phase 395), close_arms.py's read_policy and security_partition.py's map reader (Phase 484)
+
+# Functions in a whole shipped script whose `>=` compare sizes, not fences, by (label, name).
+# Adding one is a decision: read the function first. Nothing else is exempt.
+NOT_FENCE_READERS = {
+    ("core/companion/scripts/security_partition.py", name)
+    for name in ("_unquote", "_budget_for_full", "build", "covers")
+}
 
 
 def _fence_payloads() -> list[tuple[str, int, str]]:
@@ -120,9 +127,21 @@ def test_no_caller_re_implements_the_closer_test(where, line, src):
     tree = ast.parse(src)
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "fence_closes")
     inside = {id(n) for n in ast.walk(fn)}
+    # A whole script (security_partition.py, Phase 484) also compares sizes and budgets in
+    # functions that never read a fence. Those, and only those, are exempt BY NAME: a
+    # name-based scope ("any function that does not call fence_mark") let a caller-side
+    # length test in a differently named helper walk through (Phase 484's round, lens B).
+    for f in ast.walk(tree):
+        if isinstance(f, ast.FunctionDef) and (where, f.name) in NOT_FENCE_READERS:
+            inside |= {id(n) for n in ast.walk(f)}
+    ordering = (ast.Gt, ast.Lt, ast.LtE)
     stray = [ast.unparse(n) for n in ast.walk(tree)
-             if isinstance(n, ast.Compare) and any(isinstance(o, ast.GtE) for o in n.ops)
-             and id(n) not in inside]
+             if isinstance(n, ast.Compare) and id(n) not in inside
+             and (any(isinstance(o, ast.GtE) for o in n.ops)
+                  # `>` and friends are common index arithmetic; flag one only when it
+                  # compares something named as a fence or a marker.
+                  or (any(isinstance(o, ordering) for o in n.ops)
+                      and re.search(r"fence|mark", ast.unparse(n))))]
     assert not stray, (
         f"{where}:{line} — a caller compares fence lengths itself: {stray}. The closer "
         "decision has one home per block on purpose; a second copy is how the info-string "

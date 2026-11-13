@@ -181,7 +181,7 @@ CITATION_ANCHORS = {
     # Phase 256. `Q-375`'s design rests on this note: widening the batch-header
     # counter without its `H3_HEADER_RE` sibling leaves the counter unreachable
     # while a batch is open, and the round is archived with an OPEN batch.
-    ("core/companion/scripts/review_index.py", "archive_review_tasks.py:595"):
+    ("core/companion/scripts/review_index.py", "archive_review_tasks.py:599"):
         "Widening ANY_BATCH_HEADER_RE alone did NOT fix this",
     # Phase 280, re-pointed by Phase 281 when `Q-468` closed. The `2-also` arm names
     # BOTH `fence_closes` definitions in /claim-task -- one per heredoc, because nothing

@@ -41,7 +41,8 @@ PRIVATE_HELPERS = {"_log.py", "_model_roles.py", "_git_lib.sh",
                    "_closed_tasks.py",  # Phase 446: imported by pr_head_check.py and git_check.py
                    "_tracker_lock.py",  # Phase 461: the four Python tracker writers' mutex
                    "_skill_walk.py",  # Phase 466: the model-role scripts' skills walk
-                   "_doc_drift.py"}  # Phase 469: the staleness measure the collect and sitrep share
+                   "_doc_drift.py",  # Phase 469: the staleness measure the collect and sitrep share
+                   "_ignored_link.py"}  # Phase 485: the tooling-link rule of Steps 1a, 1-pre, 2a and sitrep
 
 # First cell of a table row, e.g. "| `claim_task.sh <TASK_ID> <BRANCH>` | ..." —
 # the name may carry a usage signature, so match only the filename that starts it.

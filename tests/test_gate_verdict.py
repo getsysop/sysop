@@ -652,5 +652,6 @@ def test_the_shipped_skill_records_only_a_notes_free_approval():
             "`<N checked, N reused, N skipped (no map match)>` for the `Security map:` line") in text
     # Item 4's stop on a BLOCKED must not come before the record: a relaunch after one branch
     # blocked is the case this exists for (Phase 394's round, lens B).
-    assert "first record the approvals as the paragraph below says, then list every violation" in text
+    # Phase 482 (`Q-735`): the receipt check sits between this sentence and the record paragraph.
+    assert "first check receipts and record the approvals as the two paragraphs below say, then list every violation" in text
     assert "A `REUSE` verdict is not that case" in text

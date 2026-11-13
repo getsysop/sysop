@@ -150,6 +150,7 @@ except ImportError:
 # and the close give one verdict (`Q-738`).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _doc_drift  # noqa: E402
+import _ignored_link  # noqa: E402  Step 1a's tooling-link rule, shared (`Q-775`)
 
 
 # ── Constants ────────────────────────────────────────────────────
@@ -578,7 +579,11 @@ _META_TRIAGED_RE = re.compile(
     r"(?:\s+[—–-]\s*(.*?))?\s*$"
 )
 _TRIAGED_TASK_ID_RE = re.compile(r"TASK-\d+")
-_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")
+# A backtick run with another backtick later on its line is an inline code
+# span, not an opener: a backtick fence's info string may not hold a backtick
+# (CommonMark), a tilde fence's may. The lookahead holds at every run length,
+# so a run of four cannot match as three by giving one backtick back.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}(?!.*`)|~{3,})")
 _FENCE_CLOSE_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})[ \t]*$")
 
 
@@ -1282,18 +1287,10 @@ def _status_entries(raw: str) -> list[str]:
 
 
 def _ignored_symlink(where: Path, entry: str, main_root: Path) -> bool:
-    """An untracked symlink whose target the repository ignores (BeanRider ISSUE-0043): not
-    live work. `/review-close` Step 1-pre's `noise()` and step 0b read the same shape."""
-    p = os.path.join(str(where), entry)
-    if not os.path.islink(p):
-        return False
-    target = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
-    try:
-        r = subprocess.run(["git", "check-ignore", "-q", target], cwd=str(main_root),
-                           capture_output=True, timeout=15)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-    return r.returncode == 0
+    """An untracked symlink whose target is ignored (BeanRider ISSUE-0043): not live work. A
+    target inside the workspace is asked of the workspace, any other of the main checkout
+    (`_ignored_link.py`, which `/review-close` Steps 1a, 1-pre and 2a read through too)."""
+    return _ignored_link.ignored_link(str(where), entry, str(main_root), timeout=15)
 
 
 def _is_ancestor(a: str, b: str, main_root: Path) -> bool:
@@ -1506,7 +1503,7 @@ def _commits_unpushed(branch: str, main_root: Path) -> int:
 
 def _worktree_dirty(worktree_path: Path, main_root: "Path | None" = None) -> bool:
     """Uncommitted changes in a worktree. With `main_root`, an untracked symlink to a target
-    the repository ignores (BeanRider ISSUE-0043) is not one, as `/review-close` Step 1a and
+    is ignored (BeanRider ISSUE-0043) is not one, as `/review-close` Step 1a and
     Step 1-pre read it (Phase 360, round 2, lens D).
 
     A worktree whose `.git` link is gone reads dirty, as `/review-close` Step 1a reads it: git

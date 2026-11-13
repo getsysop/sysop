@@ -193,6 +193,18 @@ def test_landed_still_refuses_a_real_file_with_a_quoted_name(claim, name):
     assert _landed(main) == f"NOT LANDED — workspace {wt} has uncommitted work on it"
 
 
+def test_landed_asks_the_workspace_about_a_target_inside_it(claim):
+    """`Q-775` (Phase 485): a link to the workspace's own ignored `.venv/` is tooling (the main
+    checkout answered 128 for a path outside it, so it read as work), and a link to the
+    workspace's own tracked file is work."""
+    main, wt = claim
+    (wt / ".venv").mkdir()
+    (wt / "venv").symlink_to(".venv")
+    assert _landed(main) == "LANDED: in main — held doc feat.md"
+    (wt / "self").symlink_to("tracked.txt")
+    assert _landed(main) == f"NOT LANDED — workspace {wt} has uncommitted work on it"
+
+
 def test_landed_still_refuses_a_staged_rename(claim):
     main, wt = claim
     _links(main, wt)

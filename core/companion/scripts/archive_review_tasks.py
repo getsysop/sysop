@@ -270,7 +270,11 @@ H3_HEADER_RE = re.compile(r"^###(?:\s|$)")
 # were relocated — with unbalanced fences on each side and a real `- [x]` task
 # carried into the wrong archive block. This is the script the size advisory
 # in /triage, /auto-fix and /auto-judge tells the operator to run.
-_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})")
+# A backtick run with another backtick later on its line is an inline code
+# span, not an opener: a backtick fence's info string may not hold a backtick
+# (CommonMark), a tilde fence's may. The lookahead holds at every run length,
+# so a run of four cannot match as three by giving one backtick back.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}(?!.*`)|~{3,})")
 _FENCE_CLOSE_RE = re.compile(r"^ {0,3}(?:> ?)*(`{3,}|~{3,})[ \t]*$")
 
 

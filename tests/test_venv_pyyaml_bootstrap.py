@@ -205,7 +205,8 @@ def consumer(tmp_path):
     root = tmp_path / "proj"
     (root / "sysop" / "scripts").mkdir(parents=True)
     # check_skill_models.py imports the last three.
-    for name in [*FATAL, SOFT, "_log.py", "_model_roles.py", "_doc_drift.py", "migrate_skill_model.py",
+    for name in [*FATAL, SOFT, "_log.py", "_model_roles.py", "_doc_drift.py", "_ignored_link.py",
+                 "migrate_skill_model.py",
                  "_skill_walk.py"]:
         (root / "sysop" / "scripts" / name).write_bytes((SCRIPTS / name).read_bytes())
     subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q", str(root)],

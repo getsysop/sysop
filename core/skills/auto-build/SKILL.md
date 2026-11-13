@@ -918,9 +918,9 @@ def fence_mark(line):
     s = line.lstrip()
     for ch in ("`", "~"):
         if s.startswith(ch * 3):
-            n = 0
-            while n < len(s) and s[n] == ch:
-                n += 1
+            n = len(s) - len(s.lstrip(ch))
+            if ch == "`" and "`" in s[n:]:  # an inline code span, not a fence (CommonMark)
+                return None
             return ch, n
     return None
 

@@ -18,7 +18,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present — a
 - `Bash(git push -u origin:*)`
 - `Bash(python3 sysop/scripts/git_check.py:*)` — Step 5's Rule A check, chained into the push
 - `Bash(git push origin:*)`
-- `Bash(python3 -:*)` — required by Step 3b's heredoc'd follow-up-stub check
+- `Bash(python3 -:*)` — required by Step 2's trailer probe and Step 3b's heredoc'd follow-up-stub check
 - `Bash(python3 sysop/scripts/pending_doc_hold.py:*)` — Step 3 step 2b's `guard`
 
 If any are missing, stop with the `_shared/permission-guard.md` § Algorithm step 5 message (one-line reason: "pushes the documented branch upstream as the final step before `/review-close`, after Step 3b's `python3` heredoc verifies named follow-up task IDs resolve in `tasks/index.yml`"). Do not proceed — unless the guard's step 3 mode check applies.
@@ -62,8 +62,8 @@ bash sysop/scripts/default_branch.sh
 It is not `main` on every consumer. **If it exits non-zero, stop** — do not
 substitute an empty value: `git diff ...HEAD` and `git rev-list --count ..<branch>` both
 exit 0 on an empty operand, the second printing `0`, so an unresolved name reads as
-"no changes" rather than as an error. This step is Step 0 because four of this skill's
-five sites are upstream of Step 5, where the instruction used to live.
+"no changes" rather than as an error. This step is Step 0 because Steps 1b, 1c and 2
+read the name before Step 5.
 
 ## Step 1b: Simplify Pass
 
@@ -113,13 +113,57 @@ Co-Authored-By: ...
 
 If no `<TASK_ID>` can be derived from the branch (true adhoc work on `main` with no task entry), omit the trailer — `/sitrep` correctly classifies adhoc work as "not a task" via the absence of a lock and index entry.
 
-**Trailer placement on existing commits.** If Step 2 enters with no uncommitted changes (the executor in `/claim-task` Step 7e or another upstream step already committed), the most recent commit IS the close-out commit. Verify it carries `Doc-Work: <TASK_ID>` for the current branch's `<TASK_ID>` (resolved per the derivation rule below) by running:
+**Trailer placement on existing commits.** If Step 2 enters with no uncommitted changes (the executor in `/claim-task` Step 7e or another upstream step already committed) and a `<TASK_ID>` resolves for the current branch (per the derivation rule below), look for `Doc-Work: <TASK_ID>` on **every** commit the branch adds to `<default branch>` (Step 0), not on the tip alone: a commit can land after the close-out commit, such as the one `/review-close` Step 2a makes for an ignored file the branch reads. Substitute both operands, quoted, and run:
 
 ```bash
-git log -1 --format=%B | git interpret-trailers --parse | grep -q "^Doc-Work: <TASK_ID>$"
+python3 - <<'PY' "<TASK_ID>" "<default branch>"
+import os, subprocess, sys
+task, base = (sys.argv[1], sys.argv[2]) if len(sys.argv) == 3 else ("", "")
+if not task.strip() or not base.strip() or "<" in task + base:
+    print("ERROR: substitute <TASK_ID> and <default branch> (Step 0), quoted", file=sys.stderr)
+    sys.exit(3)
+
+def git(*args):
+    r = subprocess.run(["git"] + list(args), capture_output=True)
+    return r.returncode, os.fsdecode(r.stdout), os.fsdecode(r.stderr).strip()
+
+def resolves(ref):
+    return git("rev-parse", "--verify", "--quiet", ref + "^{commit}")[0] == 0
+
+# The remote /sitrep reads: `origin` when it exists, else the only remote.
+remotes = [r for r in git("remote")[1].splitlines() if r.strip()]
+remote = ("origin" if git("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")[0] == 0
+          or "origin" in remotes or len(remotes) != 1 else remotes[0])
+# The default branch, local and as last fetched: a workspace may hold either one.
+bases = [r for r in ("refs/heads/" + base, "refs/remotes/" + remote + "/" + base) if resolves(r)]
+if not bases:
+    print("ERROR: neither refs/heads/" + base + " nor refs/remotes/" + remote + "/" + base
+          + " resolves; re-run Step 0", file=sys.stderr)
+    sys.exit(2)
+if git("branch", "--show-current")[1].strip() == base:
+    # On the default branch, the tip alone.
+    walk, read = ["-1", "HEAD"], "the tip of " + base
+else:
+    # The branch's own commits, the set /sitrep reads the trailer from.
+    walk = ["HEAD", "--not"] + bases + ["--glob=refs/sysop/merged-pr-heads/*"]
+    read = "the commits HEAD adds to " + base
+rc, out, err = git("log", "--format=%H%x1f%s%x1f%(trailers:key=Doc-Work,valueonly,separator=%x1f)%x1e", *walk)
+if rc != 0:
+    print("ERROR: git log failed: " + err, file=sys.stderr)
+    sys.exit(2)
+if not out.strip():
+    print("NO COMMITS: HEAD adds no commit to " + base + ", so nothing can carry the trailer")
+    sys.exit(1)
+for rec in out.split("\x1e"):
+    f = rec.strip("\n").split("\x1f")
+    if len(f) > 2 and task in [v.strip() for v in f[2:]]:
+        print("CARRIED: " + f[0][:12] + " " + f[1])
+        sys.exit(0)
+print("NOT CARRIED: no commit in " + read + " carries Doc-Work: " + task)
+PY
 ```
 
-If the trailer is absent, **probe for an upstream first**:
+**Read the line it prints: `CARRIED:` and `NOT CARRIED:` both exit 0.** `CARRIED: <commit> <subject>`: the branch already carries the trailer, so Step 2 writes nothing — no amend, no new commit. `NO COMMITS:` (exit 1): the branch has no work of its own, and its tip is a `<default branch>` commit, so write nothing — no amend, no commit — and stop: tell the human, or under `--non-interactive` end the run as failed with this line as the error. **Any other non-zero exit: stop and show its stderr.** On `NOT CARRIED:`, and only then, **probe for an upstream first**:
 
 ```bash
 git rev-parse --abbrev-ref --quiet '@{u}' >/dev/null 2>&1
@@ -130,7 +174,7 @@ git rev-parse --abbrev-ref --quiet '@{u}' >/dev/null 2>&1
 
 This is the only Step-2 path that could use `--amend`, and the probe-then-branch shape hardens the no-upstream-yet pipeline invariant into a check that catches `/document-work` invocations outside the orchestrated flow before they can rewrite pushed history.
 
-**If invoked with `--non-interactive`** (Phase 6e execution agent): if there are uncommitted changes, stage tracked changes via `git add` (never add `.env`, credentials, or secrets) and commit with a derived message + trailer. Derive `<TASK_ID>` by matching the current branch name (`git branch --show-current`) against `tasks[].branch` first, then by lowercase-mapping the branch suffix back to a task ID (e.g., `tech/tech-foo` → `TECH-FOO`). Format: `<type>: <title> (<TASK_ID>)` for the subject, with `<type>` chosen from the ID prefix (FEAT → feat, TECH → tech, BUG → fix; for any other prefix, the conventional type that fits the change), and `Doc-Work: <TASK_ID>` as the final trailer line. If there are no uncommitted changes, apply the trailer-placement rule above to the most recent commit.
+**If invoked with `--non-interactive`** (Phase 6e execution agent): if there are uncommitted changes, stage tracked changes via `git add` (never add `.env`, credentials, or secrets) and commit with a derived message + trailer. Derive `<TASK_ID>` by matching the current branch name (`git branch --show-current`) against `tasks[].branch` first, then by lowercase-mapping the branch suffix back to a task ID (e.g., `tech/tech-foo` → `TECH-FOO`). Format: `<type>: <title> (<TASK_ID>)` for the subject, with `<type>` chosen from the ID prefix (FEAT → feat, TECH → tech, BUG → fix; for any other prefix, the conventional type that fits the change), and `Doc-Work: <TASK_ID>` as the final trailer line. If there are no uncommitted changes and a `<TASK_ID>` resolves, apply the trailer-placement rule above; with no `<TASK_ID>` there is no trailer to place.
 
 **Interactive invocation (default):** if there are uncommitted changes (staged or unstaged):
 
@@ -139,7 +183,7 @@ This is the only Step-2 path that could use `--amend`, and the probe-then-branch
 3. Ask the user for a brief description of what was done if the changes aren't self-evident from context
 4. Derive `<TASK_ID>` from the current branch using the same resolution as `--non-interactive` (match `tasks[].branch` first, then lowercase-segment mapping). If a `<TASK_ID>` resolves, commit with a conventional message (`fix:`, `feat:`, `refactor:`, `docs:`, `test:`, etc.) AND a `Doc-Work: <TASK_ID>` trailer on the final line. If no `<TASK_ID>` resolves (adhoc on `main`), omit the trailer.
 
-If there are no uncommitted changes, apply the trailer-placement rule above to the most recent commit.
+If there are no uncommitted changes and a `<TASK_ID>` resolves, apply the trailer-placement rule above; with no `<TASK_ID>` there is no trailer to place.
 
 ## Step 3: Write Pending Documentation
 
@@ -171,6 +215,8 @@ summary: "<one-sentence description of the work, including key files affected>"
 > **`summary:` is quoted, and the quotes are load-bearing — do not drop them.** This value is free-form prose written per-branch, and the shapes this workflow's own conventions invite are exactly the ones that break bare YAML. **Every one of the following shapes breaks unquoted, and each is exercised by `tests/test_pending_doc_integrity.py`** — the list is the claim, because a bare ratio over an unshipped corpus is a number a reader cannot check: a conventional-commit prefix (`fix: handle the rollback case`) and any other `": "` raise `ScannerError`; a leading `[` (`[FEAT-0001] add the guard`) raises `ParserError`; a leading `*` raises `ScannerError`. The quiet one is worse than the loud ones — a summary that cites an issue by number (`resolves` followed by a `#`-prefixed number) parses **successfully** and yields just the word `resolves`, because `#` opens a YAML comment, and that truncated summary is what lands in `PROJECT_STATUS.md`. `/auto-fix` and `/auto-judge` already quote this field (their templates emit a `:` and had to); this template is the one a human drives, and it was the one left bare. If the summary itself contains a double quote, escape it (`\"`) or switch the value to single quotes — do not solve it by removing the quoting.
 
 **`hold:` — only when this merge does not finish the task.** If a step outside this branch must still happen before a task in `roadmap_ids` may be marked `done` (a rollout, a check that can only run after deploy, a human step the body lists), add one line to the frontmatter: `hold: "<what is still to be done>"`, quoted like `summary:`. `/review-close` then merges the code and holds this doc, so the task stays `in_progress` until the human finishes the step and runs `python3 sysop/scripts/pending_doc_hold.py clear <TASK_ID>`. Omit the key otherwise, and never write it empty. **Do not use `user_action` for this:** that flag decides whether an agent may take the task, and it gets cleared for that reason. Never write `held_since:` either; `/review-close` stamps it.
+
+**A condition that must be met before the merge never goes in `hold:`**, which nothing reads until the merge is done. Write it in this doc's body under a `## Before merge` heading, or set `manual_smoke: true` in the frontmatter: either one makes `/review-close` Step 3c stop and ask the human before it merges, and the heading also shows them the condition.
 
 **Two ID namespaces — each independently optional.** `roadmap_ids` and `review_task_ids` capture distinct lifecycles and have different consumers; either or both may be `[]`.
 

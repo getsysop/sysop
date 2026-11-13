@@ -810,7 +810,7 @@ SPANS: dict[str, tuple[Path, str, str, bool]] = {
 
 PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_squash_provenance as T; T._print_pins()"
-    "2a landed check": "31548a73d9ad2448",  # Phase 476 (Q-649 (b)): landed reads status --porcelain -z --untracked-files=normal, so a C-quoted ignored link is not uncommitted work and a showUntrackedFiles=no hides none (the round); Phase 387: the span plus feature_branch.py landed, the heredoc moved verbatim, appended fenced so its indentation counts (round 1) (Phase 380: dict(...) env-strip)
+    "2a landed check": "453e84bb87cf5cbe",  # Phase 485 (Q-775): noise asks _ignored_link.py, whose text the pin now reads too; Phase 476 (Q-649 (b)): landed reads status --porcelain -z --untracked-files=normal, so a C-quoted ignored link is not uncommitted work and a showUntrackedFiles=no hides none (the round); Phase 387: the span plus feature_branch.py landed, the heredoc moved verbatim, appended fenced so its indentation counts (round 1) (Phase 380: dict(...) env-strip)
     "2b landed not a target": "b451c64d35fc19a9",
     "4a recorded head": "f6ed79d70fff053f",  # Phase 469 (`Q-766`'s continuation): the bullet names a body the target moved between `open/` and `deferred/`; the scripts and the routing are unchanged. Phase 461 (`Q-730` (1), Wade 2026-10-31; its round: a live copy the branch itself wrote since the base is not named): a body the branch adds that the target has since moved to the other live directory takes the `RE-ADDED:` line (`deferred it at`, `undeferred it at`); the span is unchanged, the two scripts moved. Phase 452 (`Q-547`, Wade 2026-10-31; its round: `--full-name`, and a reopen is not a re-add): `_closed_tasks.py` reads a body's close by its file name before rename pairing, and names a re-added closed body; the bullet routes `RE-ADDED:` with `deleted it`. Phase 446 (`Q-547`): the closed-task check moved into `_closed_tasks.py`, which the pin now reads too, and its round made it read every merge base; Phase 387: the span plus pr_head_check.py, the heredoc moved verbatim, appended fenced so its indentation counts (round 1). Phase 445 (`Q-547`): the check runs under either policy and prints `CLOSED TASK EDITED:`, routed by a new bullet in the span
     "4a local-only onto": "e28d544a201e5344",
@@ -840,7 +840,8 @@ def _located(label: str) -> tuple[str, str, int]:
 # Since Phase 387 (`Q-409` P3) the decided programs of these two spans are shipped scripts,
 # so each pin covers its prose span plus the program it runs.
 _PROGRAMS = {
-    "2a landed check": lambda: subcommand_body("feature_branch.py", "landed"),
+    "2a landed check": lambda: subcommand_body("feature_branch.py", "landed")
+    + (SCRIPTS / "_ignored_link.py").read_text(encoding="utf-8"),  # Phase 485: the link rule it imports
     "4a recorded head": lambda: (SCRIPTS / "pr_head_check.py").read_text(encoding="utf-8")
     + (SCRIPTS / "_closed_tasks.py").read_text(encoding="utf-8"),  # Phase 446: the check it imports
 }

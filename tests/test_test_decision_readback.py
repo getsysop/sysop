@@ -415,6 +415,32 @@ class TestTheFenceScannerMatchesTheWritersItReads:
         rc, out = _run(repo, "CLAIM-1", b, "tasks/open/T.md")
         assert rc == 0 and out.startswith("test-decision record present"), (rc, out)
 
+    def test_a_backtick_run_whose_info_string_holds_a_backtick_is_not_a_fence(self, repo):
+        """`Q-477`, the OPENER side. CommonMark: a backtick fence's info string may not
+        contain a backtick, so the column-0 line below is a paragraph with an inline code
+        span, not a fence. The body is legal and balanced, and its record is real.
+
+        Read as an opener, the phantom fence swallows the record, the `bash` block's
+        info-string line does not close it, and its bare closer does -- so the walk ends
+        balanced and the verdict is `MISSING`, with nothing printed to say why. The repair
+        Step 8 prescribes (replace the section in place) cannot clear that."""
+        body = ("# T\n\n## Requirements\n```a`b``` is inline code, not a fence.\n\n"
+                "## Test decision\ntest tests/x.py proves y\n\n"
+                "## Notes\n```bash\necho hi\n```\n")
+        b = self._commit(repo, "f-opener-backtick-info", body)
+        rc, out = _run(repo, "CLAIM-1", b, "tasks/open/T.md")
+        assert rc == 0 and out.startswith("test-decision record present"), (rc, out)
+        assert "unbalanced" not in out, out
+
+    def test_a_tilde_fence_may_carry_a_backtick_in_its_info_string(self, repo):
+        """The rule is backtick-only. A `~~~` opener whose info string holds a backtick IS a
+        fence, so the heading it quotes is not the record."""
+        body = ("# T\n\n## Plan\n~~~markdown `quoted`\n## Test decision\n"
+                "test only inside a tilde fence\n~~~\n")
+        b = self._commit(repo, "f-tilde-backtick-info", body)
+        rc, out = _run(repo, "CLAIM-1", b, "tasks/open/T.md")
+        assert rc == 1 and out.startswith("MISSING"), (rc, out)
+
 
 class TestTheProbeInternals:
     """Rows the round found living where no fixture reached: which heading wins, whether

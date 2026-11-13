@@ -76,7 +76,7 @@ Read `.claude/settings.json` (and `.claude/settings.local.json` if present) and 
 - `Bash(git worktree list:*)` — the `--porcelain` worktree enumerations from Step 3b on (the one read-only `git` form Sysop ships a rule for — see `_shared/permission-guard.md` § Notes); Steps 1a and 3c read the worktrees through the two scripts below
 - `Bash(python3 sysop/scripts/close_state.py:*)` — Step 1a's worktree classes, Step 1b's `review_tasks.md` shape and Step 1c's archive-rotation pre-check.
 - `Bash(python3 sysop/scripts/git_ro.py:*)` — Step 2a step 1's commit list, and every Step 2b reviewer's git in its pinned checkout: read-only git in a worktree of this repository, where `git -C` binds no rule.
-- `Bash(python3 sysop/scripts/review_pins.py:*)` — Step 2b's conventions clear, baselines, pinned checkouts, their removal, the post-spawn check, the removal of its agents' leaks and the `core.hooksPath` restore.
+- `Bash(python3 sysop/scripts/review_pins.py:*)` — Step 2b's conventions clear, receipt check, baselines, pinned checkouts, their removal, the post-spawn check, the removal of its agents' leaks and the `core.hooksPath` restore.
 - `Bash(python3 sysop/scripts/git_check.py:*)` — Steps 1b's and 3b's tracked-file check, Step 2b's check that reviewers can run their git, and Step 2d's lock read.
 - `Bash(git worktree remove:*)`
 - `Bash(git branch -d:*)`
@@ -211,7 +211,7 @@ The three classes are:
 
 - **`clean-merged`** (`MERGED`) — tip has no commit that main and the recorded PR heads (`refs/sysop/merged-pr-heads/*`) lack, AND `git status --porcelain` is empty. Either a never-touched claim branch or an already-merged-but-not-cleaned-up branch. Safe to remove in Step 6.
 - **`clean-ahead`** (`AHEAD`) — tip has commits ahead of main AND `git status --porcelain` is empty. Normal review path; proceed to Step 2a's commit-based inspection.
-- **`dirty`** (`DIRTY`) — after the symlink downgrade at the end of this bullet, the *significant* set (`git status --porcelain` minus the downgraded lines) is still non-empty. **Paused mid-implementation work.** Step 2a will produce an automatic SKIP verdict for this branch and Step 6 must refuse to touch the worktree. Two classes of noise are already excluded so they don't false-positive into `dirty`: gitignored `sysop/runtime/locks/` and `sysop/runtime/pending-docs/` never appear in `--porcelain` without `--ignored` (this assumes the branch's checked-out `.gitignore` carries the installer's `sysop/runtime/` append — a worktree honors only *committed* ignore rules, so a branch cut before that append was committed will show `?? sysop/runtime/` until it's rebased/merged in; the installer's migration output says to commit the append before claiming); and an untracked symlink whose target is gitignored in the main repo (a `.venv`-into-the-main-venv tooling convenience) is downgraded out of the significant set (BeanRider ISSUE-0043). Everything with reviewable content — modified tracked files, real untracked files, and any symlink whose target is not provably ignored — stays significant, so the silent-data-loss guard is unweakened. A worktree whose `git status` fails prints `DIRTY` with the error as its reason, and one whose commits cannot be counted prints `AHEAD`: neither reads as `clean-merged`, the class Step 6 removes.
+- **`dirty`** (`DIRTY`) — after the symlink downgrade at the end of this bullet, the *significant* set (`git status --porcelain` minus the downgraded lines) is still non-empty. **Paused mid-implementation work.** Step 2a will produce an automatic SKIP verdict for this branch and Step 6 must refuse to touch the worktree. Two classes of noise are already excluded so they don't false-positive into `dirty`: gitignored `sysop/runtime/locks/` and `sysop/runtime/pending-docs/` never appear in `--porcelain` without `--ignored` (this assumes the branch's checked-out `.gitignore` carries the installer's `sysop/runtime/` append — a worktree honors only *committed* ignore rules, so a branch cut before that append was committed will show `?? sysop/runtime/` until it's rebased/merged in; the installer's migration output says to commit the append before claiming); and an untracked symlink whose target is gitignored (a `.venv` link; by the worktree if inside it, else the main repo) is downgraded out of the significant set (BeanRider ISSUE-0043). Everything with reviewable content — modified tracked files, real untracked files, and any symlink whose target is not provably ignored — stays significant, so the silent-data-loss guard is unweakened. A worktree whose `git status` fails prints `DIRTY` with the error as its reason, and one whose commits cannot be counted prints `AHEAD`: neither reads as `clean-merged`, the class Step 6 removes.
 
 Carry each branch's classification into Steps 2a, 3b, and 6 — they all consult it.
 
@@ -576,6 +576,14 @@ What the key covers: `REFERENCE.md` § *Step 2b — verdict reuse*.
      reviewer routing against a different taxonomy.
      If the file is missing or empty, STOP and report exactly that instead of
      reviewing — a review against an assumed taxonomy is worse than no review.
+     Your file tool may refuse a file this size or return only part of it, so
+     read it in pages — offset and limit, at most 100 lines a page, fewer if a
+     page is refused — until a page ends at its last line. Then put this line
+     directly above `ROUTING:` in your findings:
+         READ: <N> lines, last: <the file's last non-blank line, copied exactly>
+     where N is the number your file tool shows on that line. You fill both
+     values; they are left unfilled here on purpose. A verdict without the
+     line, or with one that does not match the file, is void.
 
      ## Instructions
      For each changed file, scan EVERY section given to you above (pasted, or in
@@ -598,6 +606,7 @@ What the key covers: `REFERENCE.md` § *Step 2b — verdict reuse*.
 
      Return your findings in exactly this format:
 
+     READ: <N> lines, last: <line>   (only when you were handed a file above)
      ROUTING:
      - <file path> → <section> › <subsection name(s)>
      (one line per changed file; name the SECTION as well as the subsection —
@@ -701,9 +710,19 @@ What the key covers: `REFERENCE.md` § *Step 2b — verdict reuse*.
 
    **Under `--prepare`, a `VERDICT: BLOCKED` in item 4 below stops only its branch, and on the unpushed-main group halts the prepare** (*`--prepare` and `--resume <run-id>`* (`steps/prepare-resume.md`), item 3).
 
-4. Collect all verdicts **and every `NOTES:` line**, **from both fleets**, and **record the worktree each agent's completion notice names** (Claude Code: its `worktreePath` field, never a path from the agent's reply): `python3 sysop/scripts/review_pins.py own "<path>"`. Only a recorded worktree's uncommitted files are removed later; exit 2 records nothing, so report it and continue. Keep the notes with their target: Step 4 `4a-fix` acts on them once the approved branches have merged, and a note on a target that does not merge this run is reported, not acted on. If **any** subagent returns `VERDICT: BLOCKED`, first record the approvals as the paragraph below says, then list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user. A target skipped at step 0 has **no verdict** — report it as `skipped (doc-only)`, never as `APPROVED`; an agent that was never spawned has approved nothing. **The same rule binds step 3b's gate**: a target with no security-map glob match has no security verdict, and reporting it as approved would claim a review that never ran. A `REUSE` verdict is not that case: an agent reviewed the same key in the run its line dates.
+4. Collect all verdicts **and every `NOTES:` line**, **from both fleets**, and **record the worktree each agent's completion notice names** (Claude Code: its `worktreePath` field, never a path from the agent's reply): `python3 sysop/scripts/review_pins.py own "<path>"`. Only a recorded worktree's uncommitted files are removed later; exit 2 records nothing, so report it and continue. Keep the notes with their target: Step 4 `4a-fix` acts on them once the approved branches have merged, and a note on a target that does not merge this run is reported, not acted on. If **any** subagent returns `VERDICT: BLOCKED`, first check receipts and record the approvals as the two paragraphs below say, then list every violation with its file:line citation and **stop** — do not proceed to Step 3 until violations are fixed or explicitly waived by the user. A target skipped at step 0 has **no verdict** — report it as `skipped (doc-only)`, never as `APPROVED`; an agent that was never spawned has approved nothing. **The same rule binds step 3b's gate**: a target with no security-map glob match has no security verdict, and reporting it as approved would claim a review that never ran. A `REUSE` verdict is not that case: an agent reviewed the same key in the run its line dates.
 
-   **Record each `VERDICT: APPROVED` whose `NOTES:` is `none`**, from both fleets, unless it was reused, with the SHA its agent echoed first, the 64 characters its lookup printed after `KEY:` and, for the convention gate, the lookup's sections. A target whose lookup printed no `KEY:` is not recorded. Under `--dry-run` too: the verdict is a real one.
+   **Check each receipt before you record anything.** For every agent that returned a `VERDICT:` line and was handed a copy by path (step 1's conventions file, or the twin's `ARM: file` `COPY:`), run, from the main checkout's top level, the copy's path and the agent's `READ:` line written out (an empty body when it gave none):
+
+   ```bash
+   python3 sysop/scripts/review_pins.py receipt "<the copy's absolute path>" <<'SYSOP_RECEIPT_EOF'
+   <the agent's READ: line, verbatim>
+   SYSOP_RECEIPT_EOF
+   ```
+
+   `RECEIPT OK` keeps the verdict. **Exit 1 (`MISMATCH:`): the verdict is void.** A void verdict is no verdict: record nothing for it, report `VOID: <target> — <the printed line>` followed by any violations it listed, and stop as a `VERDICT: BLOCKED` stops, under the same `--prepare` rule. **Exit 2: stop and show its output, recording nothing** — the check could not run; a `STOP: usage:` line means `sysop/scripts/` is older than this skill (run `install.sh --update`). A pasted copy takes no receipt. No line of the body may read `SYSOP_RECEIPT_EOF`.
+
+   **Record each `VERDICT: APPROVED` whose `NOTES:` is `none`**, from both fleets, unless it was reused or void, with the SHA its agent echoed first, the 64 characters its lookup printed after `KEY:` and, for the convention gate, the lookup's sections. A target whose lookup printed no `KEY:` is not recorded. Under `--dry-run` too: the verdict is a real one.
 
    ```bash
    # The same sections the lookup was given.
@@ -1846,7 +1865,7 @@ After merge:   <for each branch this close merged, each `## After merge` section
                this close did not run them.
 Close notes:   <N collected: N fixed at close (<fix-sha>), N filed (<ids>), N dropped,
                N not acted on (target did not merge)> (or "none") — Step 4 `4a-fix`.
-               re-check <APPROVED | BLOCKED — dropped | not run: nothing fixed>
+               re-check <APPROVED | BLOCKED — dropped | VOID — dropped | not run: nothing fixed>
                <and `dropped after 4a-post failed` when that arm fired. A note
                 listed for the human to file is not filed: say so.>
 Orchestrator artifacts: <Step 2e's per-branch block, verbatim> (or "none — no branch

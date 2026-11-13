@@ -53,13 +53,23 @@ Subcommands (each prints one line per fact):
         whose policy was never recorded, so this trigger runs on every close that runs Step 4d's
         `arm`. A `--land` invocation runs neither, and applies none of the arm's rules; its
         policy is recorded by `begin`.
-        The read: fenced lines skipped; the first word of the first non-blank line after the
+        The read: fenced lines skipped (a fence closes on a bare marker of its character at
+        least as long, indented at most three columns past its opener, and a backtick run with
+        a backtick after it opens none); the first word of the first non-blank line after the
         heading, split on spaces and tabs, backticks and emphasis marks dropped, lower-cased;
         `direct` when the file, the section or its word is absent. It refuses a word other
         than `direct` or `pr`, and any other heading that starts with the words
         (`## Merge policy: pr`, `### Merge Policy`, `## Merge policy — pr`, and an unrelated
         `### Merge policy history`, which the message says to rename).
-        Exit 2, recording nothing: either refusal. A close must not push `main` on a guess.
+        A fence reader can pair fences wrongly, so the answer must also be unambiguous: every
+        line shaped like those headings is read again with fences ignored, each giving the
+        word under it the same way (fence-marker lines skipped; a heading other than exactly
+        `## Merge policy` gives none). It answers only when those words are one word and the
+        fenced read gives it too, or cannot decide (a fence that never closes over the
+        section); otherwise it refuses, naming the lines, and says to keep one section outside
+        any code block, or above the file's first one. A `## Merge policy` inside a code block
+        is an example, so a file whose only one is fenced refuses unless it says `direct`.
+        Exit 2, recording nothing: any refusal. A close must not push `main` on a guess.
     read-policy <dir>
         The same read of `<dir>/CLAUDE.md`, recording nothing: prints the policy, or exits 2
         with the refusal. `close_batch.sh` reads the policy through it, so there is one reader.
@@ -299,7 +309,105 @@ def records(p: Path) -> list:
 # `direct`: a refusal is loud and a wrong `direct` pushes `main`. An unrelated heading such as
 # `### Merge policy history` is refused too, and the message says to rename it.
 HEADING = re.compile(r"[ \t]{0,3}#{1,6}[ \t]*merge[ \t]+policy\b", re.I)
-FENCE = re.compile(r"[ \t\f\v]*(```|~~~)")
+
+
+def fence_mark(line: str):
+    """`(char, length)` if the line is a fence marker, else None: `security_map_filter.py`'s
+    rule without its indent leg. A backtick run followed by another backtick is an inline span,
+    not a fence (CommonMark). A marker at any indent counts: a fence in a list item sits four
+    spaces in."""
+    s = line.lstrip(" \t\f\v")
+    for ch in ("`", "~"):
+        if s.startswith(ch * 3):
+            n = len(s) - len(s.lstrip(ch))
+            if ch == "`" and "`" in s[n:]:
+                return None
+            return ch, n
+    return None
+
+
+def indent_of(line: str) -> int:
+    """Columns of leading whitespace, a tab to the next multiple of four."""
+    col = 0
+    for ch in line:
+        if ch == "\t":
+            col += 4 - col % 4
+        elif ch in " \f\v":
+            col += 1
+        else:
+            break
+    return col
+
+
+def fence_closes(line: str, open_mark, open_indent: int = 0) -> bool:
+    """Same character, at least as long, no info string, and indented at most three columns
+    past the opener: a list item's four-space ``` inside a column-0 block is content."""
+    mark = fence_mark(line)
+    return (bool(mark) and mark[0] == open_mark[0] and mark[1] >= open_mark[1]
+            and not line.strip().strip(mark[0]) and indent_of(line) <= open_indent + 3)
+
+
+def fenced_read(lines: list) -> tuple:
+    """`(policy, why, open)`: the section read with fences skipped. `open` is True when a fence
+    that never closes hides a merge-policy-shaped line or the section's word, so this read
+    cannot decide; `policy` is then "direct" and means nothing."""
+    fence, at, hidden, found = None, 0, False, False
+    for ln in lines:
+        if fence:
+            if fence_closes(ln, fence, at):
+                fence = None
+            elif HEADING.match(ln):
+                hidden = True
+            continue
+        if fence_mark(ln):
+            fence, at, hidden = fence_mark(ln), indent_of(ln), False
+            continue
+        words = [w for w in re.split(r"[ \t]+", ln) if w]
+        if found and words:
+            word = re.sub(r"[`*_]", "", words[0]).lower()
+            if word in ("direct", "pr"):
+                return word, "declared in CLAUDE.md ## Merge policy", False
+            if words[0].startswith("#"):
+                return "direct", "## Merge policy in CLAUDE.md is empty; default direct", False
+            return "", f"## Merge policy in CLAUDE.md holds {words[0]!r}, not direct or pr", False
+        if found:
+            continue
+        if re.fullmatch(r"## Merge policy[ \t]*", ln):
+            found = True
+        elif HEADING.match(ln):
+            return "", (f"CLAUDE.md has the heading {ln.strip()!r}. If it is the merge policy, "
+                        "write the heading as exactly `## Merge policy` with `direct` or `pr` "
+                        "below it; if it is about something else, rename it so it does not start "
+                        "with the words `Merge policy`"), False
+    if fence and (found or hidden):
+        return "direct", "", True
+    if found:
+        return "direct", "## Merge policy in CLAUDE.md is empty; default direct", False
+    return "direct", "no ## Merge policy in CLAUDE.md; default direct", False
+
+
+def shaped_words(lines: list) -> list:
+    """`(line number, word)` for every merge-policy-shaped line, fences not read: the word is
+    the first word of the next line that is neither blank nor a fence marker, the section
+    rule's way, and `direct` when that line is a heading or there is none. A shaped line that
+    is not exactly `## Merge policy` has no word, as the section rule refuses it: it gets
+    `the heading '<line>'`, which is never one of the two."""
+    out = []
+    for i, ln in enumerate(lines):
+        if not HEADING.match(ln):
+            continue
+        if not re.fullmatch(r"## Merge policy[ \t]*", ln):
+            out.append((i + 1, f"the heading {ln.strip()!r}"))
+            continue
+        word = "direct"
+        for nxt in lines[i + 1:]:
+            words = [w for w in re.split(r"[ \t]+", nxt) if w]
+            if words and not fence_mark(nxt):
+                if not words[0].startswith("#"):
+                    word = re.sub(r"[`*_]", "", words[0]).lower()
+                break
+        out.append((i + 1, word))
+    return out
 
 
 def read_policy(root: Path) -> tuple:
@@ -311,31 +419,36 @@ def read_policy(root: Path) -> tuple:
         text = f.read_bytes().decode("utf-8", errors="replace")
     except OSError:
         return "direct", "no readable CLAUDE.md"
-    fence = found = False
-    for ln in re.split(r"\r\n|\r|\n", text):   # CommonMark's line endings
-        if FENCE.match(ln):
-            fence = not fence
-            continue
-        if fence:
-            continue
-        words = [w for w in re.split(r"[ \t]+", ln) if w]
-        if found and words:
-            word = re.sub(r"[`*_]", "", words[0]).lower()
-            if word in ("direct", "pr"):
-                return word, "declared in CLAUDE.md ## Merge policy"
-            if words[0].startswith("#"):
-                return "direct", "## Merge policy in CLAUDE.md is empty; default direct"
-            return "", f"## Merge policy in CLAUDE.md holds {words[0]!r}, not direct or pr"
-        if found:
-            continue
-        if re.fullmatch(r"## Merge policy[ \t]*", ln):
-            found = True
-        elif HEADING.match(ln):
-            return "", (f"CLAUDE.md has the heading {ln.strip()!r}. If it is the merge policy, "
-                        "write the heading as exactly `## Merge policy` with `direct` or `pr` "
-                        "below it; if it is about something else, rename it so it does not start "
-                        "with the words `Merge policy`")
-    return "direct", "no ## Merge policy in CLAUDE.md; default direct"
+    lines = re.split(r"\r\n|\r|\n", text)   # CommonMark's line endings
+    policy, why, undecided = fenced_read(lines)
+    if not policy and not undecided:
+        return policy, why
+    shaped = shaped_words(lines)
+    if not shaped:
+        return policy, why
+    # A fence reader can pair a fence wrongly, and a wrong `direct` pushes the default branch:
+    # answer only when every merge-policy line and the fenced read give one word.
+    words = {w for _, w in shaped}
+    if len(words) == 1 and words <= {"direct", "pr"}:
+        (word,) = words
+        if undecided:
+            return word, "declared in CLAUDE.md ## Merge policy"
+        if word == policy:
+            return policy, why
+    where = ", ".join(f"line {n}: {w if w.startswith('the heading ') else repr(w)}"
+                      for n, w in shaped)
+    if undecided:
+        how = ", and a code fence that never closes hides one of them"
+    elif len(words) == 1 and words <= {"direct", "pr"}:
+        how = f" once its code fences are read (they read {policy!r})"
+    else:
+        how = ""
+    return "", (f"CLAUDE.md's merge-policy lines ({where}) do not give one answer{how}. A "
+                "`## Merge policy` inside a code block is an example, not the setting: keep one "
+                "`## Merge policy` section, outside any code block, with `direct` or `pr` under "
+                "it, and reword any other line named here that starts with `#` and the words "
+                "`Merge policy`, a comment in a code block included. If it still refuses, move the "
+                "section above the file's first code block, where no fence can be misread")
 
 
 def digest_of(text: str) -> str:

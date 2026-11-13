@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" request-review-land 9763be5ba5a347e8 "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" request-review-land 8606dc81c68e6f42 "<skill directory>"
 ```
 
 It prints `LOADED: request-review-land`. **Exit 2**: stop and show its stderr.
@@ -101,9 +101,9 @@ Run the default-branch resolve and the permission guard above first. Do not run 
    python3 sysop/scripts/close_run.py land-check "<run-id>" "<default branch>"
    ```
 
-   It prints `PR:`, `BRANCH:`, `SHAPE:`, `HEAD:`, `PUSHED FROM:`, `KEEP BRANCH:`, `REPORT:`, a `READER:` line for each thing it read, and a `VERDICT:`. `ALREADY MERGED` reads no reviewer, so its only `READER:` line says when GitHub merged a head other than the recorded one.
+   It prints `PR:`, `BRANCH:`, `SHAPE:`, `HEAD:`, `PUSHED FROM:`, `KEEP BRANCH:`, `REPORT:`, a `READER:` line for each thing it read, a `RE-REQUEST:` line when the park is a timeout, and a `VERDICT:`. `ALREADY MERGED` reads no reviewer, so its only `READER:` line says when GitHub merged a head other than the recorded one.
    - **Exit 5, `VERDICT: WAIT`** — the reviewer has not answered and the timeout has not passed. Report the `READER:` lines and stop; run `--land` again later.
-   - **Exit 4, `VERDICT: PARK`** — nothing merges. Report the `READER:` lines and stop, leaving the PR, branches and locks in place. To go on, `git checkout "<branch>"` with `BRANCH:`'s name; if a `READER:` line says the PR's head moved, first bring that push in with `git fetch origin "+refs/heads/<branch>:refs/remotes/origin/<branch>"` and `git merge --ff-only "origin/<branch>"`. Commit any fix there, run `CLAUDE.md`'s `## Pre-merge verification` commands on it as `4a-post` does, push with `git push origin "refs/heads/<branch>"`, then `git checkout <default branch>` and run `python3 sysop/scripts/close_run.py re-request "<run-id>" "<default branch>"`; run `--land` again later. To give up instead, close the PR on GitHub and run `python3 sysop/scripts/close_run.py abandon "<run-id>"`, then report its `BRANCH:` and `LOCKS_KEPT:` lines.
+   - **Exit 4, `VERDICT: PARK`** — nothing merges. Report the `READER:` lines and stop, leaving the PR, branches and locks in place. To go on, `git checkout "<branch>"` with `BRANCH:`'s name; if a `READER:` line says the PR's head moved, first bring that push in with `git fetch origin "+refs/heads/<branch>:refs/remotes/origin/<branch>"` and `git merge --ff-only "origin/<branch>"`. Commit any fix there, run `CLAUDE.md`'s `## Pre-merge verification` commands on it as `4a-post` does, push with `git push origin "refs/heads/<branch>"`, then `git checkout <default branch>` and run `python3 sysop/scripts/close_run.py re-request "<run-id>" "<default branch>"`; run `--land` again later. **When it printed a `RE-REQUEST:` line**, the park is a timeout and there may be nothing to fix: report that line with the `READER:` lines. The way on is then the command it names, alone, with no checkout, fix, verification run or push. Run it only on the person's word, once for that timeout, never on your own at each timed-out `--land`; run `--land` again later. To give up instead, close the PR on GitHub and run `python3 sysop/scripts/close_run.py abandon "<run-id>"`, then report its `BRANCH:` and `LOCKS_KEPT:` lines.
    - **Exit 0, `VERDICT: ALREADY MERGED`** — skip to Step 4d's command 6.
    - **Exit 0, `VERDICT: MERGE`** — go on.
 

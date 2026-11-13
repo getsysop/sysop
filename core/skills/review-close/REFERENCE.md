@@ -556,8 +556,8 @@ was read off public PRs reviewed by `chatgpt-codex-connector[bot]`, on 2026-10-0
 - **A usage limit** is an issue comment, not a review.
 
 So the reader binds every verdict to the recorded head: a review counts only when its
-`commit_id` is that head; the newest summary comment is read before any review is, and a
-`Running` row waits while one it cannot parse parks; a summary whose every row is `Completed` on
+`commit_id` is that head; the newest summary comment is acted on before any review of the
+head is, with one exception below, and a `Running` row waits while one it cannot parse parks; a summary whose every row is `Completed` on
 that head, with no review of it, is the only clean result; a `+1` never merges, because a reaction
 names no commit and under the PR-reuse shape a review of an earlier head can finish after the
 request (round 1, record lens); a review of another commit submitted after the request is that
@@ -575,6 +575,46 @@ already merged at another head is reported as merged outside the gate, then clea
 it has landed either way. The
 request is posted with `gh api -f`, never `-F`: `-F body=@codex review` would read a file named
 `codex review`.
+
+**The exception: a head review no later review can undo outranks the summary.** The summary
+was read first so that a clean review of the head could not merge while another review of it was
+still running. Read first without exception, it also hid a finding: with a `P1` on the recorded
+head and a `Running` row, the reader answered `wait`, then `timed out: a Codex review is
+running`, and never named the `P1`. Three results of the head's reviews hold whatever a later
+review of that head adds, because the reader takes every review of the head together: a blocking
+badge, a `CHANGES_REQUESTED` review, and a finding with no badge. On those the reader parks,
+lists what it lists without the row, and adds a line saying a review is also running. Under a
+summary it cannot parse, those lines follow that park's own line. A `CHANGES_REQUESTED` review
+is named in the lines wherever it parks; before, only the approval format said so. Through the
+gate such a head reads `failure` where it read `pending`, so an unattended land parks on it
+(`gate-red`, a human's to clear) without waiting out the clock.
+
+**Two results still wait on a `Running` row.** A review of the head that would merge waits,
+because the running review may yet add a finding. A review of the head with **no inline
+finding** waits too: it parks when nothing is running, but a later review of the same head that
+does carry a finding turns the pair into a readable result, so it is not final. The round's
+first fix parked it at once, and a replay showed the gate then failing a head that the old
+reader would have merged a few minutes later. Its line is listed after the wait's, so a timeout
+shows it.
+
+**Rows are not matched to the head.** Any `Running` row holds, and the clean result still needs
+every row `Completed` on the head. The filed fix would have let a `Running` row for another
+commit stand beside a `Completed` one for the head. In 113 summary comments sampled from one
+consumer's pull requests on 2026-11-10, each held one row,
+`Code Review`, and each comment's state block has two keys, `code_review` and `security_review`,
+with a commit apiece. So a second row would be the other kind of review, possibly still running
+on another commit, and letting the head merge past it was declined.
+
+**After a timeout the attended land prints a `RE-REQUEST:` line** naming the command as the
+step file runs it, and the step file tells the runner to run it only on the person's word, once.
+It is not printed when the hand-off holds a `PARKED` record, because `re-request` clears that
+park whatever wrote it. `re-request` on an
+unchanged head posts the request again, moves the record's request time and clears a park
+marker. The line is printed by `land-check` and not by the reader, which the gate shares; the
+unattended land's park is a human's to clear, so it prints none. The one report behind this
+(a summary `Running` for over an hour) says a fresh request on the same head got a completed
+review three minutes later. Nothing here measured that, and a row still `Running` on the next
+read waits again.
 
 **Unverified:** that a `@codex review` comment triggers a review in manual mode (every sampled
 review was triggered by the PR opening). GDP's first manual review settles it; until then a
@@ -699,7 +739,7 @@ the class refuses. Root files are checked in the case the repository tracks them
 
 A `PARKED` record, written by `close_run.py park`, keeps a hand-off for a human: `/sitrep` reports
 its tasks as `land parked`, routed to a human, not to `--land`. A human clears it with
-`re-request` (after a fix), `unpark` (to read again unchanged, refused when no review was
+`re-request` (after a fix, or alone after a timeout), `unpark` (to read again unchanged, refused when no review was
 requested) or an attended `--land` that merges.
 
 ### Why selection does not blame one branch for an unreadable shared doc
@@ -854,7 +894,8 @@ the `sequencer` a multi-commit cherry-pick or revert leaves behind with a clean 
 measured syncing with half the picks applied); so is a detached `HEAD` that continues past the branch's tip,
 whose commits would otherwise be left out of what merges. Round 1 measured the first cut, which read
 only a clone standing on the branch, syncing a clone mid-rebase. Step 1a's ISSUE-0043 downgrade
-applies: an untracked symlink whose target this repository ignores (a `.venv` link) is not dirt.
+applies: an untracked symlink whose target is ignored (a `.venv` link) is not dirt, a target inside
+the clone by the clone's own rules and any other by this repository's (`_ignored_link.py`).
 
 **A clone that lost the work falls back to `origin`** (the maintainer, 2026-10-04, after round 2; it is the
 "or `origin/<branch>` after the clone pushes" half of the original answer). When the lock's clone
@@ -1249,6 +1290,27 @@ the map can fall below.
 A later build moved the measurement into `security_map_filter.py`, which measures the
 target's cut copy rather than the whole map, so the inline arm is reachable again for a target
 whose diff misses most of a localized map. § *Step 2b — the security copy* has the rule.
+
+### Why a reviewer handed a copy by path gives a receipt
+
+The write-once arm told its reviewer to read the copy "IN FULL" and stopped only on a missing or
+empty file. A consumer's copy outgrew one `Read`: its conventions copy was 190 lines and 73 KB,
+and the twin's security copy is handed over the same way. Four sightings there had a reviewer make
+one `Read` that failed for size, or read 30 or 40 lines, or only the headings, and return `APPROVED`. The
+verdict cannot show that, and an `APPROVED` with `NOTES: none` is recorded for reuse, so a later
+close with the same key would inherit it.
+
+The copy stays whole, by an earlier ruling, so the fix is on the reader's side: read in pages,
+then say where the file ended. `READ: <N> lines, last: <line>` carries both the count and the last
+line on the maintainer's choice of the two the filing offered. Neither proves the middle was read: a
+reviewer can get either from `wc -l` or `tail`. What both rule out is the failure seen, a reviewer
+that never reached the end. `review_pins.py receipt` compares them, rather than the runner by eye, so
+the comparison is mechanical; running it is still an instruction, as recording is. Its exit 2 is a
+check that could not run (a path, a missing copy, an older script), so it stops the close rather than
+voiding a verdict and blaming the reviewer. A missing or wrong receipt voids the
+verdict and stops the close as a `BLOCKED` one does, but is reported as `VOID`, never as a
+violation: it failed to read its rules, and any violations it did list are reported beside it. A pasted
+copy takes no receipt, since nothing could be left unread.
 
 ### What the Step 3b disambiguation replaced
 

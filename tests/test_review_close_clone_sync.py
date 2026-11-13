@@ -449,6 +449,26 @@ def test_a_symlink_to_an_unignored_target_is_still_dirt(tmp_path):
     assert "pending changes" in _line(_sync(root).stdout, "DIRTY")
 
 
+def test_a_link_to_the_clones_own_ignored_directory_is_not_dirt(tmp_path):
+    """`Q-775` (Phase 485): a target inside the clone is asked of the clone. This repository
+    answered 128 for a path outside it, so the clone's own `.venv` link read as dirt."""
+    root = _venv_root(tmp_path)
+    clone = _claim(root, "T-1", "feat/cl")
+    (clone / ".venv").mkdir()
+    (clone / "venv").symlink_to(".venv")
+    work = _commit(clone)
+    out = _sync(root).stdout
+    assert "SYNCED" in out and _tip(root, "feat/cl") == work, out
+
+
+def test_a_link_to_the_clones_own_tracked_file_is_still_dirt(tmp_path):
+    root = _venv_root(tmp_path)
+    clone = _claim(root, "T-1", "feat/cl")
+    _commit(clone)
+    (clone / "self").symlink_to("a.txt")
+    assert "— 1 pending changes in" in _line(_sync(root).stdout, "DIRTY")
+
+
 def test_counts_are_counted(tmp_path):
     root = _repo(tmp_path)
     clone = _claim(root, "T-1", "feat/cl")
@@ -925,14 +945,16 @@ def test_the_reject_remedy_no_longer_fetches_from_origin():
 
 from test_fix_in_branch_tier import _pin_hash, _pin_norm, _pin_program  # noqa: E402
 
-PINS = {"1-pre": "ec2720ff5f46bff7",  # Phase 476 (`Q-649` (b)): `clone_sync.py` reads `status --porcelain -z --untracked-files=normal` (`entries`), so a C-quoted name is not dirt, a rename is one change, and a `status.showUntrackedFiles=no` hides no work (the round); Phase 410: from_origin keeps only the line naming refs/heads/<b> (ls-remote tail-matches); Phase 393: `begin` left the section for its own, ahead of the flag sections; Phase 390: begin names 4a-append and 4a-fix, and the close id is written at 4a and 4a-fix; Phase 386: the section plus clone_sync.py; Phase 387's round: appended fenced, so its indentation counts (Phase 380: dict(...) env-strip); Phase 388: + the `close_arms.py begin` paragraph, Phase 355's text unchanged
+PINS = {"1-pre": "2f8c3952023ae866",  # Phase 485 (`Q-775`): `noise` asks `_ignored_link.py`, which asks the clone about a target inside it, and the pin reads it too; Phase 476 (`Q-649` (b)): `clone_sync.py` reads `status --porcelain -z --untracked-files=normal` (`entries`), so a C-quoted name is not dirt, a rename is one change, and a `status.showUntrackedFiles=no` hides no work (the round); Phase 410: from_origin keeps only the line naming refs/heads/<b> (ls-remote tail-matches); Phase 393: `begin` left the section for its own, ahead of the flag sections; Phase 390: begin names 4a-append and 4a-fix, and the close id is written at 4a and 4a-fix; Phase 386: the section plus clone_sync.py; Phase 387's round: appended fenced, so its indentation counts (Phase 380: dict(...) env-strip); Phase 388: + the `close_arms.py begin` paragraph, Phase 355's text unchanged
          "2a step 0a": "389c3c0fb0b60907"}
 # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_review_close_clone_sync as T; T._print_pins()"
 
 
 def _pinned(label: str) -> str:
     # Since Phase 386 the decided program is a shipped script, so 1-pre's pin covers both.
-    return {"1-pre": lambda: _section() + _pin_program(SCRIPT.read_text()), "2a step 0a": _step_0a}[label]()
+    # Phase 485: + `_ignored_link.py`, the tooling-link rule `noise` imports.
+    return {"1-pre": lambda: _section() + _pin_program(SCRIPT.read_text())
+            + _pin_program((SCRIPTS / "_ignored_link.py").read_text()), "2a step 0a": _step_0a}[label]()
 
 
 def _print_pins() -> None:
