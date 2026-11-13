@@ -461,7 +461,7 @@ SPANS: dict[str, tuple[Path, str, str, bool]] = {
                                      "\n>\n", False),
     "4d-1 never started": (CLOSE_MD, "- **First ask whether each failing check ever ran",
                            "- **Report** the PR URL", False),
-    "step 6 reuse held exception": (CLOSE_MD, "**Under the PR-reuse shape both of the above are usually",
+    "step 6 reuse held exception": (CLOSE_MD, "**Under the PR-reuse shape items 1 and 2 are usually",
                                     "\n", False),
     "step 6 direct landed included": (CLOSE_MD, "**`direct` policy — per-branch cleanup.**", "\n", False),
     "step 8 branches": (CLOSE_MD, "Branches:      <merged list", "\nBatches:", True),
@@ -480,7 +480,7 @@ PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_phase360_close_paths as T; T._print_pins()"
     "4d reuse keeps a held branch": "68113945dc69dccd",
     "4d-1 never started": "cafd8ddaf3a66610",
-    "step 6 reuse held exception": "5dc82ba64741ab34",  # Phase 422 (`Q-665`): the remote check is the delete itself; `git ls-remote` is denied under dontAsk
+    "step 6 reuse held exception": "2775331348ed9f81",  # Phase 488 (`Q-750`): "both of the above" became "items 1 and 2", since item 0 now sits above them; Phase 422 (`Q-665`): the remote check is the delete itself; `git ls-remote` is denied under dontAsk
     "step 6 direct landed included": "d5b064330debb2a0",
     "step 8 branches": "e035237e081dc163",
     "2a direct arm prose": "d812fd744bca0064",

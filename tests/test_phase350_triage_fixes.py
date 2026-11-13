@@ -41,7 +41,7 @@ def test_the_gh_api_rule_does_not_describe_a_call_4b_no_longer_makes() -> None:
     assert rule == (
         "- `Bash(gh api:*)` — the ruleset lookup (`repos/{owner}/{repo}/rulesets`) that Step 4d "
         "command 4b's could-not-measure note points at. Command 4b itself is `gh pr view`. "
-        "It also POSTs Step 4d's waived-smoke-FAIL comment under the PR-reuse shape. "
+        "It also POSTs Step 4d's waived-smoke-FAIL comment under the PR-reuse shape, and Step 6 item 0's comment on a superseded PR. "
         "Step 4d-1 reads a failing check's Actions job and its annotations with it. `gh api` "
         "can write, so the rule is a deliberate grant rather than an inference from the verb")
     trigger = _line_with(RC, "**The trigger is PR state, never the merge command's exit status or stderr.**")

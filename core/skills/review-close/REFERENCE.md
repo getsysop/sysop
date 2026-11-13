@@ -806,6 +806,59 @@ collect's own `staleness` subcommand when the measurement learned to pair a rewr
 commits and to read a branch's docs as a set: neither is a step a runner can do by hand, and a
 second copy of the rule is the drift this section was written about.
 
+## Step 5 — provenance
+
+A healthcheck answers "is some revision up", not "is the merged commit up". When a deploy build
+fails, the platform keeps serving the previous revision, so the healthcheck returns 200 on exactly
+the run where the merge never deployed. GDP met this twice: a close where one of the merge's deploy
+builds failed in its test step, and a close where both did. Each time the health URL answered 200,
+and the build status (item 1) showed what the healthcheck could not. Step 5 used to list the build
+wait and the healthcheck side by side, and nothing said the healthcheck counts only after the
+build. A consumer's own staging gate tends to name only the URL (GDP's said only "must return
+200"), so the healthcheck became the whole check.
+
+So every item is keyed to the merge commit's full SHA, and items 2 and 3 count only after every
+build for it has succeeded. A failed build is `broken` rather than a fourth state: the action is
+the same as for any broken staging (stop before cleanup, open a `fix/` branch), and the reason goes
+on the row. The reason names what was observed, the failed build, not "previous revision serving":
+items 2 and 3 do not run after a failure, and a build that fails after its own deploy step leaves
+the merged revision serving.
+
+**The expected builds are the ones listed for the merge commit, read twice.** A push trigger builds
+the pushed head, so every trigger the push fired lists a build for the merge commit's SHA; the
+second listing, after the platform's usual start delay, narrows the window in which a build that
+has not started yet is missed while another one succeeds. It does not close it: a build that starts
+after the second listing is not awaited, and its service is not checked. An earlier shape derived
+the expected set from each trigger's path filter against the files the push changed. Its second
+review round disqualified it: under `direct` the push has already moved `origin/<default branch>`,
+so the obvious range is empty and the step skipped, and no one had established whether a platform
+filters a multi-commit push by its whole range or its head. Listing by SHA needs neither. The path
+filter survives only in the skip, judged against the files the close brought in, which the close
+already knows from its own review, and only once the second listing is empty, so a build either
+listing shows is always awaited and a wrong judgment of the filters cannot hide it. Under `direct`
+with Rule B's merge-first, the obvious diffs give an empty set (`origin/<default branch>` has
+already moved) or the auto-merged commit's files (the merge commit's first parent), which is why
+the step names the files Step 2 reviewed.
+
+**A commit decides; an image or a creation time is read only where no commit is shown.** The
+revision check (item 3) is required only where the platform shows a revision, because not every
+platform does: a version endpoint is the consumer's to add, and creation time is the proxy GDP used
+on Cloud Run. A shown commit is the strongest evidence, and a later commit that contains the merge
+commit counts, because a later deploy (an auto-merge landing after the close) carries the merged
+code. Without a commit, the image digest is next, and it accepts a later build's image on the same
+terms; creation time is last, and a revision created after the merge build started passes it. A
+time read is anchored on the build's start, not its success, because the build's own deploy step
+creates the revision before the build finishes. It cannot tell a concurrent build of another commit
+(under `direct`, Rule B's merge-first makes one) from the merge's own, so the row marks it. Any
+revision that fails the read it gets is `broken`: an earlier wording put that clause on the commit
+read alone, and a failed time read fell through to "not shown". The check catches what the build
+status cannot, a build that succeeded but whose rollout did not. A service with no revision shown
+reads `not shown` on the row, so a reader can tell a confirmed revision from an inferred one.
+
+The skip judges the deploy triggers rather than the old "docs/config only": a configuration file
+under a trigger's path filter (its build file, say) fires a build, and the old clause would have
+skipped it.
+
 ## Step 6 and 4d-1 — provenance
 
 ### Why Step 6 keeps a held doc's branch
@@ -831,6 +884,43 @@ integration shape with no local-only commits — local `main` *is* the squash, a
 `<sha>..<default branch>` names the squash itself on every such close. The rebase it offers replays exactly the late commits; a commit
 already upstream is dropped by `git rebase` as already applied. The unattended Half A must record the SHA
 durably, because the gap there is a whole review wait.
+
+### Why Step 6 comments on a superseded PR, not Step 4a
+
+Under `pr`, a published branch's own PR is closed unmerged by Step 6's remote delete. The comment
+used to be Step 4a item 3's job, in prose with no command, and on a consumer's close the run went
+past it: the PR was closed with no comment. Item 3 could not have been run where it sat anyway:
+the integration PR the comment points at is opened at Step 4d, and Step 6's `pr` cleanup runs only
+once it is `MERGED`. So the lookup sits beside the deletes it guards, keyed to every remote delete
+Step 6 runs rather than to a list Step 4a was meant to carry, and it holds whether or not 4a's item
+was read. In a split close, Half B needs nothing beyond what its Step 6 already reads: `report.md`'s
+lists and `land-check`'s `PR:`. A branch approved as landed by an earlier close's PR gets that PR's
+number, since its commits went through it; that close's HARD RULE kept the branch, so its PR is
+still open.
+
+The post reuses Step 4d's `gh api …/comments -F body=@…` shape. Its two rules, `Bash(gh api:*)` and
+the body file's `Edit` rule, are seeded by every release tag. A new `Bash(gh pr comment:*)` rule
+would be missing from every install made before it, and under `dontAsk` the comment would then be
+denied while the delete still ran. An install that has not run `install.sh --update` since the body
+file's rule was seeded is denied the write. That write failure takes the keep arm, so the branch
+survives with no comment.
+
+The lookup keeps drafts and drops cross-repository heads. Deleting a branch closes a draft PR whose
+head it is. A cross-repository PR with the same head name is not closed, provided `origin` is the
+repository `gh` resolves, which every `pr` step already assumes.
+
+The count matches `Superseded by #<PR>:` with its colon, so a shorter PR number never counts a
+comment naming a longer one that starts with the same digits, and a resumed close does not post
+twice.
+
+A comment that is not there after the post keeps both copies of the branch. So does any failed or
+denied command: a failed `gh pr list` prints nothing, which would otherwise read as "no PR". A PR
+left open costs nothing; a PR closed with no comment is the defect.
+
+Out of reach, and not worth a lookup today:
+- a PR whose *base* is the deleted branch (a stacked PR), which GitHub also closes;
+- a second PR on a reused branch's head, which Step 4d's `gh pr merge --delete-branch`, or the
+  land's own delete of `BRANCH:`, would close.
 
 ### Why a stuck integration-shape PR is recovered on its branch
 

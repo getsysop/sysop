@@ -356,7 +356,7 @@ def test_step6_tolerates_the_absent_integration_branch_under_reuse():
     assert "Do not run that line at all in the PR-reuse shape" in block, (
         "the skip must be an instruction, not a comment buried inside the bash block"
     )
-    assert "PR-reuse shape both of the above are usually already done for you" in block
+    assert "PR-reuse shape items 1 and 2 are usually already done for you" in block
 
 
 # --------------------------------------------------------------------------------------
