@@ -398,6 +398,32 @@ rc3, cur, _ = git("branch", "--show-current")
 head_branch = cur.strip() if rc3 == 0 else ""
 worktree_rev = f"{out.strip()}@{out2.strip()}" if rc == 0 and rc2 == 0 else "HEAD unresolved"
 
+# A branch Step 2a step 0b approved as landed has every commit in a merged PR's head or in the
+# default branch. A signal on it honours an answer recorded to it at any close, and is otherwise
+# asked with an `ALREADY MERGED:` line: a branch can land at its first close with a doc written
+# straight into main, so nothing proves an earlier close asked. Run the check step 0b runs, so the
+# two read one rule. Anything it cannot say plainly reads as not landed: the signal is asked unmarked.
+landed, landed_notes = {}, []   # approved branch -> "PR #<N>" or "in <ref>"
+_landed_check = Path(__file__).resolve().with_name("feature_branch.py")
+for _b in sorted(approved):
+    if not _landed_check.is_file():
+        landed_notes.append(f"LANDED CHECK: not read for `{_b}` (no {_landed_check.name} beside "
+                            "this script), so its signals are asked")
+        continue
+    try:
+        _r = subprocess.run([sys.executable, str(_landed_check), "landed", _b, default_branch],
+                            cwd=str(repo), capture_output=True, text=True, timeout=120, env=_GIT_ENV)
+        _out, _why = _r.stdout, (f"exit {_r.returncode}" if _r.returncode else "")
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as e:
+        _out, _why = "", str(e)
+    _m = re.match(r"LANDED: (PR #\d+|in \S+) — ", _out)
+    if not _why and _m:
+        landed[_b] = _m.group(1)
+    elif _why or not _out.startswith("NOT LANDED"):
+        _first = (_out.strip().splitlines() or [""])[0]
+        landed_notes.append(f"LANDED CHECK: not read for `{_b}` ({_why or 'unrecognised output'}"
+                            f"{': ' + _first if _first else ''}), so its signals are asked")
+
 def doc_ids(fm):
     # Phase 23a compat shim: roadmap_ids OR task_ids — the order Step 4c 1c reads them in.
     return id_list(fm.get("roadmap_ids")) or id_list(fm.get("task_ids"))
@@ -570,17 +596,30 @@ def merged_body(at, rev, sha, body_git, tip_text):
                        else f"{tip} — the branch tip, the text that is merging"), note
     return texts, f"{head} {'and ' if merged else ''}{'; and '.join(segs)}", note
 
-signals = []     # (source, read, held note or None, carrier doc label or None, key or None, text, approved branch or None)
+signals = []     # (source, read, held note or None, carrier doc label or None, key or None, text,
+                 #  approved branch or None, how that branch landed or None)
 answered = []    # (source, first line, decision, date, key, carrier doc label)
 not_in_run = []
 
 def emit(src, read, carrier, sec, branch=None):
     """One signal. A signal carried by a pending doc gets a KEY naming that doc; an answer
-    recorded there is honoured only while the doc is not merging."""
+    recorded there is honoured while the doc is not merging, or while the branch the signal's
+    work merges on is one step 0b found landed. A landed branch's signal with no such answer
+    is asked, marked with how the branch landed."""
     if branch is None and carrier is not None and branch_of(fms[carrier]) in approved:
         branch = branch_of(fms[carrier])
+    if branch in landed:
+        k = key_of(sec)
+        a = answered_in(carrier, k) if carrier is not None else None
+        if a:
+            answered.append((src, sec.strip().splitlines()[0], a.get("decision"),
+                             a.get("date", "?"), k, label(carrier)))
+        else:
+            signals.append((src, read, None, label(carrier) if carrier is not None else None,
+                            k if carrier is not None else None, sec, branch, landed[branch]))
+        return
     if carrier is None:
-        signals.append((src, read, None, None, None, sec, branch))
+        signals.append((src, read, None, None, None, sec, branch, None))
         return
     k = key_of(sec)
     fm = fms[carrier]
@@ -593,7 +632,7 @@ def emit(src, read, carrier, sec, branch=None):
         note = not_merging_note(fm, held_reasons(carrier, fm))
     else:
         note = None
-    signals.append((src, read, note, label(carrier), k, sec, branch))
+    signals.append((src, read, note, label(carrier), k, sec, branch, None))
 
 # (a) pending-doc body scan
 for md in pending_files:
@@ -624,6 +663,8 @@ smoke_ids = {}   # task id -> the approved branch it merges on, or None
 declared = set() # task ids with `manual_smoke: true` on an index read for that link
 carriers = {}    # task id -> every pending doc naming it, in scan order
 held_links = {}  # a HELD doc links nothing: its task is not merging in this close
+links = {}       # task id -> every approved branch whose doc links it (a lock overrides below)
+merging_open = {}    # task id -> merging docs on no approved branch that link it (`branch: <default>`)
 # source 1 — pending-doc frontmatter. An undeclared task is linked only by an approved branch.
 for md in pending_files:
     fm = fms[md]
@@ -631,9 +672,13 @@ for md in pending_files:
     b = branch_of(fm)
     on = b if b in approved else None
     for tid in doc_ids(fm):
+        if not on and not hid and not not_merging(md, fm):
+            merging_open.setdefault(tid, []).append(md)
         dec = flagged(tid, on)
         if not dec and not on:
             continue
+        if on:
+            links.setdefault(tid, set()).add(on)
         carriers.setdefault(tid, []).append(md)
         if dec:
             declared.add(tid)
@@ -658,87 +703,136 @@ if approved:
                 smoke_ids[tid] = lock_branch
                 if flagged(tid, lock_branch):
                     declared.add(tid)
+# A task a landed branch links is merging all the same when another approved branch's doc, or a
+# merging doc on no approved branch, links it: read it there, so no answer recorded on the landed
+# branch covers it and it is asked unmarked. A lock names one branch per task, so it is never the
+# other link.
+for tid, rev in list(smoke_ids.items()):
+    if rev in landed:
+        merging = sorted(b for b in links.get(tid, ()) if b not in landed)
+        if merging:
+            smoke_ids[tid] = merging[0]
+        elif tid in merging_open:
+            smoke_ids[tid] = None
 for tid in sorted(set(held_links) - set(smoke_ids)):
     not_in_run.append(f"NOT IN THIS RUN: tasks/index.yml § {tid} — linked only by held doc "
                       f"{label(held_links[tid])}, so its body's procedure is not asked")
 
-seen_lc = "\n".join(s[5] for s in signals).lower()
-for tid in sorted(smoke_ids):
+def revs_of(tid):
+    """Every approved branch the task's body merges from: the one chosen above, then each other
+    branch that links it and has not landed. Each tip merges its own text, so one can hold the body,
+    or a procedure heading, that the other does not. A landed branch is never added."""
     rev = smoke_ids[tid]
-    dec = tid in declared
-    body_rel = str(entry_of(tid, rev).get("body") or "")
-    src = f"tasks/index.yml § {tid}"
-    # A task an approved branch claims is merging, so its answers live only in a merging doc.
+    if rev is None or rev in landed:
+        return [rev]
+    return [rev] + sorted(b for b in links.get(tid, ()) if b not in landed and b != rev)
+
+def carrier_of(tid, rev):
+    """The pending doc a signal's answer is recorded in. A task an approved branch claims is
+    merging, so it is carried by a merging doc, that branch's own first. A task read unbranched is
+    carried by a merging doc on no approved branch when one links it, never by a held or not-merging
+    one whose recorded answer would then cover work that lands with this close."""
     docs = carriers.get(tid, [])
-    carrier = (next((d for d in docs if not not_merging(d, fms[d])), None) if rev
-               else (docs[0] if docs else None))
-    # A DECLARED smoke whose body cannot be read, or carries no recognisable
-    # procedure heading, is a signal — not silence. The declaration is the ask;
-    # a missing procedure makes the ask louder, not absent.
-    if not body_rel:
-        if dec:
-            emit(src, "nothing — no `body:` recorded", carrier,
-                 "(manual_smoke: true, but the task has no `body:` — "
-                 "ask the human what the procedure is)", rev)
-        continue
-    body_git = body_rel if body_rel.startswith("tasks/") else "tasks/" + body_rel
-    body_path = repo / body_git
-    # The path comes from the first index carrying the task; the content from the approved
-    # branch's tip, read in that branch's workspace when one is known.
-    texts, read, tip_err = None, None, ""
     if rev:
+        return (next((d for d in docs if branch_of(fms[d]) == rev), None)
+                or next((d for d in docs if not not_merging(d, fms[d])), None))
+    return merging_open[tid][0] if tid in merging_open else (docs[0] if docs else None)
+
+# A pending doc's signal hides the same text in a task body. One marked as on a landed branch hides
+# it on that branch only: the text in a task merging elsewhere is asked there, unmarked.
+seen_lc = "\n".join(s[5] for s in signals if s[7] is None).lower()
+seen_landed = {b: "\n".join(s[5] for s in signals if s[7] is not None and s[6] == b).lower()
+               for b in landed}
+for tid in sorted(smoke_ids):
+    dec = tid in declared
+    src = f"tasks/index.yml § {tid}"
+    # Each branch's index can name the body (the first index carrying the task wins); the content
+    # comes from that branch's tip, read in its workspace when one is known.
+    paths, reads, failed = [], [], []   # (rev, body_rel, body_git); (rev, body_rel, texts, READ); (rev, error)
+    for rev in revs_of(tid):
+        body_rel = str(entry_of(tid, rev).get("body") or "")
+        if not body_rel:
+            continue
+        body_git = body_rel if body_rel.startswith("tasks/") else "tasks/" + body_rel
+        paths.append((rev, body_rel, body_git))
+        if not rev:
+            continue
         ws = branch_ws.get(rev)
         at = ["-C", str(ws)] if ws else []
         rc, sha, tip_err = git(*at, "rev-parse", "--verify", "--quiet", f"refs/heads/{rev}^{{commit}}")
         rc2, shown, err2 = git(*at, "show", f"refs/heads/{rev}:{body_git}")
         if rc == 0 and rc2 == 0:
             texts, read, mnote = merged_body(at, rev, sha.strip(), body_git, shown)
+            reads.append((rev, body_rel, texts, read))
             if mnote:
                 tip_notes.append(f"MERGE NOT READ: tasks/index.yml § {tid} at `{rev}`: {mnote}")
-        else:
-            tip_err = err2 or tip_err or "ref does not resolve"
-    if texts is None and body_path.is_file():
-        texts = [body_path.read_text(encoding="utf-8", errors="replace")]
-        read = f"working tree ({worktree_rev})" + (
-            f" — could NOT be read at `{rev}` ({tip_err}), so this may not be the text "
-            "that is merging" if rev else " — no approved branch in this run claims this task")
-    if (rev and not dec and not (read or "").startswith(f"{rev}@")
-            and git(*(["-C", str(branch_ws[rev])] if rev in branch_ws else []),
-                    "cat-file", "-e", f"refs/heads/{rev}:{body_git}")[0] == 0):
-        tip_notes.append(f"BODY NOT READ: tasks/index.yml § {tid} at `{rev}` ({tip_err}); "
-                         "a procedure heading there is not seen")
-    if texts is None:
+            continue
+        tip_err = err2 or tip_err or "ref does not resolve"
+        failed.append((rev, tip_err))
+        if not dec and git(*at, "cat-file", "-e", f"refs/heads/{rev}:{body_git}")[0] == 0:
+            tip_notes.append(f"BODY NOT READ: tasks/index.yml § {tid} at `{rev}` ({tip_err}); "
+                             "a procedure heading there is not seen")
+    # A DECLARED smoke whose body cannot be read, or carries no recognisable
+    # procedure heading, is a signal — not silence. The declaration is the ask;
+    # a missing procedure makes the ask louder, not absent.
+    if not paths:
+        rev = smoke_ids[tid]
         if dec:
-            emit(src, f"nothing — `{body_git}` not found", carrier,
-                 f"(manual_smoke: true, but its body `{body_rel}` is not "
+            emit(src, "nothing — no `body:` recorded", carrier_of(tid, rev),
+                 f"(manual_smoke: true on {tid}, but the task has no `body:` — "
+                 "ask the human what the procedure is)", rev)
+        continue
+    rev, body_rel, body_git = paths[0]
+    # No tip showed the body: the working tree's copy, said to be so, rather than nothing.
+    if not reads and (repo / body_git).is_file():
+        tried = " or ".join(f"`{r}` ({e})" for r, e in failed)
+        reads.append((rev, body_rel, [(repo / body_git).read_text(encoding="utf-8", errors="replace")],
+                      f"working tree ({worktree_rev})" + (
+                          f" — could NOT be read at {tried}, so this may not be the text "
+                          "that is merging" if failed
+                          else " — no approved branch in this run claims this task")))
+    if not reads:
+        if dec:
+            emit(src, f"nothing — `{body_git}` not found", carrier_of(tid, rev),
+                 f"(manual_smoke: true on {tid}, but its body `{body_rel}` is not "
                  f"readable from here — ask the human what the procedure is)", rev)
         continue
     found, shown_here = False, set()
-    for sec in (x for t in texts for x in extract_sections(t)):
-        found = True
-        if sec.lower() in seen_lc or sec in shown_here: continue
-        shown_here.add(sec)
-        emit(src, read, carrier, sec, rev)
+    for rev, body_rel, texts, read in reads:
+        for sec in (x for t in texts for x in extract_sections(t)):
+            found = True
+            if (sec.lower() in seen_lc or sec in shown_here
+                    or (rev in landed and sec.lower() in seen_landed[rev])):
+                continue
+            shown_here.add(sec)
+            emit(src, read, carrier_of(tid, rev), sec, rev)
     if not found and dec:
-        emit(src, read, carrier,
-             "(manual_smoke: true, but no procedure heading matched in "
+        rev, body_rel = reads[0][:2]
+        read = "; ".join(r[3] for r in reads)   # every tip scanned, not only the first
+        emit(src, read, carrier_of(tid, rev),
+             f"(manual_smoke: true on {tid}, but no procedure heading matched in "
              f"`{body_rel}` — ask the human what the procedure is)", rev)
 
 print("NO_SMOKE_REQUIRED" if not signals else f"SMOKE_REQUIRED: {len(signals)} signal(s)")
 for src, first, decision, date, k, doc in answered:
     print(f"PREVIOUSLY ANSWERED: {src} — {decision} on {date} (key {k}, recorded in {doc}): {first}")
+for line in landed_notes:
+    print(line)
 for line in not_in_run:
     print(line)
 if origin_note:
     print(origin_note)
 for line in tip_notes:
     print(line)
-for src, read, note, carrier, k, sec, branch in signals:
+for src, read, note, carrier, k, sec, branch, how in signals:
     print("---SIGNAL---")
     print(f"SOURCE: {src}")
     print(f"READ: {read}")
     if branch:
         print(f"BRANCH: {branch}")
+    if how:
+        print(f"ALREADY MERGED: {how} — Step 2a approved this branch as landed; no recorded answer "
+              "covers this section")
     if note:
         print(f"NOT MERGING: {note}")
     if carrier:

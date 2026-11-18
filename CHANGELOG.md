@@ -7,6 +7,59 @@ a check that now runs. Each entry is dated by the snapshot's publication and nam
 private development phases it carries. The per-phase journal those phases were recorded in is the
 maintainer's working record and is not in the public tree.
 
+## 2026-11-18 — v0.2.9, private phases 491–495
+
+- **`v0.2.9`.** This snapshot is tagged `v0.2.9`, with a GitHub Release carrying this entry.
+  The next bullet is an instruction; the rest are what changed, each a fix to shipped behaviour.
+  `--ref` pins to it as it does to the earlier tags, once the tag is fetched into your clone.
+- **Update the plugin and run `install.sh --update`: the plugin alone carries two of the four
+  fixes.** The plugin update brings the first and the last in full: Step 2d's test record is skill
+  text, and Step 6's lock release runs on `v0.2.8`'s `close_batch.sh`, whose change here is only the
+  advice it prints. Nothing stops a close on the older scripts (measured: `v0.2.8`'s
+  `close_arms.py` accepts the four changed `/review-close` step files' `loaded` lines). The two
+  manual-smoke fixes are in `sysop/scripts/smoke_detect.py`, and `/sitrep`'s route for a kept batch
+  lock is in `sysop/scripts/sitrep_survey.py`; until `install.sh --update` (or
+  `sysop/scripts/sysop-update.sh`) refreshes them, a close asks its smoke questions as before.
+- **`/review-close` stops halting a pure refactor whose test record names the suite it left
+  unchanged.** Step 2d checked a `test <X> proves <Y>` record only against the diff, so a branch
+  whose proof was an existing suite, deliberately run unchanged, read as "a test that wasn't
+  delivered" and halted the close. The task schema has always allowed the named test to be existing
+  or new. The record is now met when the diff adds or modifies the test, or when every test file X
+  names is present at the branch tip (and any test or function it names is in that file); the close
+  prints a line for each record met the second way, and its report's `Test decisions:` names them. Whether X passes is still the pre-merge
+  verification's question, not this one's.
+- **`/review-close` honours a smoke answer given for a branch an earlier close already landed.**
+  Step 3c read a branch Step 2a approved as landed as merging, so an answer recorded to one of its
+  manual-smoke sections at an earlier close was never used, and every consolidating close asked
+  again with nothing saying the work had already merged. A matching recorded answer is now reported
+  (`PREVIOUSLY ANSWERED:`); a signal with none is still asked, with an `ALREADY MERGED: PR #N` (or
+  `in <branch>`) line in its block. A task that a branch still merging also links is asked there,
+  unmarked. When the landed check cannot run, a `LANDED CHECK:` line says why and the signal is
+  asked unmarked. The behaviour is in `sysop/scripts/smoke_detect.py`, so it reaches a close once
+  `install.sh --update` refreshes the script; until then the close asks as before.
+- **`/review-close` reads a task's manual-smoke procedure on every branch merging it.** When two
+  approved branches both linked a task, Step 3c read the task body at the first one's tip only, so
+  a procedure heading, or the whole body, that only the second branch carried was never seen and
+  the close printed `NO_SMOKE_REQUIRED`. Each merging branch's tip is now read, and a section is
+  asked once, naming the branch it came from. A task no approved branch links is now carried by a
+  pending doc whose work merges with this close when one links it, so an answer recorded in a held
+  or other not-merging doc no longer covers it. Both are in `sysop/scripts/smoke_detect.py`, so
+  they reach a close once `install.sh --update` refreshes the script.
+- **`/review-close` releases a review batch's lock once its `pr` close has merged.** Under `pr`
+  policy Step 4b keeps each batch's `BATCH-<N>.lock`, park marker and claim directory until the
+  merge lands, and nothing released them afterwards: they stayed until someone removed them by
+  hand, and the batch went on reading as in flight. Step 6 now re-runs `close_batch.sh` from the
+  default branch once the PR has merged, for the batches the tracker there reads finished whose
+  branch has no live worktree (a batch claimed again while the PR waited keeps its lock), and
+  checks that it made no commit; a split close's `report.md` carries the set as `Batches:`, and a
+  hand-off written before that line names the command instead. The step reaches a close with the
+  plugin. `install.sh --update` brings the matching `close_batch.sh` message and `/sitrep`'s route
+  for such a lock: `close_batch.sh <N>` from the default branch, which also removes the park marker
+  and claim directory, where its old advice was to `rm` the lock. A lock or claim directory an
+  earlier close left is not released by this step; run `bash sysop/scripts/close_batch.sh <N>`
+  from the default branch while the batch is still in `review_tasks.md` (an archived batch is not
+  found there, so remove its files by hand).
+
 ## 2026-11-13 — v0.2.8, private phases 487–490
 
 - **`v0.2.8`.** This snapshot is tagged `v0.2.8`, with a GitHub Release carrying this entry.

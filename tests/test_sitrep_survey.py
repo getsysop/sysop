@@ -893,6 +893,69 @@ def test_discrepancy_no_stale_lock_when_workspace_exists_or_empty(tmp_path):
     assert ds == []
 
 
+@pytest.mark.parametrize("status", ["Merged", "Complete", "Ready for Review"])
+def test_discrepancy_stale_batch_lock_on_a_finished_batch_routes_to_close_batch(tmp_path, status):
+    """`Q-749`: under `pr` policy Step 4b defers a batch's lock release, so a lock can
+    outlive its close. Its route is `close_batch.sh`, which also removes the park marker
+    and claim directory; the generic `rm` advice leaves both."""
+    gone = tmp_path / "gone"
+    batches = [{"number": 7, "status": status, "branch": "batch/7"}]
+    with mock.patch.object(ss, "resolve_default_branch", lambda root: "trunk"), \
+         mock.patch.object(ss, "_main_checkout_branch", lambda root: "trunk"):
+        ds = _run_discrepancies(locks=[_dlock("BATCH-7", workspace=str(gone))],
+                                review_batches=batches)
+    assert [d.kind for d in ds] == ["stale lock"]
+    assert f"Batch 7 reads {status} on trunk, so the lock outlived its close" in ds[0].detail
+    assert ds[0].suggestion.startswith(
+        "bash sysop/scripts/close_batch.sh 7 (from the main checkout, on trunk)")
+    assert "rm " not in ds[0].suggestion.split(":")[0]
+
+
+@pytest.mark.parametrize("default,checked_out,batches", [
+    # The main checkout left on an integration branch: its tracker reads the batch
+    # `Merged` before the PR has merged (Phase 494's round, lens A).
+    ("trunk", "merge/review-close-X", [{"number": 7, "status": "Merged", "branch": "batch/7"}]),
+    ("trunk", "", [{"number": 7, "status": "Merged", "branch": "batch/7"}]),  # detached
+    ("", "trunk", [{"number": 7, "status": "Merged", "branch": "batch/7"}]),  # unresolved default
+    # Two batches numbered 7: `close_batch.sh 7` refuses the ambiguity, so no route to it.
+    ("trunk", "trunk", [{"number": 7, "status": "In Progress", "branch": "batch/7"},
+                        {"number": 7, "status": "Merged", "branch": "batch/7b"}]),
+])
+def test_discrepancy_finished_batch_route_needs_the_default_branchs_tracker(
+        tmp_path, default, checked_out, batches):
+    gone = tmp_path / "gone"
+    with mock.patch.object(ss, "resolve_default_branch", lambda root: default), \
+         mock.patch.object(ss, "_main_checkout_branch", lambda root: checked_out):
+        ds = _run_discrepancies(locks=[_dlock("BATCH-7", workspace=str(gone))],
+                                review_batches=batches)
+    assert [d.kind for d in ds] == ["stale lock"]
+    assert ds[0].suggestion.startswith("investigate; rm ")
+    assert "outlived its close" not in ds[0].detail
+
+
+@pytest.mark.parametrize("task_id,batches", [
+    ("BATCH-7", [{"number": 7, "status": "Pending", "branch": "batch/7"}]),  # live batch
+    ("BATCH-7", []),  # batch not in the tracker
+    ("FEAT-7", [{"number": 7, "status": "Merged", "branch": "batch/7"}]),  # not a batch lock
+])
+def test_discrepancy_stale_lock_keeps_the_generic_route_otherwise(tmp_path, task_id, batches):
+    gone = tmp_path / "gone"
+    ds = _run_discrepancies(locks=[_dlock(task_id, workspace=str(gone))],
+                            review_batches=batches)
+    assert [d.kind for d in ds] == ["stale lock"]
+    assert ds[0].suggestion.startswith("investigate; rm ")
+    assert "outlived its close" not in ds[0].detail
+
+
+def test_discrepancy_finished_batch_lock_with_a_live_workspace_is_not_reported(tmp_path):
+    """A `batch_work.sh --force` follow-up claim on a finished batch keeps its worktree,
+    so it is live work, not a leftover."""
+    batches = [{"number": 7, "status": "Merged", "branch": "batch/7"}]
+    ds = _run_discrepancies(locks=[_dlock("BATCH-7", workspace=str(tmp_path))],
+                            review_batches=batches)
+    assert ds == []
+
+
 def test_discrepancy_orphan_worktree_no_lock_no_index():
     """A non-main worktree whose branch resolves to no lock and no index entry."""
     ds = _run_discrepancies(

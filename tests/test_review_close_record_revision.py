@@ -292,8 +292,34 @@ PINS: list[tuple[str, str, str]] = [
      "once the clean-tracked-tree gate above passes",
      "the both-shapes note; a partial revert here restores 'run the reset in both shapes' "
      "unconditionally and no other pin covers it"),
+    ("2d",
+     "**(b)** X names an existing test the branch leaves unchanged (`tasks/schema.md` § Test decision: *\"existing or new\"*), and every test file X names is at the branch tip: read each with `git show \"refs/heads/<branch>:<path>\"`, quoted as in step 1, and when X names a specific test/function, find that name in the file you read.",
+     "`Q-533` (Phase 491): the schema allows an existing test, and a pure refactor's proof is the "
+     "suite it must leave unchanged. Without this leg the arm halted exactly that close."),
+    ("2d",
+     "Note a (b) pass in one line (`2d: <branch>/<task id> — test-proves met by an unchanged test at the tip`).",
+     "the one place a person sees that a record was met without the diff touching a test"),
+    ("2d",
+     "including an X that names a test by name alone, with no file, that the diff does not touch",
+     "leg (b) reads named files only; without this clause a bare name reads as met or unasked"),
+    ("2d",
+     "whether X passes, or is weak, is out of scope here for an existing test as for a new one",
+     "existence at the tip was chosen over running X at Step 2d; a run here is a different gate"),
+    ("2d",
+     "A path absent from the tip (step 1's first fatal, or `fatal: path '…' exists on disk, but not in '…'` when the main checkout still has it) does not meet (b); any other failed read is `unreadable`.",
+     "keeps leg (b) from turning a failed read into a pass, or into `not delivered`. The round "
+     "(lens A) found the second fatal: a test the branch deleted, which main's checkout still has."),
+    ("2d",
+     "X is here when **either** holds.",
+     "the round's M1: 'both hold' made leg (b) unable to pass on its own with every other pin green"),
+    ("2d",
+     "If neither holds",
+     "the round's M2: 'If (a) fails' restored the diff-only halt with every other pin green"),
+    ("2d",
+     "a `verified` met by `test-proves` leg (b) also carries its `<branch>/<task id>`",
+     "carries the (b) line into Step 8's tally, the only place a person sees it after the run"),
     ("step8",
-     "Test decisions: <N verified, N waived, N not-owed, N held-for-fix, N unreadable, N doc-only>",
+     "Test decisions: <N verified (at the tip, unchanged: <branch>/<task id>, …), N waived, N not-owed, N held-for-fix, N unreadable, N doc-only>",
      "the report a human actually reads. The first version tallied `unreadable` in Step 2d and "
      "never added it here, while the check that claimed to cover 'Step 8's tally' read Step 2d."),
 ]
@@ -309,6 +335,7 @@ FORBIDDEN: list[tuple[str, str, str]] = [
     ("2d", "count `not owed` as a waiver", "restores the conflation the split removed"),
     ("2d", "offer it whenever the record is missing", "unscopes the fourth disposition"),
     ("2d", "the run directory is the signal", "rebuilds the proxy the measurement rejected"),
+    ("2d", "If the diff touches **no** test file at all", "restores the diff-only `test-proves` arm (`Q-533`)"),
     ("2a", "**not at the branch tip**", "reverses the sibling read"),
     ("step6", "stash for them", "reverses the no-stash rule"),
     ("step6", "git clean", "falsifies the untracked-files-are-safe claim in place"),
@@ -562,9 +589,40 @@ MUTATIONS: list[tuple[str, Callable[[str], str]]] = [
     ("P7 restore Step 2a's false path gloss", _sub(
         "there is no `tasks/in_progress/` directory in any shipped layout",
         "the body lives under `tasks/<status>/`")),
+    ("Q533a drop leg (b), restoring the diff-only arm", _sub(
+        "**(b)** X names an existing test the branch leaves unchanged",
+        "**(b)** X names a new test")),
+    ("Q533b a failed tip read meets leg (b)", _sub(
+        "A path absent from the tip (step 1's first fatal, or `fatal: path '…' exists on disk, but not in '…'` when the main checkout still has it) does not meet (b); any other failed read is `unreadable`.",
+        "A path absent from the tip still meets (b).")),
     # ---- population ----
     ("Z blank the whole skill", lambda t: ""),
 ]
+
+
+def _test_proves_bullet(text: str) -> str:
+    """The Step 2d `test-proves` verification bullet: from its marker to the next list item or
+    blank line, so a rewrap inside it keeps it whole."""
+    sec = _slice(text, "2d")
+    marker = '- **`test-proves` → "plan said test X'
+    if sec.count(marker) != 1:
+        return ""
+    body = sec[sec.index(marker):]
+    ends = [i for i in (body.find("\n- "), body.find("\n\n")) if i > 0]
+    return body[:min(ends)] if ends else body
+
+
+def test_leg_b_sits_in_the_test_proves_bullet():
+    """`Q-533` (Phase 491), the round's M10: the pins are scoped to section 2d, so moving leg (b)
+    under the `missing` bullet kept them green. Leg (b), its absent-path rule and the halt must be
+    in the `test-proves` bullet itself."""
+    bullet = _flat(_test_proves_bullet(_text()))
+    assert bullet, "no single `test-proves` verification bullet in Step 2d"
+    for span in ("X is here when **either** holds.",
+                 "**(b)** X names an existing test the branch leaves unchanged",
+                 "does not meet (b); any other failed read is `unreadable`.",
+                 "If neither holds"):
+        assert span in bullet, f"not in the test-proves bullet: {span!r}"
 
 
 @pytest.mark.parametrize("name,mutate", MUTATIONS, ids=[m[0] for m in MUTATIONS])

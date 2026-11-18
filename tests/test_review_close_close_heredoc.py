@@ -355,7 +355,9 @@ def test_final_report_template_carries_parked_markers_row():
     # Phase 219 (`Q-237`): the row is now sourced from what Step 4c PRINTED, rather than
     # naming a shape the agent had to fill from memory. Pin the sourcing, not the shape.
     assert 'Parked markers: <the `PARKED_MARKERS_REMOVED` filenames Step 4c printed>' in text
-    assert 'Locks cleaned: <the `LOCKS_REMOVED` ids Step 4c printed>' in text
+    # Phase 494 (`Q-749`): Step 6's pr re-sync arm adds the batch locks it released.
+    assert ('Locks cleaned: <the `LOCKS_REMOVED` ids Step 4c printed, and each `BATCH-<N>` Step 6 '
+            'released>') in text
     # Pinned on Step 8's own row text. Until Phase 386 this asserted the bare backticked
     # names, which only Step 4c's heredoc COMMENT carried for `NOT_IN_INDEX`, so a Step 8
     # that dropped the set still passed; the comment now lives in `close_index.py`.

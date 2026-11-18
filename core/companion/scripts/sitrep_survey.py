@@ -2558,6 +2558,8 @@ def _phase40_fallback(
 # not an orphan (`Q-121`): the orphan arms' remedy deletes it. Finished batches
 # still fall through to them, where removal is the right advice.
 _LIVE_BATCH_STATUSES = ("Pending", "In Progress", "Review Ready")
+# The statuses `close_batch.sh` releases a lock for on a run from the default branch.
+_FINISHED_BATCH_STATUSES = ("Merged", "Complete", "Ready for Review")
 
 
 def _batch_worktree_path(main_root: Path, n: int) -> Path:
@@ -2621,6 +2623,11 @@ def _batch_without_lock(batches: list[dict[str, Any]], where: str, removal: str,
                       f"{shlex.quote(str(moved[1]))}; then " + remedy)
     return Discrepancy(kind="batch branch without lock", detail=detail,
                        suggestion=caveat + remedy)
+
+
+def _main_checkout_branch(main_root: Path) -> str:
+    """The branch the main checkout has checked out, or "" (detached, or git failed)."""
+    return _git(["branch", "--show-current"], cwd=str(main_root))
 
 
 def _find_discrepancies(
@@ -2706,23 +2713,39 @@ def _find_discrepancies(
             live_batch_by_branch.setdefault(rb["branch"], []).append(rb)
     lock_by_id = {l.task_id: l for l in locks}
 
-    # Stale lock: lock present, no worktree on disk at the recorded workspace
+    # Stale lock: lock present, no worktree on disk at the recorded workspace.
+    # A batch's lock whose batch is already finished outlived its close (under `pr`
+    # policy Step 4b defers the release), so its route is `close_batch.sh`, which also
+    # removes the park marker and claim directory a bare `rm` leaves behind.
+    # Read only where the tracker is the default branch's (a checkout left on an integration
+    # branch reads a batch `Merged` before its PR has merged) and the number is unambiguous.
+    numbers = [rb["number"] for rb in review_batches or []]
+    finished_batches = {rb["number"]: rb["status"] for rb in review_batches or []
+                        if rb.get("status") in _FINISHED_BATCH_STATUSES
+                        and numbers.count(rb["number"]) == 1}
+    on: str | None = None  # the default branch, resolved once on first need
     for l in locks:
         if not l.workspace:
             continue
         if not Path(l.workspace).is_dir():
-            out.append(
-                Discrepancy(
-                    kind="stale lock",
-                    detail=(
-                        f"{l.task_id}: lock at {l.path} references "
-                        f"missing workspace {l.workspace}"
-                    ),
-                    suggestion=(
-                        f"investigate; rm {l.path} after confirming dead"
-                    ),
-                )
-            )
+            m = re.fullmatch(r"BATCH-(\d+)", l.task_id or "")
+            number = int(m.group(1)) if m else None
+            status = finished_batches.get(number) if m else None
+            if status and on is None:
+                on = resolve_default_branch(main_root) or ""
+            if status and (not on or _main_checkout_branch(main_root) != on):
+                status = None
+            detail = (f"{l.task_id}: lock at {l.path} references "
+                      f"missing workspace {l.workspace}")
+            if status:
+                detail += (f", and Batch {number} reads {status} on {on}, so the lock "
+                           "outlived its close")
+                suggestion = (f"bash sysop/scripts/close_batch.sh {number} (from the main "
+                              f"checkout, on {on}): it removes the lock, the park marker and "
+                              "the claim directory, where a bare rm leaves the last two")
+            else:
+                suggestion = f"investigate; rm {l.path} after confirming dead"
+            out.append(Discrepancy(kind="stale lock", detail=detail, suggestion=suggestion))
 
     # Orphan worktree: worktree branch matches no lock + no index entry
     for w in worktrees:

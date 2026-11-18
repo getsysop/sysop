@@ -548,7 +548,7 @@ summary: "Batch <N> complete: <Title>. <Scope>."
 
 This file is **untracked** (gitignored). It will be copied to main by `/review-close` Step 3b before the worktree is removed.
 
-**Note:** `/review-close` discovers branches via `git branch -a`, not via lock files — so nothing here waits on a lock. A batch claim *does* write one (`sysop/runtime/locks/BATCH-<N>.lock`): it is the in-flight signal `/next-task`, `/sitrep` and `scope_overlap.py` read, not a gate on this skill. `batch_work.sh` writes it idempotently, so claiming batches in a loop is unaffected, and `close_batch.sh` releases it at `/review-close` Step 4b.
+**Note:** `/review-close` discovers branches via `git branch -a`, not via lock files — so nothing here waits on a lock. A batch claim *does* write one (`sysop/runtime/locks/BATCH-<N>.lock`): it is the in-flight signal `/next-task`, `/sitrep` and `scope_overlap.py` read, not a gate on this skill. `batch_work.sh` writes it idempotently, so claiming batches in a loop is unaffected, and `close_batch.sh` releases it at `/review-close` Step 4b, or under `pr` policy at Step 6 once the PR has merged.
 
 ## Step 5: Summary Report
 

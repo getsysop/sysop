@@ -265,7 +265,7 @@ def test_the_inventory_and_workflow_name_the_merged_reader():
     core = text_of(repo / "core/skills/review-close/SKILL.md")
     at = core.index("- `Bash(python3 sysop/scripts/review_index.py:*)`")
     rule = " ".join(core[at:core.index("\n- ", at + 1)].split())
-    assert "Step 4b's batch-set derivation (`--list --merged`)." in rule, rule
+    assert "Step 4b's batch-set derivation (`--list --merged`), and Step 6's release (`--list`)." in rule, rule
     wf = " ".join((repo / "core/companion/docs/WORKFLOW.md").read_text(encoding="utf-8").split())
     assert ("the review batches whose branches step 5 merged, read from `review_tasks.md` "
             "(via `review_index.py --list --merged <branch>...`, which prints the authoritative "

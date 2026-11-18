@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" request-review-land 8606dc81c68e6f42 "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" request-review-land 556c2d4b04a914bb "<skill directory>"
 ```
 
 It prints `LOADED: request-review-land`. **Exit 2**: stop and show its stderr.
@@ -42,7 +42,7 @@ The close is split at Step 4d. Half A (`--request-review`) opens the PR, asks th
 
    Add `--keep-branch` as a fifth argument when the PR-reuse note on a held doc's branch would drop `--delete-branch`. With `--agent <name>`, add `--agent "<name>"` last. **Exit 2** means nothing was recorded or requested: fix what its reason names and run `hand-off` again, or report the reason and the PR URL and stop. **Exit 1 after a `RUN:` line** means the request comment failed: go on with items 5 and 6, report it, and once `gh` works run `python3 sysop/scripts/close_run.py re-request "<run-id>" "<default branch>"`.
 
-5. **Write `<DIR>/report.md`** with your file tool: a `## Step 6` heading with one line each for `Merged:`, `Held-doc branches:`, `SKIP:`, `4a-SKIP:` (each followed by branch names, or `(none)`) and `Kept locks:` (the `LOCKS_KEPT:` ids, or `(none)`); then a `## Step 8` heading with every Step 8 row this close has produced so far, including each `## After merge` section Step 2d carried. Then:
+5. **Write `<DIR>/report.md`** with your file tool: a `## Step 6` heading with one line each for `Merged:`, `Held-doc branches:`, `SKIP:`, `4a-SKIP:` (each followed by branch names, or `(none)`), `Kept locks:` (the `LOCKS_KEPT:` ids, or `(none)`) and `Batches:` (the batch numbers Step 4b passed to `close_batch.sh`, or `(none)`); then a `## Step 8` heading with every Step 8 row this close has produced so far, including each `## After merge` section Step 2d carried. Then:
 
    ```bash
    python3 sysop/scripts/close_run.py seal "<run-id>"
