@@ -1359,7 +1359,7 @@ class TestResumeRecoveryMessagesNameTheBatches:
         r = _run(repo, "1")
 
         assert r.returncode == 0, r.stderr
-        assert "close_batch.sh 1" in r.stdout, r.stdout
+        assert "close_batch.sh --merge-target main 1" in r.stdout, r.stdout
 
     def test_a_resumed_batch_is_not_also_reported_as_skipped(self, tmp_path):
         """One batch, one verdict. Reporting both is a self-contradiction."""

@@ -1657,8 +1657,10 @@ if ! $DRY_RUN && [[ ${#COMMIT_SET[@]} -gt 0 ]]; then
   # sat on a blocked PR (reproduced by this phase's adversarial round).
   #
   # Deferring is the safe direction: a lock outliving its merge is a leftover
-  # that /sitrep reports and the already-finished sweep below clears on the next
-  # run from main, whereas releasing early is a double-claim.
+  # that /sitrep reports and the already-finished sweep below clears on a run
+  # from main, whereas releasing early is a double-claim. Under `pr` policy no
+  # close runs this script from main, so /review-close Step 6 re-runs it there
+  # once the PR has merged, with the batches it closed.
   CLOSE_ON_MAIN=false
   close_landed_on_main && CLOSE_ON_MAIN=true
   CB_BRANCH="$(git branch --show-current 2>/dev/null)" || CB_BRANCH=""
@@ -1693,7 +1695,8 @@ if ! $DRY_RUN && [[ ${#COMMIT_SET[@]} -gt 0 ]]; then
     echo "      A lock removed now would let /next-task re-offer a batch whose work is sitting"
     echo "      on an unmerged branch, and a park verdict removed now would destroy the record"
     echo "      of why the work stopped."
-    echo "      Both are released by the next close run from ${DEFAULT_BRANCH}: bash sysop/scripts/close_batch.sh ${COMMIT_SET[*]}"
+    echo "      Both are released from ${DEFAULT_BRANCH} in the main checkout once the merge is there:"
+    echo "      /review-close Step 6 does it; by hand: bash sysop/scripts/close_batch.sh --merge-target ${DEFAULT_BRANCH} ${COMMIT_SET[*]}"
     fi
   fi
 fi

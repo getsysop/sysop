@@ -60,8 +60,8 @@ SPANS: dict[str, tuple[Path, object, object, bool]] = {
 
 PINS = {
     # Regenerate with:  .venv/bin/python3 -c "import sys; sys.path.insert(0,'tests'); import test_review_close_smoke_decided_text as T; T._print_pins()"
-    "3c output contract": "a61a5dfd628a919b",  # Phase 411 (P5): the span runs through the signal arm's stub and its `loaded` header (`steps/3c-signals.md`), its digest hashed as `<digest>` (the battery's C02); Phase 359: a body is read as it will merge, a fenced `#` ends no section (`Q-638`, `Q-639`)
-    "3c options": "ba2da511271bc6a2",  # Phase 362: under --dry-run, three options, record and file nothing, a halt ends the dry run. Before it, Phase 351
+    "3c output contract": "c5f19e65e29bb41d",  # Phase 492 (Q-739): PREVIOUSLY ANSWERED covers a landed branch, and the LANDED CHECK line is defined (the ALREADY MERGED block line is the arm's, round 1); Phase 411 (P5): the span runs through the signal arm's stub and its `loaded` header (`steps/3c-signals.md`), its digest hashed as `<digest>` (the battery's C02); Phase 359: a body is read as it will merge, a fenced `#` ends no section (`Q-638`, `Q-639`)
+    "3c options": "4f51394bf8a0bc63",  # Phase 492 (Q-739): the ALREADY MERGED: line is defined and presented with the signal; Phase 362: under --dry-run, three options, record and file nothing, a halt ends the dry run. Before it, Phase 351
     "3c halt rules": "759e209a59fed193",  # Phase 422 (`Q-665`): the Stop filing commit is chained after `git_check.py head-is "<default branch>"`, in place of a hand-read of HEAD; Phase 351
     "3c record": "d223f68d29301154",  # Phase 411's round (lens B, F12): the span runs to the refusal, the recorder's closing fence included; Phase 351
     "3c refusal": "9c6bb6aa4c00b52c",  # Phase 357: the new-project note points a post-merge procedure at `## After merge` (`Q-313`)
@@ -69,9 +69,9 @@ PINS = {
     "3c step-1 output": "c59c69994350f6ba",
     "3c linkage": "e60739eb7794096e",  # Phase 421 (`Q-665`): the approved branches are passed as arguments; Phase 386: the heredoc it names became a shipped script (`Q-409` P3)
     "4a-post exit 0": "0dab99dba1834ace",  # Phase 430's round (lens A): the stub's lead names only what loads the arm. Phase 430 (P5): the span ends at the Non-zero arm, now in `steps/4a-post-prescan.md`, so it holds the stub and the arm's header too
-    "step 8 manual smoke": "545e8631e8b51a5d",  # Phase 359: names the MERGE NOT READ: line
+    "step 8 manual smoke": "c137a9a7592c1d81",  # Phase 492 (Q-739): carries the LANDED CHECK line; Phase 359: names the MERGE NOT READ: line
     "step 8 pre-scan": "c94d934f525d174f",
-    "schema skill behavior": "ab4001f1e68204b7",  # Phase 373: a held doc links no task on its own `hold:` too, and any approved tip can release a hold (Phases 351, 353); the read is unchanged
+    "schema skill behavior": "1995be8d61749699",  # Phase 492 (Q-739): a landed branch's recorded answer is honoured and its unanswered signal is asked, marked; Phase 373: a held doc links no task on its own `hold:` too, and any approved tip can release a hold (Phases 351, 353); the read is unchanged
     "4d smoke FAIL in the PR": "6f11ec8c51347c94",  # Phase 351
     "schema where the procedure lives": "254b50e1ff5af121",  # Phase 359: a body is read as it will merge, a fenced `#` ends no section (`Q-638`, `Q-639`)
     "schema field optional": "4a70efd8916ede15",  # Phase 359: a body is read as it will merge, a fenced `#` ends no section (`Q-638`, `Q-639`)

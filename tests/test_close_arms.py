@@ -218,7 +218,20 @@ MARKER = re.compile(r"^<!-- sysop:arm=(\S+) -->[ \t]*$")
 #: Its round set it to 294_772 (+99): the MOVE rule's restatement of the §6 shape lost its brackets,
 #: and the changelog contract quotes the no-ids bugfix shape too.
 #: Its second round: 294_782 (+10), the contract's "the first carrying".
-CORE_BUDGET_BYTES = 294_782
+#: Phase 491 (`Q-533`) raised it to 295_493 (+711): Step 2d's `test-proves` arm accepts an existing
+#: test the branch leaves unchanged, read at the tip with step 1's `git show`, and notes that pass.
+#: Its round set it to 295_813 (+320): the deleted-test fatal, the (b) pass carried into item 4's
+#: tally and Step 8's `Test decisions:`, and item 3's halt naming an unreadable test file.
+#: Phase 492 (`Q-739`) raised it to 296_217 (+404): Step 3c's output contract defines the
+#: `ALREADY MERGED` and `LANDED CHECK:` lines and widens `PREVIOUSLY ANSWERED:` to a landed branch,
+#: Step 8 carries both lines, and step 0b names Step 3c as the step that does not ask a landed
+#: branch's signals. The core, not an arm: a `NO_SMOKE_REQUIRED` run never loads the arm.
+#: Its round set it to 296_080 (-137): the landed signal is asked again, marked by a line inside its
+#: block that the arm defines, so the core loses that definition and Step 8 carries one line fewer.
+#: Phase 494 (`Q-749`) kept it: Step 6's batch-lock release lives in its `pr` re-sync arm. Its round
+#: raised it to 296_166 (+86): the `review_index.py` rule names Step 6's release, and Step 8's
+#: `Locks cleaned:` row names the `BATCH-<N>` locks Step 6 released, two readers the arm made false.
+CORE_BUDGET_BYTES = 296_166
 
 GIT_ENV = {k: v for k, v in os.environ.items()
            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")}

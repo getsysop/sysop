@@ -1,7 +1,7 @@
 **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
 ```bash
-python3 sysop/scripts/close_arms.py loaded "<close-id>" prepare-resume 9695c9fa1c78ac9e "<skill directory>"
+python3 sysop/scripts/close_arms.py loaded "<close-id>" prepare-resume a1e8f3120e1c0571 "<skill directory>"
 ```
 
 It prints `LOADED: prepare-resume`. **Exit 2**: stop and show its stderr.
@@ -42,7 +42,7 @@ A prepare runs Steps 1, 2, 3 and 3c for real, asks the human nothing, records th
    The parks: Step 2a step 3a → the verdict **SKIP — ignored file unanswered**; Step 2d → **Hold for fix**; a Step 3c signal with a `BRANCH:` line → **Hold just this branch**; a Step 3c signal without one → the resume halts before Step 3b.
    - **Step 2a step 3a and Step 2d:** carry the branch on through Steps 2b–2e, 3 and 3c as approved, with its verdict marked `pending Q<n>`. Step 3a commits and copies nothing.
    - **Step 3:** item 5's ask, or a silently denied command, records no question. Write why in `<DIR>/close.md` and leave Step 3 not run; the resume runs it attended.
-   - **Step 3c:** record each signal as its own question, with its `SOURCE:`, `READ:`, `KEY:`, `BRANCH:` and `NOT MERGING:` lines and its four options. Record nothing with the recorder, and drive nothing.
+   - **Step 3c:** record each signal as its own question, with its `SOURCE:`, `READ:`, `KEY:`, `BRANCH:`, `NOT MERGING:` and `ALREADY MERGED:` lines and its four options. Record nothing with the recorder, and drive nothing.
 
 3. **A `VERDICT: BLOCKED` from Step 2b on a branch stops that branch, not the prepare.** Write its violations, with their `file:line` citations, into the branch's state, keep the branch out of Steps 2d, 3 and 3c, and go on with the others. A `VERDICT: BLOCKED` on the unpushed-main group halts the prepare (item 4). A void verdict (Step 2b step 4's receipt) is handled as a `VERDICT: BLOCKED` is, on a branch and on the group, with its `VOID:` line written before any violations it listed. **With `--agent <name>`**, also hold the branch, with the first violation as the reason (for a void verdict, its `VOID:` line is the body instead):
 

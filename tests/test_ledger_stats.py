@@ -77,7 +77,7 @@ HEADLINE_SITES = [
      r"\*\*(\d+) author batteries reported every mutation killed\. (\d+) were falsified"
      r".{0,80}?the other (\d+) had no independent battery"),
     ("AUTHOR_DEFECT_REGISTER.md — the class table's Recurrence cell", _register,
-     r"\b(\d+) of the (\d+) recorded claims \((\d+) unknown, 0 intact\)"),
+     r"\b(\d+) of the (\d+) recorded claims \((\d+) unknown, 1 intact\)"),
     ("ROUND_YIELD_LEDGER.md — the reading note", _ledger_md,
      r"\*\*(\d+) author batteries reported every mutation killed, (\d+) "
      r"were falsified by an independent lens, (\d+) had no lens"),
@@ -229,8 +229,8 @@ def test_the_registers_population_line_is_derived():
 
 
 SHIPPED_EVERY_TIME = (
-    "every time an author's battery reported every mutation killed and an independent "
-    "reviewer's battery then ran, the independent one found survivors"
+    "every time but once that an author's battery reported every mutation killed and an "
+    "independent reviewer's battery then ran, the independent one found survivors"
 )
 
 
@@ -250,10 +250,12 @@ def test_the_claim_that_none_survived_is_still_true():
         "re-point SHIPPED_EVERY_TIME, or drop it if the rule no longer claims 'every time'"
     )
     a = _mod().all_killed_audit()
-    assert a["intact"] == 0, (
-        f"these all-killed batteries were NOT falsified: {a['intact_phases']} — "
-        f"the register's 'Not one survived' and the shipped author-pass rule's "
-        f"'every time … found survivors' must be corrected, not left standing"
+    # Phase 492 is the one intact row (its independent battery mutated only pinned text), and
+    # the three sites now say "but once". A second intact row makes "once" false.
+    assert a["intact_phases"] == ["492"], (
+        f"the all-killed batteries NOT falsified are now {a['intact_phases']}, not ['492'] — "
+        f"the register's 'One survived' and the shipped author-pass rule's "
+        f"'every time but once … found survivors' must be corrected, not left standing"
     )
     assert a["claims"] == a["falsified"] + a["unknown"] + a["intact"]
 

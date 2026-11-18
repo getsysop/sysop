@@ -922,6 +922,46 @@ Out of reach, and not worth a lookup today:
 - a second PR on a reused branch's head, which Step 4d's `gh pr merge --delete-branch`, or the
   land's own delete of `BRANCH:`, would close.
 
+### Why Step 6 releases the batch locks Step 4b kept
+
+Under `pr`, Step 4b runs `close_batch.sh` on the merge target, so the script keeps each batch's
+lock, park marker and claim directory: releasing them before the PR merges would let
+`/next-task` re-offer a batch whose work sits on an unmerged branch. The script's own recovery is a
+run from the default branch once that branch reads the batch `Merged`, and no close made that run.
+`--land`'s `landed` removes only the roadmap locks Step 4c kept, and a later close passes only the
+batches it merged. So every `pr` close with a batch left them until someone removed them by hand,
+and `scope_overlap.py` went on counting the batch as in flight.
+
+Step 6 is the site because it is the first point where local `<default branch>` holds the merge,
+and both an attended `pr` close and `--land` reach it. A release inside `landed` would cover only
+`--land`, and it would leave the park marker and claim directory unless their removal were written
+again in Python. The step re-runs the shipped command under its seeded permission rule, so an install
+whose scripts predate the step runs it unchanged.
+
+Local `<default branch>` holds the merge once the reset, or the rebase that replaced it, has run,
+which is why the release closes the arm rather than opening it.
+
+The tracker read comes first because `close_batch.sh` takes a batch whose branch is gone as merged:
+given a batch the default branch still reads `Pending`, it flips the batch and commits on local
+`<default branch>`, where under `pr` no push follows. By Step 6 the per-branch cleanup is about to
+delete the batch branches, and in the PR-reuse shape Step 4d's `gh pr merge --delete-branch` has
+usually deleted the reused one, so a check of the branch cannot stand in for the read.
+`Complete` and `Ready for Review` pass with `Merged` because the script releases those without a
+flip or a branch check, as it does `Merged`; Step 4b's set can hold them (a `batch_work.sh --force`
+follow-up claim whose branch this close merged). `close-batch commit present: 0` is the check that
+the filter held.
+
+The worktree read is there because a batch can be claimed again after Step 4b: under `pr`, `main`
+still reads it `In Progress` until the PR merges, so `batch_work.sh <N>` resumes it, makes a new
+worktree and keeps the lock. That claim is live work, and the release would delete its lock and its
+claim directory; the window is the whole `--request-review`/`--land` gap, or Step 5's wait.
+
+`report.md` carries the set to `--land` as `Batches:`. `seal` does not require it, so a hand-off
+written before the line existed still seals. Such a hand-off releases nothing at Step 6 and names
+the by-hand command instead: its Step 8 `Batches:` row can hold task counts ("N closed, M failed")
+as well as batch numbers, and a count that matched an older `Merged` batch would release that
+batch's lock and park record.
+
 ### Why a stuck integration-shape PR is recovered on its branch
 
 By the time a PR is stuck, Step 4c has deleted the pending docs it consolidated (item 6) and
@@ -1647,6 +1687,30 @@ at its Step 7c sequence, so `OWED` is the true answer for it rather than a trap.
 reference it without writing it, and an earlier version of that sentence counted a reference as a
 write. The instruction survives in the runner; this is why it is there.
 
+### Why `test-proves` accepts an existing test the branch leaves unchanged
+
+The arm first checked only that the diff added or modified a test, which assumed the named test
+was new surface. `tasks/schema.md` says the named test is *"existing or new"*, and a pure
+refactor's proof is the existing suite run unchanged: editing it would destroy the property the
+refactor claims to preserve. So the gate halted hardest on the change most careful not to touch
+its tests (one consumer's patch-neutral extraction named four existing files, 139 tests, as its pin).
+The `no-test` arm already accepted "covered by an existing named test", so the two arms disagreed
+about the same branch.
+
+Existence at the tip was chosen over running the test at Step 2d. A new test was never
+run here either; passing is the verification gate's question. That run is not guaranteed to reach
+X: Step 3 and 4a-post run the consumer's `## Pre-merge verification` list, else `npm run verify`,
+else a surface-gated auto-detect, and a `### Ratchet`-only list may not run an unchanged file. A (b) pass prints a line and Step 8's
+`Test decisions:` names it, so a person sees which records were met without a test in the diff.
+
+What leg (b) gives up: a record naming a test file that already existed, with no test or function
+name, now passes even if the executor added nothing and the diff touches no test file, the case
+the old arm's halt caught. The old arm was loose elsewhere: any changed test file met a record
+naming a file without a test.
+A name with no file is not searched for: leg (b) reuses step 1's `git show` read, and a bare name
+would need a search of the whole tree. It reaches the person as a discrepancy, where *accept the
+record* resolves it.
+
 ### What the `## Also fixed` reader was measured against
 
 **Two sections in one body is not hypothetical.** `/claim-task`'s option-C writer was executed
@@ -2223,6 +2287,21 @@ branch claims the task, or the tip read failed. A failed tip read falls back to 
 rather than suppressing the signal. The declaration is the ask, and the label says the text may
 not be what is merging.
 
+**Every merging tip is read, not the first.** Two approved branches can link one task, and each
+merges its own copy of the body. Reading only the first linking branch in scan order missed a body,
+or a procedure heading, that only the second carried, and the gate printed `NO_SMOKE_REQUIRED`.
+Preferring a tip that holds the body would not have been enough: the likelier layout has the body
+on both tips and the heading on one. So each approved branch that links the task and has not landed
+is read, and a section is asked once. A landed branch is never added to the set, because its
+recorded answers would then cover work another branch is merging now. The working tree is read only
+when no tip shows the body, and the `READ:` line names every tip that failed.
+
+**An unbranched task is carried by a merging doc.** When no approved branch links a task, a doc on
+no approved branch (`branch: <default branch>`, no `branch:`, or the branch HEAD is on) merges with
+this close, and one held or on an unapproved branch does not. The carrier was whichever sorted
+first, so a not-merging doc's recorded answer could cover work landing now. A merging doc is now the
+carrier whenever one links the task.
+
 ### Why a held doc links no task, and why its own headings still signal
 
 Step 4c 1c keeps a doc in main's `pending-docs/` for as long as its task's `user_action` is
@@ -2702,8 +2781,9 @@ live tip past that head; all three mean every commit on it was in a merged PR.
 **It is not a new verdict class, and that is deliberate.** Three earlier disqualified cuts
 established constraints (5) and (6). Excluding the branch from Step 4a stalls its task forever,
 and a new class must then be routed into every actor that keys on `approved`. A landed branch
-keeps the `approve` verdict, so Step 3b, Step 3c, Step 4-pre's cardinality and Step 4a see it
-unchanged. Only the review is skipped: steps 1–3, the Step 2b agent (the measured ~460k-token
+keeps the `approve` verdict, so Step 3b, Step 4-pre's cardinality and Step 4a see it
+unchanged, and Step 3c honours an answer recorded to one of its signals and marks the rest
+(below). Only the review is skipped: steps 1–3, the Step 2b agent (the measured ~460k-token
 cost) and Step 2d. Step 4a item 1 then prints `REPLAY 0`, and neither arm merges the branch:
 Step 4c 1b's recorded-head test scores it merged, which is what lifts constraint (5), and Step 6
 deletes it as a merged branch.
@@ -2714,6 +2794,25 @@ against the newer one the squash landed: the index-conflict entry's population (
 an `add/add` conflict. Not merging removes that population, and (c), for every branch a recorded
 head fully contains. That entry's other populations do not involve a landed branch and are untouched. The re-stamp trap (Step 4a rewrites the ref)
 does not bite, because the check reads the head, which nothing rewrites.
+
+**Why Step 3c honours a landed branch's answers, and still asks the rest.** A landed branch's
+commits are in a merged PR's head or the default branch, so a before-merge question about it is
+usually moot, and the detection used to ignore the answer an earlier close recorded: it consulted
+a recorded answer only for a doc that is not merging, and a landed branch is approved. A signal on
+a landed branch now takes a recorded answer whose key matches, as a held doc's does. One with no
+such answer is still asked, marked `ALREADY MERGED:` so the person sees the premise. It is never
+silenced, because landing does not prove an earlier close asked: a claim with no commits of its own,
+cut before a close whose PR head contains it, whose doc was written straight into main, lands at its
+first close, and the PR arm records nothing that tells it apart. The detection runs step 0b's own
+check (`feature_branch.py landed`) instead of taking a list from the runner, so the two read the
+same rule, and new skill text passes an older installed script no operand it would refuse. It runs
+later than step 0b, so a condition that cleared in between (an `ls-remote` that failed, a
+workspace's uncommitted work) can land a branch step 0b reviewed; a branch lands only when every
+tip it has is inside the merged head, so nothing of it is merging then. Any output that check does
+not give plainly reads as not landed: the signal is asked unmarked. A task that a merging branch,
+or a merging doc on no approved branch (`branch: <default branch>`), also links is read there and
+asked unmarked, and no answer recorded on the landed branch covers it; a landed doc's section hides
+the same text in a task body on its own branch only.
 
 **A held doc is the discriminator, not the worktree.** Containment is not enough: a recorded head
 contains the tip of anything cut from local `<default branch>` before that close. That covers an

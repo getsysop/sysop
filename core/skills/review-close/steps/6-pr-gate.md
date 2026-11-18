@@ -1,7 +1,7 @@
 - **First, record that this arm loaded**, from the main checkout's top level, with the close id `begin` printed and the skill directory the stub named written out:
 
   ```bash
-  python3 sysop/scripts/close_arms.py loaded "<close-id>" 6-pr-gate 95aec4c23c55ac3c "<skill directory>"
+  python3 sysop/scripts/close_arms.py loaded "<close-id>" 6-pr-gate caf106deadcaa8ae "<skill directory>"
   ```
 
   It prints `LOADED: 6-pr-gate`. **Exit 2**: stop and show its stderr.
@@ -49,3 +49,23 @@
   **Do not run that line at all in the PR-reuse shape** — there is no integration branch, and the reused branch is handled by the per-branch cleanup below.
 
   > **Run the `git reset --hard origin/<default branch>` in both shapes once the clean-tracked-tree gate above passes — but know why it matters in each.** `gh pr merge --delete-branch` *attempts* this re-sync itself. **Integration-branch shape:** it fails, because local `main` has diverged by construction (see Step 4d's `fatal:` note, internal tracker #208) — here the reset is load-bearing, and treating `gh` as having already done it leaves local `main` on pre-merge commits now duplicated inside the squash. **PR-reuse shape:** it succeeds, because reuse condition 3 required local `main` to hold nothing the approved branch does not already carry (**not** that `origin/<default branch>..<default branch>` is empty — the widened form admits a branch that was brought up to date with `git merge <default branch>`, and such a branch leaves real local-only commits on `main`) — here the reset was described as a harmless no-op, and a review round measured that false for the widened condition 3: with a merge-updated branch the reuse shape is taken while local `main` still holds unpushed commits, `gh`'s fast-forward fails with the same `fatal:` as the other shape, and the reset **moves** `main` rather than doing nothing. Run it; it is load-bearing in both shapes now. Internal tracker #204's incidental note ("`gh` fast-forwards `main` itself, so Step 6's reset was already a no-op") was reported from a cycle that met condition 3, so it was **right about that cycle and wrong as a general rule**; internal tracker #208, from the same reporter, is the other shape. Neither claim generalizes — which is why this step is stated per shape rather than picking a winner.
+
+  **Then release the batch locks Step 4b kept, in both shapes.** Step 4b kept each closed batch's `sysop/runtime/locks/BATCH-<N>.lock`, park marker and claim directory, and nothing else releases them. Skip this when Step 4b's batch set was empty. Under `--land`, the set is `report.md`'s `Batches:` line under `## Step 6`. **A `report.md` with no `Batches:` line releases nothing here:** put `batch locks: not released — run bash sysop/scripts/close_batch.sh --merge-target <default branch> <N…> from <default branch> for the batches this close closed` on Step 8's `Remaining:`, and go on.
+
+  First read the tracker this checkout now holds, and the worktrees:
+
+  ```bash
+  python3 sysop/scripts/review_index.py --list
+  ```
+
+  ```bash
+  git worktree list --porcelain
+  ```
+
+  Pass below only the set's batches whose `--list` row reads `Merged`, `Complete` or `Ready for Review` in its status column (the third; `Review Ready` is live, not finished), and whose branch (the fourth column) is on no `branch refs/heads/<branch>` line of the worktree list. **Leave out any other**, and put it on Step 8's `Remaining:`: `Batch <N>: lock kept — reads <status> on <default branch>` (or `is not listed`), or `Batch <N>: lock kept — <branch> has a live worktree at <path>; release it with close_batch.sh <N> from <default branch> once that work is closed`. On a non-zero exit or a `WARNING:` line from either read, pass no batch and put the reason on `Remaining:`.
+
+  ```bash
+  bash sysop/scripts/close_batch.sh --merge-target "<default branch>" <N1> <N2>
+  ```
+
+  Pass `timeout: 300000` to the Bash tool call; it can wait 120 s for the tracker lock. Each batch prints `Already Merged. Skipping.` or `is '<status>' — no flip to make.`, and under `── Batch locks (already finished) ──` its lock, park marker and claim directory are removed or reported absent. Add each `BATCH-<N>` whose lock it removed to Step 8's `Locks cleaned:` row. **Its last line must read `close-batch commit present: 0`.** If it reads `1`, the script committed on local `<default branch>`: stop, show `git log -1 --stat`, and report it. Do not push that commit, and do not reset it away for the person. A non-zero exit: put it on `Remaining:` and go on.

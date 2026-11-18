@@ -482,7 +482,8 @@ def test_a_recorded_waiver_never_suppresses(tmp_path):
 
 
 def test_an_answer_in_a_doc_that_is_not_held_is_ignored(tmp_path):
-    """Only a held doc's answer carries across closes. A doc merging now is asked now."""
+    """Only a held doc's answer carries across closes, or a landed branch's
+    (`test_review_close_smoke_landed.py`). A doc merging now is asked now."""
     main = _tree(tmp_path, index=HELD_IDX, pending={"old.md": HELD_DOC})
     key = _held_key(main)
     assert _record(main, "sysop/runtime/pending-docs/old.md", key, "confirmed").returncode == 0
@@ -994,3 +995,174 @@ def test_the_checked_out_branch_is_named_past_a_same_named_tag(tmp_path):
     _git(repo, "checkout", "-q", "feat/x")
     out = _run(repo, [], branches=[])
     assert _field(out, "NOT MERGING") == [], out
+
+
+# ── Q-785: every merging tip is read, and an unbranched task's carrier is a merging doc ──
+
+SMOKE_T = "# T\n\n## Manual smoke required\n1. Click the live button.\n"
+OTHER_T = "# T\n\n## Before merge\n1. Rotate the key.\n"
+PLAIN_T = "# T\n\nNo procedure.\n"
+
+
+def _two_tips(tmp_path: Path, *, a: str | None, b: str | None, docs_in: str = "main",
+              in_main_index: bool = True, declared: bool = False, lock_on: str | None = None):
+    """`feat/a` and `feat/b`, both approved, both link FEAT-T by a pending doc. `a`/`b` is the
+    body each tip commits (None: none). Returns (main checkout, worktree dirs for `_run`)."""
+    idx = _index(_task("FEAT-T", smoke=declared))
+    main = _tree(tmp_path, index=idx if in_main_index else _index())
+    for br, body in (("feat/a", a), ("feat/b", b)):
+        _git(main, "checkout", "-q", "-b", br, "main")
+        if body is not None:
+            (main / "tasks/open").mkdir(parents=True, exist_ok=True)
+            (main / "tasks/open/FEAT-T.md").write_text(body, encoding="utf-8")
+            (main / "tasks/index.yml").write_text(idx, encoding="utf-8")
+            _git(main, "add", "-A")
+            _git(main, "commit", "-q", "-m", f"{br}'s body")
+        _git(main, "checkout", "-q", "main")
+    wts = []
+    for br, name in (("feat/a", "a"), ("feat/b", "b")):
+        where = main
+        if docs_in == "worktrees":
+            where = tmp_path / f"wt-{name}"
+            _git(main, "worktree", "add", "-q", str(where), br)
+            wts.append(where)
+        pd = where / "sysop/runtime/pending-docs"
+        pd.mkdir(parents=True, exist_ok=True)
+        (pd / f"{name}.md").write_text(f"---\nbranch: {br}\nroadmap_ids: [FEAT-T]\n---\n# S\n",
+                                       encoding="utf-8")
+    if lock_on:
+        (main / "sysop/runtime/locks").mkdir(parents=True, exist_ok=True)
+        (main / "sysop/runtime/locks/FEAT-T.lock").write_text(
+            f"task_id: FEAT-T\nstatus: in_progress\nagent: a\nbranch: {lock_on}\n", encoding="utf-8")
+    return main, wts
+
+
+def _task_blocks(out: str) -> list[str]:
+    return [b for b in out.split("---SIGNAL---")[1:] if "SOURCE: tasks/index.yml § FEAT-T" in b]
+
+
+@pytest.mark.parametrize("docs_in", ["main", "worktrees"])
+@pytest.mark.parametrize("shape", ["body only on the second tip",
+                                   "a heading only on the second tip",
+                                   "the index entry and body only on the second tip"])
+def test_a_task_two_merging_branches_link_is_read_on_each_tip(tmp_path, docs_in, shape):
+    """The first linking branch in scan order was the only tip read, so a body, or a procedure
+    heading, only the second branch carries was never seen, and nothing said so."""
+    a = PLAIN_T if shape == "a heading only on the second tip" else None
+    main, wts = _two_tips(tmp_path, a=a, b=SMOKE_T, docs_in=docs_in,
+                          in_main_index=not shape.startswith("the index entry"))
+    out = _run(main, wts, branches=["feat/a", "feat/b"])
+    (block,) = _task_blocks(out)
+    assert "\nBRANCH: feat/b\n" in block and "Click the live button" in block, out
+    assert re.search(r"\nKEY: [0-9a-f]{16} \(record in \S*pending-docs/b\.md\)\n", block), out
+    assert "BODY NOT READ" not in out, out
+
+
+def test_a_declared_body_on_one_tip_only_is_read_there_not_reported_missing(tmp_path):
+    main, wts = _two_tips(tmp_path, a=None, b=SMOKE_T, declared=True)
+    out = _run(main, wts, branches=["feat/a", "feat/b"])
+    (block,) = _task_blocks(out)
+    assert "READ: feat/b@" in block and "not found" not in block, out
+
+
+def test_each_tips_own_section_is_asked(tmp_path):
+    main, wts = _two_tips(tmp_path, a=SMOKE_T, b=OTHER_T)
+    out = _run(main, wts, branches=["feat/a", "feat/b"])
+    blocks = _task_blocks(out)
+    assert _signals(out) == 2 and len(blocks) == 2, out
+    assert "\nBRANCH: feat/a\n" in blocks[0] and "Click the live button" in blocks[0], out
+    assert "\nBRANCH: feat/b\n" in blocks[1] and "Rotate the key" in blocks[1], out
+
+
+def test_the_same_section_on_two_tips_is_asked_once(tmp_path):
+    main, wts = _two_tips(tmp_path, a=SMOKE_T, b=SMOKE_T)
+    out = _run(main, wts, branches=["feat/a", "feat/b"])
+    assert _signals(out) == 1 and len(_task_blocks(out)) == 1, out
+
+
+def test_a_lock_on_a_tip_without_the_body_does_not_hide_the_other_tips(tmp_path):
+    """The lock picks the first branch read; the other branch linking the task is read too."""
+    main, wts = _two_tips(tmp_path, a=None, b=SMOKE_T, lock_on="feat/a")
+    (block,) = _task_blocks(_run(main, wts, branches=["feat/a", "feat/b"]))
+    assert "\nBRANCH: feat/b\n" in block, block
+
+
+def test_a_body_no_tip_shows_is_read_from_the_working_tree_naming_every_tip(tmp_path):
+    """Both branches delete the body main still holds: the working tree's copy is asked, and the
+    READ line names each tip that could not show it."""
+    main, wts = _two_tips(tmp_path, a=None, b=None)
+    (main / "tasks/open").mkdir(parents=True, exist_ok=True)
+    (main / "tasks/open/FEAT-T.md").write_text(SMOKE_T, encoding="utf-8")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-q", "-m", "main's body")
+    for br in ("feat/a", "feat/b"):
+        _git(main, "checkout", "-q", br)
+        _git(main, "merge", "-q", "--no-edit", "main")
+        _git(main, "rm", "-q", "tasks/open/FEAT-T.md")
+        _git(main, "commit", "-q", "-m", "retire it")
+    _git(main, "checkout", "-q", "main")
+    out = _run(main, wts, branches=["feat/a", "feat/b"])
+    (read,) = [ln for ln in _field(out, "READ") if ln.startswith("working tree")]
+    assert re.fullmatch(r"working tree \(main@[0-9a-f]{12}\) — could NOT be read at `feat/a` "
+                        r"\(.+\) or `feat/b` \(.+\), so this may not be the text that is merging",
+                        read), read
+
+
+@pytest.mark.parametrize("order", ["not-merging doc first", "not-merging doc last"])
+@pytest.mark.parametrize("merging", ["branch: main\n", ""])
+@pytest.mark.parametrize("kind", ["unapproved branch", "held"])
+def test_an_unbranched_task_is_carried_by_a_merging_doc(tmp_path, order, merging, kind):
+    """No approved branch links the task; a merging doc (`branch: main`, or no `branch:`) and a
+    not-merging one (on an unapproved branch, held or not) both do. The task was carried by
+    whichever sorted first, so the not-merging doc's recorded answer covered work that lands with
+    this close."""
+    key = _key_for(SMOKE_T)
+    ans = f"smoke_answers:\n- section: {key}\n  decision: confirmed\n  date: '2026-11-01'\n"
+    ua = "true" if kind == "held" else None
+    main = _tree(tmp_path, index=_index(_task("FEAT-T", user_action=ua)),
+                 bodies={"FEAT-T.md": SMOKE_T})
+    _git(main, "branch", "feat/old")
+    nm, mg = ("a.md", "z.md") if order == "not-merging doc first" else ("z.md", "a.md")
+    pd = main / "sysop/runtime/pending-docs"
+    (pd / nm).write_text(f"---\nbranch: feat/old\nroadmap_ids: [FEAT-T]\n{ans}---\n# S\n",
+                         encoding="utf-8")
+    (pd / mg).write_text(f"---\n{merging}roadmap_ids: [FEAT-T]\n---\n# S\n", encoding="utf-8")
+    out = _run(main, [], branches=[])
+    assert "PREVIOUSLY ANSWERED: tasks/index.yml" not in out, out
+    (block,) = _task_blocks(out)
+    assert f"\nKEY: {key} (record in sysop/runtime/pending-docs/{mg})\n" in block, out
+    assert "NOT MERGING" not in block, out
+
+
+def test_a_body_one_tip_deletes_is_not_read_from_the_working_tree_when_another_tip_shows_it(tmp_path):
+    """`feat/a` retires the body main holds and `feat/b` rewrites it: `feat/b`'s text is asked,
+    and main's retired copy is not asked beside it."""
+    main, wts = _two_tips(tmp_path, a=None, b=None)
+    (main / "tasks/open").mkdir(parents=True, exist_ok=True)
+    (main / "tasks/open/FEAT-T.md").write_text(OLD.replace("FEAT-X", "FEAT-T"), encoding="utf-8")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-q", "-m", "main's body")
+    for br, change in (("feat/a", None), ("feat/b", NEW)):
+        _git(main, "checkout", "-q", br)
+        _git(main, "merge", "-q", "--no-edit", "main")
+        if change is None:
+            _git(main, "rm", "-q", "tasks/open/FEAT-T.md")
+        else:
+            (main / "tasks/open/FEAT-T.md").write_text(change, encoding="utf-8")
+            _git(main, "add", "-A")
+        _git(main, "commit", "-q", "-m", f"{br} changes it")
+    _git(main, "checkout", "-q", "main")
+    out = _run(main, wts, branches=["feat/a", "feat/b"])
+    assert "CURRENT" in out and "STALE" not in out, out
+    assert not [ln for ln in _field(out, "READ") if ln.startswith("working tree")], out
+
+
+def test_a_declared_task_with_no_heading_on_any_tip_names_every_tip_it_read(tmp_path):
+    """Round 1's LOW: the placeholder's READ named only the first tip, though both were scanned."""
+    main, wts = _two_tips(tmp_path, a=PLAIN_T, b=PLAIN_T, declared=True)
+    out = _run(main, wts, branches=["feat/a", "feat/b"])
+    (block,) = _task_blocks(out)
+    (read,) = [ln for ln in block.splitlines() if ln.startswith("READ: ")]
+    assert re.fullmatch(r"READ: feat/a@[0-9a-f]{12} — the branch tip, the text that is merging; "
+                        r"feat/b@[0-9a-f]{12} — the branch tip, the text that is merging", read), read
+    assert "no procedure heading matched" in block, block

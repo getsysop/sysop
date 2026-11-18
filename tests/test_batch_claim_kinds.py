@@ -359,7 +359,7 @@ class TestCloseRemovesTheLock:
             "a close committed off main must not release the lock"
         )
         assert "Locks kept" in r.stdout
-        assert "close_batch.sh 7" in r.stdout, "must name the recovery command"
+        assert "close_batch.sh --merge-target main 7" in r.stdout, "must name the recovery command"
 
     def test_the_deferred_lock_is_released_by_a_later_close_from_main(self, tmp_path):
         """The other half of deferring: once the PR merges and `main` reads
